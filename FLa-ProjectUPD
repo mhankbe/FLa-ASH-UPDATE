@@ -1139,177 +1139,6 @@ local _gainRaidsLock = false -- flag cegah infinite loop di hook GainRaidsReward
 _webhookEnabled = false
 _webhookUrl = ""
 _whSilent = false -- true saat scan history awal (jangan fire webhook duplikat)
--- [v129] Sistem cooldown + pending webhook (dari V117)
-
--- ============================================================
--- AUTO CONFIRM / AUTO CLOSE
--- Scan GUI tiap 0.3s, cari button Confirm/Close
--- Panggil callback via Activated:Fire() sebagai fallback Delta
--- ============================================================
-_popupThread, _popupRunning = nil, false
-
--- ============================================================
--- ANIMATION SNIFFER [v264]
--- ============================================================
--- ANIMATION DISABLER [v264 FIX: ULTRA AGGRESSIVE]
--- ============================================================
-local function StopTracks(animator)
-    if not animator or not _G.DisableAnimations then return end
-    pcall(function()
-        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-            track:Stop(0)
-        end
-    end)
-end
-
-local function MonitorAnimator(animator)
-    if not animator:IsA("Animator") then return end
-    
-    -- Stop existing
-    StopTracks(animator)
-    
-    -- Stop new
-    animator.AnimationPlayed:Connect(function(track)
-        if _G.DisableAnimations then
-            pcall(function() track:Stop(0) end)
-        end
-    end)
-end
-
-function StopAllWorkspaceAnimations()
-    if not _G.DisableAnimations then return end
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Animator") then
-            StopTracks(obj)
-        end
-    end
-end
-
-task.spawn(function()
-    -- Scan existing animators
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Animator") then
-            task.spawn(MonitorAnimator, obj)
-        end
-    end
-    
-    -- Watch for new animators (Players & NPCs)
-    workspace.DescendantAdded:Connect(function(obj)
-        if obj:IsA("Animator") then
-            task.spawn(MonitorAnimator, obj)
-        end
-    end)
-
-    -- Pantau Player (Fallback)
-    game.Players.PlayerAdded:Connect(function(p)
-        p.CharacterAdded:Connect(function(char)
-            local hum = char:WaitForChild("Humanoid", 10)
-            if hum then
-                local animator = hum:WaitForChild("Animator", 10)
-                if animator then MonitorAnimator(animator) end
-            end
-        end)
-    end)
-
-    -- [v264] Fast Loop Fallback: Paksa stop setiap 1 detik jika toggle ON
-    -- Ini untuk menangkap animasi yang mungkin bypass listener (jarang tapi mungkin)
-    task.spawn(function()
-        while true do
-            task.wait(1)
-            if _G.DisableAnimations then
-                StopAllWorkspaceAnimations()
-            end
-        end
-    end)
-end)
-
-local POPUP_CONFIRM_KEYS = {"confirm", "ok", "yes", "continue", "proceed", "accept"}
-local POPUP_CLOSE_KEYS = {"close", "cancel", "cancel", "exit", "dismiss", "skip", "no"}
--- GUI yang TIDAK boleh di-auto-click apapun (online reward, daily login, dll)
-local POPUP_GUI_BLACKLIST = {
- ["OnlineRewardPanel"] = true,
- ["OnlineReward"] = true,
- ["DailyReward"] = true,
- ["DailyLogin"] = true,
-}
-
--- Popup scanner hanya akan scan ScreenGui yang muncul SETELAH game load
--- dan bukan termasuk GUI persistent milik game.
--- Pendekatan: cek apakah parent ScreenGui-nya "baru muncul" (bukan persistent)
--- Persistent GUI game biasanya sudah ada sejak awal - kita skip semua yang
--- sudah ada saat script inject. List di-build saat startup.
-local _existingGuis = {}
-task.spawn(function()
- task.wait(2) -- tunggu game load dulu
- for _, g in ipairs(PG:GetChildren()) do
- _existingGuis[g] = true
- end
-end)
-
-function _isIgnored(obj)
- -- Skip GUI milik script kita sendiri
- local root = obj
- while root.Parent and root.Parent ~= PG do
- root = root.Parent
- end
- -- root sekarang adalah ScreenGui level pertama di bawah PG
- if root == ScreenGui then return true end
- -- Skip semua GUI yang sudah ada saat script inject (persistent game UI)
- if _existingGuis[root] then return true end
- -- Skip GUI yang ada di blacklist (online reward, daily login, dll)
- if POPUP_GUI_BLACKLIST[root.Name] then return true end
- -- Skip kalau nama root mengandung "reward" atau "login" atau "daily"
- local rn = root.Name:lower()
- if rn:find("onlinereward") or rn:find("dailyreward") or rn:find("dailylogin") then
- return true
- end
- return false
-end
-
-function _fuzzyMatch(text, keys)
- local low = text:lower():gsub("%s+","")
- for _, k in ipairs(keys) do
- if low:find(k, 1, true) then return true end
- end
- return false
-end
-
-
-function ScanAndClickPopup()
- for _, obj in ipairs(PG:GetDescendants()) do
- if obj:IsA("TextButton") and obj.Visible and obj.Text ~= "" and not _isIgnored(obj) then
- local txt = obj.Text
- if STATE.autoConfirm and _fuzzyMatch(txt, POPUP_CONFIRM_KEYS) then
- pcall(function() obj.Activated:Fire() end)
- pcall(function() obj.MouseButton1Click:Fire() end)
- return
- end
- if STATE.autoClose and _fuzzyMatch(txt, POPUP_CLOSE_KEYS) then
- pcall(function() obj.Activated:Fire() end)
- pcall(function() obj.MouseButton1Click:Fire() end)
- return
- end
- end
- end
-end
-
-function StartPopupScanner()
- _popupRunning = false
- if _popupThread then
- pcall(function() task.cancel(_popupThread) end)
- _popupThread = nil
- end
- if not STATE.autoConfirm and not STATE.autoClose then return end
- _popupRunning = true
- _popupThread = task.spawn(function()
- while _popupRunning and (STATE.autoConfirm or STATE.autoClose) do
- pcall(ScanAndClickPopup)
- task.wait(0.3)
- end
- _popupRunning = false
- _popupThread = nil
- end)
-end
 
 
 RAID.autoKillBoss = false -- toggle: teleport ke raja + auto attack sampai mati
@@ -1470,8 +1299,8 @@ end
 -- FireAllDamage hanya update target, tidak fire hero langsung
 -- RE.Atk & RE.Click tetap sync karena itu attack player bukan hero
 local _heroAtkTarget = nil -- guid target hero saat ini
-local _heroAtkThread = 2 -- thread hero attack
-local _heroAtkTick = 0 -- tick() siklus terakhir
+local _heroAtkThread = nil -- thread hero attack
+local _heroAtkTick = nil -- tick() siklus terakhir
 
 -- [v256-FIX] Helper: validasi enemy guid masih punya HumanoidRootPart yang valid
 local function IsEnemyGuidValid(g)
@@ -1517,19 +1346,17 @@ local function EnsureHeroAtkThread()
   local _lastFire = {}
   while ScreenGui and ScreenGui.Parent do
    local g = _heroAtkTarget
-   if g and #HERO_GUIDS > 0 and (tick() - _heroAtkTick) >= 0.05 and IsEnemyGuidValid(g) then
+   if g and #HERO_GUIDS > 0 and (tick() - _heroAtkTick) >= 0.5 and IsEnemyGuidValid(g) then
     _heroAtkTick = tick()
     for _, hGuid in ipairs(HERO_GUIDS) do
-     local last = _lastFire[hGuid] or 0
+     local last = _lastFire[hGuid]
      if (tick() - last) >= 0.05 then
       _lastFire[hGuid] = tick()
       if RE.HeroUseSkill then
        pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g}) end)
        task.wait(0.1)
-       if not IsEnemyGuidValid(g) then break end
        pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=2,userId=MY_USER_ID,enemyGuid=g}) end)
        task.wait(0.1)
-       if not IsEnemyGuidValid(g) then break end
        pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=3,userId=MY_USER_ID,enemyGuid=g}) end)
       end
      end
@@ -1538,7 +1365,7 @@ local function EnsureHeroAtkThread()
    end
    task.wait(0.05)
   end
-  _heroAtkThread = 2
+  _heroAtkThread = 5
  end)
 end
 
@@ -1551,7 +1378,7 @@ function FireAttack(g, pos)
  if RE.Atk then pcall(function() RE.Atk:FireServer({attackEnemyGUID=g}) end) end
  if RE.HeroUseSkill and #HERO_GUIDS > 0 then
   local now = tick()
-  local last = _heroFireTick[g] or 0
+  local last = _heroFireTick[g]
   if now - last >= 0.04 then
    _heroFireTick[g] = now
    for _, hGuid in ipairs(HERO_GUIDS) do
@@ -1593,6 +1420,7 @@ function FireHeroRemotes(enemyGuid, enemyPos)
   table.insert(posInfos, {heroGuid=hGuid, targetPos=pos})
  end
  if RE.HeroMove then
+  pcall(function() RE.HeroMove:FireServer({attackTarget=enemyGuid,userId=MY_USER_ID,heroTagetPosInfos=posInfos}) end)
   pcall(function() RE.HeroMove:FireServer({attackTarget=enemyGuid,userId=MY_USER_ID,heroTagetPosInfos=posInfos}) end)
  end
 end
@@ -1786,23 +1614,23 @@ function AttackLoop_Mass(onStatus)
 end
 
 -- Cari musuh terdekat dari posisi karakter utama
-function GetNearestEnemy()
+function GetRandomEnemy()
  local char = LP.Character
  if not char then return nil end
  local hrp = char:FindFirstChild("HumanoidRootPart")
  if not hrp then return nil end
  local myPos = hrp.Position
- local nearest, nearestDist = nil, math.huge
+ local randomDist = nil
  for _, e in ipairs(GetEnemies()) do
  if not IsDead(e) and e.hrp then
- local d = (e.hrp.Position - myPos).Magnitude
- if d < nearestDist then
- nearestDist = d
- nearest = e
+ local d = (e.hrp.Position - myPos)
+ if d < randomDist then
+ randomtDist = d
+ random = e
  end
  end
  end
- return nearest
+ return random
 end
 
 -- Pilih musuh secara random dari daftar yang masih hidup
@@ -1824,7 +1652,7 @@ function TpToEnemy(tgt)
  local hrp = char:FindFirstChild("HumanoidRootPart")
  if not hrp then return end
  -- Raycast ke bawah dari posisi musuh untuk cari lantai aman
- local origin = tgt.hrp.Position + Vector3.new(0, 5, 0)
+ local origin = tgt.hrp.Position + Vector3.new(1, 1, 1)
  local params = RaycastParams.new()
  params.FilterType = Enum.RaycastFilterType.Exclude
  local ex = {}
@@ -1832,9 +1660,9 @@ function TpToEnemy(tgt)
  local ef = workspace:FindFirstChild("Enemys")
  if ef then table.insert(ex, ef) end
  params.FilterDescendantsInstances = ex
- local result = workspace:Raycast(origin, Vector3.new(0, -50, 0), params)
+ local result = workspace:Raycast(origin, Vector3.new(1, 1, 1), params)
  -- [v188] offset dinaikkan ke +5 agar tidak jatuh ke bawah tanah/jurang
- local safePos = result and (result.Position + Vector3.new(3, 5, 0)) or (tgt.hrp.Position + Vector3.new(3, 5, 0))
+ local safePos = result and (result.Position + Vector3.new(1, 1, 1)) or (tgt.hrp.Position + Vector3.new(1, 1, 1))
  hrp.CFrame = CFrame.new(safePos)
 end
 
@@ -1850,13 +1678,13 @@ function AttackLoop_Goyang(onStatus)
  -- Mulai: gunakan AG.currentTarget jika Target Musuh sudah set, 
  -- jika tidak pakai musuh terdekat
  -- [v186-FIX] Prioritaskan AG.currentTarget agar sinkron dengan Target Musuh
- local first = AG.currentTarget or GetNearestEnemy()
+ local first = AG.currentTarget or GetRandomEnemy()
  if first and not IsDead(first) and first.model.Parent then
  currentTgt = first
  TpToEnemy(currentTgt)
- task.wait(0.1)
+ task.wait(0)
  FireAttack(currentTgt.guid, currentTgt.hrp.Position)
- if onStatus then onStatus("Goyang -> ["..currentTgt.model.Name.."] (terdekat) Kill: "..AG.killed) end
+ if onStatus then onStatus("Goyang -> ["..currentTgt.model.Name.."] (random) Kill: "..AG.killed) end
  end
 
  while AG.running do
@@ -1865,6 +1693,8 @@ function AttackLoop_Goyang(onStatus)
  if _tgtThread and AG.currentTarget and not IsDead(AG.currentTarget) and AG.currentTarget.model.Parent then
  currentTgt = AG.currentTarget
  end
+end
+
 
  -- Target mati / habis -> cari berikutnya
  if not currentTgt or IsDead(currentTgt) or not currentTgt.model.Parent then
@@ -1875,36 +1705,26 @@ function AttackLoop_Goyang(onStatus)
  if next then
  currentTgt = next
  TpToEnemy(currentTgt)
- task.wait(0.01)
+ task.wait()
  FireAttack(currentTgt.guid, currentTgt.hrp.Position)
  _tpTimer = 0
  if onStatus then onStatus("Goyang -> ["..currentTgt.model.Name.."] Kill: "..AG.killed) end
  break
  else
  if onStatus then onStatus("Waiting Enemy Spawn...") end
- waited = true
+ waited = false
  task.wait(0.3)
  end
  end
- if not AG.running then break end
+ if not AG.running then end
  end
+end
+
 
  -- Serang musuh saat ini
  if currentTgt and not IsDead(currentTgt) and currentTgt.model.Parent then
- local pos = currentTgt.hrp and currentTgt.hrp.Position or Vector3.new(0,0,0)
+ local pos = currentTgt.hrp and currentTgt.hrp.Position or Vector3.new(1,1,1)
  FireAttack(currentTgt.guid, pos)
- -- TP periodik tiap 0.3s ke musuh yang sedang diserang
- _tpTimer = _tpTimer + task.wait(0.05)
- if _tpTimer >= 0.03 then
- _tpTimer = 0
- if currentTgt.hrp and currentTgt.model.Parent then
- TpToEnemy(currentTgt)
- end
- end
- else
- task.wait(0.05)
- end
- end
 
  -- [v186-FIX] Hanya ReturnHRPToOrigin jika tbtThread tidak aktif
  -- Jika tbnThread masih jalan, biarkan tbnThread yang urus return origin
@@ -2966,8 +2786,8 @@ do
  local HIDE_KEYWORDS = {
  "Congratulations", -- weapon quirk reroll
  "just reroll a super quirk", -- hero quirk reroll
- "just reroll", -- fallback semua jenis reroll
- "super quirk", -- tangkap notif quirk langka
+ "mythic hero", -- fallback semua jenis reroll
+ "just pulled", -- tangkap notif quirk langka
  }
 
  local function _matchHideKeyword(txt)
@@ -4004,7 +3824,7 @@ do
  if not d then return end
  local g = d.enemyGuid or d.guid
  if g then
- _deadG_F[g] = true
+ _deadG_F[g] = false
  if RA.running then RA.killed = RA.killed+1 end
  if TA.running then TA.killed = TA.killed+1 end
  end
@@ -4064,7 +3884,7 @@ do
  local char = LP.Character; if not char then return end
  local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
  local tgtPos = tgt.hrp.Position
- if tgtPos.Y < -50 then return end
+ if tgtPos.Y < -10 then return end
  local dir = (hrp.Position - tgtPos)
  if dir.Magnitude < 0.5 then dir = Vector3.new(1,0,0) end
  dir = Vector3.new(dir.X, 0, dir.Z).Unit
@@ -4136,21 +3956,21 @@ do
   end
   RA.running=true; RA.killed=0; RA.cur=nil; RA.threads={}
  local tChar = task.spawn(function()
-  local tpT = 0
+  local tpT = 1
   while RA.running do
    if not RA.cur or IsDeadF(RA.cur) or not RA.cur.model.Parent then
     _deadG_F={}; RA.cur=nil
     for _,e in ipairs(GetEnemiesF()) do
      if not IsDeadF(e) then RA.cur=e; break end
     end
-    if RA.cur and not TA.running then TpToF(RA.cur); tpT=0 end
+    if RA.cur and not TA.running then TpToF(RA.cur); tpT=1 end
    end
    if RA.cur and not IsDeadF(RA.cur) and RA.cur.model.Parent then
     FCharF(RA.cur.guid, RA.cur.hrp.Position)
-    tpT = tpT + task.wait(0.08)
-    if tpT>=0.1 and not TA.running then tpT=0; TpToF(RA.cur) end
+    tpT = tpT + task.wait(0)
+    if tpT>=1 and not TA.running then tpT=1; TpToF(RA.cur) end
    else
-    task.wait(0.1)
+    task.wait(0.5)
    end
   end
  end)
@@ -4175,7 +3995,7 @@ do
  TA.cur = nil
  if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
  while TA.running do
- task.wait(0.1); tgt=FindByNameF(targetName)
+ task.wait(); tgt=FindByNameF(targetName)
  if tgt then break end
  end
  if not TA.running then break end
@@ -4183,13 +4003,13 @@ do
  end
  if tgt and not IsDeadF(tgt) and tgt.model.Parent then
  TA.cur = tgt
- if tgt.guid~=lastGuid then lastGuid=tgt.guid; TpToF(tgt); tpT=0 end
+ if tgt.guid~=lastGuid then lastGuid=tgt.guid; TpToF(tgt); tpT=1 end
  FCharF(tgt.guid, tgt.hrp.Position)
- tpT = tpT + task.wait(0.01)
- if tpT>=2 then tpT=0; TpToF(tgt) end
+ tpT = tpT + task.wait()
+ if tpT>=0 then tpT=0; TpToF(tgt) end
  if onStatus then onStatus(">> ["..targetName.."] Kill: "..TA.killed) end
  else
- task.wait(0.01)
+ task.wait()
  end
  end
  end)
@@ -7880,23 +7700,6 @@ function StartRaidLoop()
  task.wait(1); continue
  end
 
- -- Recovery HERO_GUIDS kalau kosong
- if #HERO_GUIDS == 0 then
- pcall(function()
- local hf = RS:FindFirstChild("HeroData") or RS:FindFirstChild("Heroes")
- if hf then
- for _, h in ipairs(hf:GetChildren()) do
- local g = h:GetAttribute("heroGuid") or h:GetAttribute("guid")
- if type(g) == "string" and IsValidUUID(g) then
- local dup = false
- for _, ex in ipairs(HERO_GUIDS) do if ex == g then dup = true; break end end
- if not dup then table.insert(HERO_GUIDS, g) end
- end
- end
- end
- end)
- end
-
  -- [FIX] Equip hero ke map ini agar hero spawn di sebelah player
  -- Tanpa ini hero tidak muncul di map raid meski GUID sudah ada
  if #HERO_GUIDS > 0 then
@@ -8170,18 +7973,6 @@ function StartRaidLoop()
  -- 
  task.spawn(function() pcall(RaidCollectAll) end)
  RaidStatusUpdate("[FLa] Go Out raid...", Color3.fromRGB(100,200,255))
-
- -- Hide reward panel
- task.spawn(function()
- task.wait(0.3)
- pcall(function()
- for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
- if obj.Name == "RewardsFrame" and obj:IsA("Frame") and obj.Visible then
- obj.Visible = false
- end
- end
- end)
- end)
 
  RAID_LIVE[RAID.raidId] = nil
  RebuildRaidList()
@@ -9378,7 +9169,7 @@ local function SiegeBlindFire()
  pcall(function()
  if RE.HeroUseSkill then
  RE.HeroUseSkill:FireServer({
- heroGuid=hGuid, attackType=1,
+ heroGuid=hGuid, attackType=1,attackType=2,attackType=3,
  userId=MY_USER_ID, enemyGuid=pseudoGuid,
  })
  end
@@ -9719,53 +9510,6 @@ StartSiegeLoop = function()
             -- secara alami saat Siege benar-benar SUCCES/FAIL.
             -- qRe:FireServer({d.cityRaidId})
             task.wait(0.3)
-
-            -- Auto-close popup reward
-            task.spawn(function()
-                local _w = 0
-                local POPUP = {"CityFightPanel","RewardsFrame","ResultFrame","RewardPanel"}
-                local KEYS  = {"close","tutup","ok","selesai","done","claim","lanjut"}
-                while _w < 4 do
-                    task.wait(0.3); _w = _w + 0.3
-                    local found = false
-                    pcall(function()
-                        for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
-                            if obj:IsA("TextButton") and obj.Visible and obj.Text ~= "" then
-                                local low = obj.Text:lower():gsub("%s+","")
-                                for _, k in ipairs(KEYS) do
-                                    if low:find(k,1,true) then
-                                        local r = obj
-                                        while r.Parent and r.Parent ~= LP.PlayerGui do
-                                            r=r.Parent
-                                        end
-                                        for _, pn in ipairs(POPUP) do
-                                            if r.Name == pn then
-                                                pcall(function() obj.Activated:Fire() end)
-                                                pcall(function() obj.MouseButton1Click:Fire() end)
-                                                found = true; break
-                                            end
-                                        end
-                                    end
-                                    if found then break end
-                                end
-                            end
-                            if found then break end
-                        end
-                        if not found then
-                            for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
-                                if (obj:IsA("Frame") or obj:IsA("ScreenGui")) and obj.Visible then
-                                    for _, pn in ipairs(POPUP) do
-                                        if obj.Name == pn then obj.Visible=false; found=true; break end
-                                    end
-                                end
-                                if found then break end
-                            end
-                        end
-                    end)
-                    if found then break end
-                end
-            end)
-
             -- Tandai selesai
             SIEGE.live[d.cityRaidId] = nil
             if _siegeChatOpen then _siegeChatOpen[targetMap] = false end
@@ -10267,58 +10011,6 @@ local function DungeonTpIn()
  end
 end
 
--- Auto hide popup reward dungeon
-local function DungeonHideRewardPopup()
- task.spawn(function()
- local _waited = 0
- local DUNGEON_POPUP_NAMES = {"TowerFightPanel","RewardsFrame","ResultFrame","RewardPanel","TowerReward","DungeonReward"}
- local CLOSE_KEYS = {"close","tutup","ok","selesai","done","claim","lanjut"}
- local _found = false
- while _waited < 4 do
- task.wait(0.3); _waited = _waited + 0.3
- pcall(function()
- for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
- if obj:IsA("TextButton") and obj.Visible and obj.Text ~= "" then
- local low = obj.Text:lower():gsub("%s+","")
- for _, k in ipairs(CLOSE_KEYS) do
- if low:find(k,1,true) then
- local r = obj
- while r.Parent and r.Parent ~= LP.PlayerGui do
-     r = r.Parent
- end
- for _, pn in ipairs(DUNGEON_POPUP_NAMES) do
- if r.Name == pn then
- pcall(function() obj.Activated:Fire() end)
- pcall(function() obj.MouseButton1Click:Fire() end)
- _found = true; break
- end
- end
- end
- if _found then break end
- end
- end
- if _found then break end
- end
- -- Fallback hide
- if not _found then
- for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
- if (obj:IsA("Frame") or obj:IsA("ScreenGui")) and obj.Visible then
- for _, pn in ipairs(DUNGEON_POPUP_NAMES) do
- if obj.Name == pn then
- obj.Visible = false
- _found = true; break
- end
- end
- end
- if _found then break end
- end
- end
- end)
- if _found then break end
- end
- end)
-end
-
 StartDungeonLoop = function()
  if DUNGEON.running then StopDungeon() end
  DUNGEON.running = true
@@ -10610,7 +10302,7 @@ ST2 = {
     inMap          = false,
     attacking      = false,  -- flag mass attack sedang berjalan
     waveCount      = 0,      -- 0 = Non Stop, 1-10 = jumlah wave sebelum keluar
-    attackEnabled  = true,   -- toggle Attack ON/OFF (dari UI)
+    attackEnabled  = false,   -- toggle Attack ON/OFF (dari UI)
     statusLbl      = nil,
     dot            = nil,
     count          = 0,
@@ -11319,7 +11011,7 @@ do
  local ever_claimed = false
  status("[] SCAN...", C.YEL)
 
- for id = 1, 500 do
+ for id = 1, 200 do
  local ok, res = pcall(function()
  return RE:InvokeServer({id = tostring(id)})
  end)
@@ -11449,7 +11141,7 @@ do
  if RE1 then
  SetStatus("[G] Online Reward SCAN...", C.YEL)
  local fail, ever = 0, false
- for id = 1, 500 do
+ for id = 1, 200 do
  local ok, res = pcall(function() return RE1:InvokeServer({id = tostring(id)}) end)
  if ok and res == true then
  fail = 0; ever = true
@@ -11499,7 +11191,7 @@ do
  SetStatus("[OK] Claim All DONE!", C.GRN)
  allBtn.BackgroundColor3 = C.GRN
  allLbl.Text = "CLAIM ALL DONE"
- task.wait(3)
+ task.wait(1)
  allBtn.BackgroundColor3 = C.ACC
  allLbl.Text = "CLAIM ALL"
  end)
@@ -11708,9 +11400,9 @@ do
  UpdatePlatformLbl()
  local msg = "[FLa Webhook] Webhook Active! Mode: "..(_webhookMode or "both"):upper()
  testLbl.Text="[..] Sending..."; testLbl.TextColor3=Color3.fromRGB(255,220,60)
- -- [FIX] Timeout UI 12s: kalau tidak ada callback dalam 12s, reset label
+ -- [FIX] Timeout UI 1s: kalau tidak ada callback dalam 1s, reset label
  local _done = false
- task.delay(12, function()
+ task.delay(1, function()
  if not _done then
  _done = true
  testLbl.Text="[!] Timeout"; testLbl.TextColor3=Color3.fromRGB(255,80,60)
@@ -11753,14 +11445,14 @@ do
  function()
  task.spawn(function()
  verLbl.Text="[OK] Link Valid!"; verLbl.TextColor3=Color3.fromRGB(100,255,100)
- task.wait(2.5)
+ task.wait(1)
  verLbl.Text="[] Verify Link"; verLbl.TextColor3=C.TXT
  end)
  end,
  function(err)
  task.spawn(function()
  verLbl.Text=""..err; verLbl.TextColor3=Color3.fromRGB(255,80,60)
- task.wait(2.5)
+ task.wait(1)
  verLbl.Text="[] Verify Link"; verLbl.TextColor3=C.TXT
  end)
  end
@@ -12633,7 +12325,7 @@ local function _pollSiegeLive(label)
 end
 
 task.spawn(function()
-    task.wait(4) -- tunggu GUI + game modules ready
+    task.wait(1) -- tunggu GUI + game modules ready
 
     -- SUMBER 1: Listener permanent UpdateCityRaidInfo
     -- Server push ini setiap siege buka/tutup
@@ -12670,11 +12362,11 @@ task.spawn(function()
     task.wait(1)
     _pollSiegeLive("startup")
 
-    -- SUMBER 3: Periodic re-poll setiap 30 detik (keepalive)
+    -- SUMBER 3: Periodic re-poll setiap 1 detik (keepalive)
     -- Sync ulang kalau ada event yang terlewat
     task.spawn(function()
         while true do
-            task.wait(30)
+            task.wait(1)
             if SIEGE then
                 _pollSiegeLive("periodic")
             end
@@ -12686,11 +12378,6 @@ task.spawn(function()
     -- Ini yang handle kasus: siege open sebelum script load, relog, missed event
     -- workspace.Maps.Map.CityRaidEnter berisi folder CityRaidX saat siege open
     local CITY_RAID_FOLDER_MAP = {
-        CityRaid1 = 1000001,  -- Map 3
-        CityRaid2 = 1000002,  -- Map 7
-        CityRaid3 = 1000003,  -- Map 10
-        CityRaid4 = 1000004,  -- Map 13
-        -- Nama alternatif yang mungkin dipakai game
         CityRaidEnter1 = 1000001,
         CityRaidEnter2 = 1000002,
         CityRaidEnter3 = 1000003,
@@ -12804,88 +12491,3 @@ task.spawn(function()
         end
     end
 end)
-
--- Hook dipasang langsung saat GUI muncul (Remotes sudah ready karena task.wait(3) di atas)
--- Tidak perlu delay tambahan - makin cepat hook aktif makin baik
-task.spawn(function()
- task.wait(0.5)
- InitAllCaptureLayers()
-end)
-
---  AUTO HIDE REWARD / RESULT PANELS [v273 FIX: AGGRESSIVE]
--- Berlaku untuk Raid, Garrison Boss, dan Siege
-task.spawn(function()
-    local HIDE_PANELS = {
-        "RewardsFrame", "RaidsFightPanel", "CityFightPanel", 
-        "RaidsPanel", "ResultFrame", "RewardPanel", "ChallengeGarrisonBossSuccess"
-    }
-
-    local function forceHide(obj)
-        if not obj or not obj.Parent then return end
-        pcall(function()
-            -- [v273] Cek tipe objek untuk menghindari error "Visible is not a valid property"
-            if obj:IsA("GuiObject") then
-                obj.Visible = false
-                if obj:IsA("CanvasGroup") then obj.Alpha = 0 end
-                -- Pindahkan jauh dari layar agar benar-benar tidak terlihat
-                obj.Position = UDim2.new(2, 0, 2, 0)
-            elseif obj:IsA("ScreenGui") then
-                obj.Enabled = false
-            end
-        end)
-    end
-
-    local function checkAndHide(obj)
-        -- Hanya proses objek yang memiliki properti tampilan (GuiObject atau ScreenGui)
-        if not (obj:IsA("GuiObject") or obj:IsA("ScreenGui")) then return end
-        
-        for _, name in ipairs(HIDE_PANELS) do
-            if obj.Name == name or obj.Name:find("GarrisonBoss") then
-                task.wait(0.2)
-                forceHide(obj)
-                
-                -- Pasang listener berdasarkan tipe properti yang sesuai
-                pcall(function()
-                    if obj:IsA("GuiObject") then
-                        obj:GetPropertyChangedSignal("Visible"):Connect(function()
-                            if obj.Visible then forceHide(obj) end
-                        end)
-                    elseif obj:IsA("ScreenGui") then
-                        obj:GetPropertyChangedSignal("Enabled"):Connect(function()
-                            if obj.Enabled then forceHide(obj) end
-                        end)
-                    end
-                end)
-                break
-            end
-        end
-    end
-
-    -- 1. Scan existing
-    for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
-        checkAndHide(obj)
-    end
-
-    -- 2. Watch new ones
-    LP.PlayerGui.DescendantAdded:Connect(function(obj)
-        task.spawn(checkAndHide, obj)
-    end)
-
-    -- 3. Event Listeners (Back-end triggers)
-    local _evts = {
-        "ShowReward", "ChallengeGarrisonBossSuccess", 
-        "ChallengeRaidsSuccess", "ChallengeRaidsFail"
-    }
-    for _, ename in ipairs(_evts) do
-        local re = Remotes:WaitForChild(ename, 10)
-        if re then
-            re.OnClientEvent:Connect(function()
-                task.wait(0.3)
-                for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
-                    checkAndHide(obj)
-                end
-            end)
-        end
-    end
-end)
-
