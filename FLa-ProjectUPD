@@ -1134,7 +1134,7 @@ end
 -- ============================================================
 -- STATE & LOOPS
 -- ============================================================
-STATE = {autoCollect=false, autoCollectGoldItem=false, autoDestroyer=false, autoArise=false, noClip=false, antiAfk=false, autoConfirm=false, autoClose=false}
+STATE = {autoCollect=false, autoDestroyer=false, autoArise=false, noClip=false, antiAfk=false, autoConfirm=false, autoClose=false}
 LOOPS, COLLECTED = {}, {}
 
 function StopLoop(key)
@@ -1194,7 +1194,6 @@ _siegeToggleState   = false -- tracking state pill toggle Siege (true=ON)
 _dungeonToggleState = false -- tracking state pill toggle Dungeon (true=ON)
 -- Global Config - expose setter dari setiap panel
 _setAutoHideToggle  = nil  -- Main: Auto Hide Reward
-_setAutoCollectToggle = nil -- Main: Auto Collect GOLD & ITEM
 _setAnimToggle      = nil  -- Main: Disable All Animations
 _setSellHeroToggle  = nil  -- Main: Auto Sell Hero Equip
 _autoSellWeaponSet  = nil  -- Main: Auto Sell Weapon toggle setter
@@ -1222,7 +1221,6 @@ _webhookModeSetIdx  = nil  -- Settings: webhook mode setter
 _webhookUrlBox      = nil  -- Settings: urlBox reference untuk restore text
 -- Visual-only setters (update pill tanpa trigger logic - untuk restore UI saat load config)
 _visAutoHide    = nil  -- Main: Auto Hide Reward visual
-_visAutoCollect = nil  -- Main: Auto Collect GOLD & ITEM visual
 _visDisableAnim = nil  -- Main: Disable Anim visual
 _visSellHero    = nil  -- Main: Sell Hero visual
 _visRandomAtk   = nil  -- Farm: Random Attack visual
@@ -1305,7 +1303,6 @@ _whSilent = false -- true saat scan history awal (jangan fire webhook duplikat)
 
 
 RAID.autoKillBoss = false -- toggle: teleport ke raja + auto attack sampai mati
-RAID.ascensionMode = false -- toggle: true=hanya Ascension raid, false=hanya Normal raid
 RAID.bossDelay = 3 -- detik delay sebelum TP ke boss (1-10, user-controlled)
 
 _maStatusLbl, _noClipConn, _antiAfkThread, _antiAfkStart = nil, nil, nil, nil
@@ -1318,7 +1315,7 @@ local StatusDots, StatusLbls = {}, {}
 -- MAPS
 -- ============================================================
 local MAPS = {}
-for i = 1, 20 do
+for i = 1, 19 do
  MAPS[i] = {name="Map "..i, id=50000+i, remote=i<=4 and "Start" or "Local"}
 end
 MR = {selected={}, nextMapDelay=3, teleportDelay=3}
@@ -1738,23 +1735,7 @@ function StopGoldMagnet()
     _goldMagnetRunning = false
 end
 
--- [AUTO COLLECT GOLD & ITEM] Master toggle - kontrol semua collector sekaligus
-function DoAutoCollectGoldItem(on)
-    STATE.autoCollectGoldItem = on
-    if on then
-        StartInstantGoldCollector(true)
-        StartGoldMagnet(function() return STATE.autoCollectGoldItem end)
-        STATE.autoCollect = true
-        DoAutoCollect(true)
-    else
-        StartInstantGoldCollector(false)
-        StopGoldMagnet()
-        STATE.autoCollect = false
-        StopLoop("collect")
-    end
-end
-
-
+-- ============================================================
 -- ATTACK LOOPS
 -- ============================================================
 function AttackLoop_Mass(onStatus)
@@ -2190,7 +2171,7 @@ function DoMassAttack(on)
  if not MA.running then break end
 
  local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
+ for i = 1, 19 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
 
  if #mapsToUse == 0 then
  local cont = AttackLoop_Mass(function(msg)
@@ -2211,7 +2192,7 @@ function DoMassAttack(on)
  while MA.running do
  repeat
  local _fresh = {}
- for i = 1, 20 do
+ for i = 1, 19 do
  if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
  end
  if #_fresh == 0 then mapsToUse = {}; break end
@@ -2315,7 +2296,7 @@ function DoMassAttack(on)
  if not MA.running then break end
 
  local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
+ for i = 1, 19 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
 
  if #mapsToUse == 0 then
  local cont = AttackLoop_Mass(function(msg)
@@ -2336,7 +2317,7 @@ function DoMassAttack(on)
  while MA.running do
  repeat
  local _fresh = {}
- for i = 1, 20 do
+ for i = 1, 19 do
  if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
  end
  if #_fresh == 0 then mapsToUse = {}; break end
@@ -3329,13 +3310,12 @@ end
  _autoHideRow.Name = "ZZZ_AutoHide" -- Trik aman! Memaksa posisinya di bawah Count RYB (LayoutOrder 1) tanpa merusak/menggeser LayoutOrder tombol lain.
 
  -- Toggle UI untuk Disable All Animations & Damage Text
-local _animRow, _animSet, _animVis = ToggleRow(p, "DISABLE ALL ANIMATIONS", "Matikan animasi hero & teks damage (Anti-Lag)", 3, function(on)
+local _animRow, _animSet, _animVis = ToggleRow(p, "DISABLE ALL ANIMATIONS", "Matikan animasi hero & teks damage (Anti-Lag)", 2, function(on)
     DoDisableAllAnimations(on)
 end)
-_animRow.LayoutOrder = 3 -- eksplisit
 _setAnimToggle = _animSet
 _visDisableAnim = _animVis
-_animRow.Name = "ZZZ_DisableAnim"
+_animRow.Name = "ZZZ_DisableAnim" -- Mengamankan posisi layout agar tidak berantakan
 
  --  Toggle Auto Sell (DI BAWAH counter) 
  local _sellToggleRow, _sellToggleSet, _sellVis = ToggleRow(p,"AUTO SELL HERO EQUIP","Auto sell all items (except Locked)",4,function(on)
@@ -3516,13 +3496,13 @@ _animRow.Name = "ZZZ_DisableAnim"
 
  -- Divider
  local divMain = Frame(p, C.BORD, UDim2.new(1,0,0,1))
- divMain.LayoutOrder=6; divMain.BackgroundTransparency=0.42
+ divMain.LayoutOrder=5; divMain.BackgroundTransparency=0.42
 
  -- ============================================================
  -- AUTO SELL WEAPON [v56b FIX] + WEAPON FILTER DROPDOWN
  -- Persistent listener di UpdateWeapon.OnClientEvent
  -- Dropdown pakai DDLayer (sistem existing) - no MaxSize bug
- -- LayoutOrder: swRow=6, swDropCard=7, swStatusCard=8
+ -- LayoutOrder: swRow=5, swDropCard=6, swStatusCard=7
  --              dgRow=8, dgSliderCard=9 (geser +2)
  -- ============================================================
 
@@ -3719,7 +3699,7 @@ _animRow.Name = "ZZZ_DisableAnim"
 
  -- -- Toggle row ----------------------------------------------
  local swRow = Frame(p, C.SURFACE, UDim2.new(1,0,0,44))
- swRow.LayoutOrder = 6; Corner(swRow,10); Stroke(swRow, C.BORD, 1.5, 0.3)
+ swRow.LayoutOrder = 5; Corner(swRow,10); Stroke(swRow, C.BORD, 1.5, 0.3)
  local swLbl = Label(swRow, "AUTO SELL WEAPON", 13, C.TXT, Enum.Font.GothamBold)
  swLbl.Size = UDim2.new(1,-68,0,20); swLbl.Position = UDim2.new(0,14,0.5,-10)
  local swPill = Btn(swRow, C.PILL_OFF, UDim2.new(0,52,0,30))
@@ -3729,7 +3709,7 @@ _animRow.Name = "ZZZ_DisableAnim"
 
  -- -- Dropdown filter card (LayoutOrder 6) --------------------
  local swDropCard = Frame(p, C.BG3, UDim2.new(1,0,0,0))
- swDropCard.LayoutOrder = 7
+ swDropCard.LayoutOrder = 6
  swDropCard.AutomaticSize = Enum.AutomaticSize.Y
  Corner(swDropCard, 10); Stroke(swDropCard,C.BORD, 1.5,0.4)
  Padding(swDropCard,6,6,10,10)
@@ -3755,7 +3735,7 @@ _animRow.Name = "ZZZ_DisableAnim"
 
  -- -- Status bar (LayoutOrder 7) -------------------------------
  local swStatusCard = Frame(p, C.BG3, UDim2.new(1,0,0,26))
- swStatusCard.LayoutOrder = 8; Corner(swStatusCard,6); Stroke(swStatusCard,C.BORD, 1.5,0.4)
+ swStatusCard.LayoutOrder = 7; Corner(swStatusCard,6); Stroke(swStatusCard,C.BORD, 1.5,0.4)
  local swDot = Frame(swStatusCard, Color3.fromRGB(100,100,100), UDim2.new(0,8,0,8))
  swDot.Position = UDim2.new(0,7,0.5,-4); Corner(swDot,4)
  local swStatusLbl = Label(swStatusCard,"Idle",10,C.TXT3,Enum.Font.GothamBold)
@@ -4160,7 +4140,7 @@ _animRow.Name = "ZZZ_DisableAnim"
 
  -- UI 
  local dgRow = Frame(p, C.SURFACE, UDim2.new(1,0,0,44))
- dgRow.LayoutOrder = 9; Corner(dgRow,10); Stroke(dgRow, C.BORD, 1.5, 0.3)
+ dgRow.LayoutOrder = 8; Corner(dgRow,10); Stroke(dgRow, C.BORD, 1.5, 0.3)
  local dgLbl = Label(dgRow, "AUTO DECOMPOSE GEMS", 13, C.TXT, Enum.Font.GothamBold)
  dgLbl.Size = UDim2.new(1,-68,0,20); dgLbl.Position = UDim2.new(0,14,0.5,-10)
  local dgPill = Btn(dgRow, C.PILL_OFF, UDim2.new(0,52,0,30))
@@ -4170,7 +4150,7 @@ _animRow.Name = "ZZZ_DisableAnim"
 
  -- Slider Max Level 
  local dgSliderCard = Frame(p, C.BG3, UDim2.new(1,0,0,44))
- dgSliderCard.LayoutOrder = 10; Corner(dgSliderCard, 10); Stroke(dgSliderCard,C.BORD, 1.5,0.4)
+ dgSliderCard.LayoutOrder = 9; Corner(dgSliderCard, 10); Stroke(dgSliderCard,C.BORD, 1.5,0.4)
  Padding(dgSliderCard,6,6,10,10)
  New("UIListLayout",{Parent=dgSliderCard,FillDirection=Enum.FillDirection.Vertical,Padding=UDim.new(0,4)})
 
@@ -4418,26 +4398,6 @@ _animRow.Name = "ZZZ_DisableAnim"
   }):Play()
  end
 
-end
-
-
--- ============================================================
--- AUTO COLLECT GOLD & ITEM TOGGLE (inject ke panel MAIN)
--- ============================================================
-do
- local ok, err = pcall(function()
-  local p = Panels["main"]
-  if not p then warn("[FLa] Panels[main] is nil!") return end
-  local row, setFn, visFn = ToggleRow(p, "AUTO COLLECT GOLD & ITEM", "TP & collect semua gold/item ke player", 5, function(on)
-      DoAutoCollectGoldItem(on)
-  end)
-  if not row then warn("[FLa] ToggleRow returned nil!") return end
-  row.LayoutOrder = 5
-  _setAutoCollectToggle = setFn
-  _visAutoCollect = visFn
-  warn("[FLa] AUTO COLLECT GOLD & ITEM toggle injected OK, LayoutOrder="..tostring(row.LayoutOrder))
- end)
- if not ok then warn("[FLa] inject error: "..tostring(err)) end
 end
 
 
@@ -4925,7 +4885,7 @@ do
  local mapLbl=Label(mapCard,"Rotation Map",12,C.TXT,Enum.Font.GothamBold)
  mapLbl.Size=UDim2.new(0.5,0,1,0)
  local mapOpts={"ALL MAP"}
- for i=1,20 do mapOpts[i+1]="Map "..i end
+ for i=1,19 do mapOpts[i+1]="Map "..i end
  local mapDDBtn=Btn(mapCard,C.BG3,UDim2.new(0.5,-4,1,-4))
  mapDDBtn.Position=UDim2.new(0.5,0,0,2); Corner(mapDDBtn,6); Stroke(mapDDBtn,C.BORD, 1.5,0.2)
  local mapDDLbl=Label(mapDDBtn," SELECT MAP",11,C.ACC2,Enum.Font.GothamBold)
@@ -4936,7 +4896,7 @@ do
  function UpdateMapDDLbl()
  local count=0; for _ in pairs(mapSelSet) do count=count+1 end
  if count==0 then mapDDLbl.Text=" MAP NOW"
- elseif count==20 then mapDDLbl.Text=" ALL MAP"
+ elseif count==19 then mapDDLbl.Text=" ALL MAP"
  else mapDDLbl.Text=" "..count.." MAP SELECTED" end
  end
 
@@ -4972,7 +4932,7 @@ do
  item.MouseButton1Click:Connect(function()
  if ii==1 then
  local anyOff=false
- for j=1,20 do if not mapSelSet[j] then anyOff=true; break end end
+ for j=1,19 do if not mapSelSet[j] then anyOff=true; break end end
  if anyOff then
  for j=1,19 do mapSelSet[j]=true; MR.selected[j]=true end
  for j=2,#mapItemRefs do mapItemRefs[j].chk.Text="v"; mapItemRefs[j].lbl.TextColor3=C.ACC2 end
@@ -4985,7 +4945,7 @@ do
  local mi=ii-1; mapSelSet[mi]=not mapSelSet[mi]; MR.selected[mi]=mapSelSet[mi]
  mapItemRefs[ii].chk.Text=mapSelSet[mi] and "v" or ""
  mapItemRefs[ii].lbl.TextColor3=mapSelSet[mi] and C.ACC2 or C.TXT
- local allOn=true; for j=1,20 do if not mapSelSet[j] then allOn=false; break end end
+ local allOn=true; for j=1,19 do if not mapSelSet[j] then allOn=false; break end end
  mapItemRefs[1].chk.Text=allOn and "v" or ""; mapItemRefs[1].lbl.TextColor3=allOn and C.ACC2 or C.TXT
  end
  UpdateMapDDLbl()
@@ -6548,7 +6508,6 @@ MAP_NAMES = {
  [17] = "Angel Holy Realm",
  [18] = "Golden Throne",
  [19] = "Dragon Ball City",
- [20] = "Dragon Ball Wasteland",
 
 }
 
@@ -6574,7 +6533,6 @@ RAID_SPAWN_POS = {
  [50117] = Vector3.new( -0.4, 18.5, 93.5), -- Map 17 Angel Holy Realm
  [50118] = Vector3.new(2000.0, 45.4, 234.7), -- Map 18 Golden Throne
  [50119] = Vector3.new(0, 10.0, 0), -- Map 19 Dragon Ball City (update posisi jika perlu)
- [50120] = Vector3.new(0, 10.0, 0), -- Map 20 Dragon Ball Wasteland (update posisi jika perlu)
 }
 end -- chat listener + grade cache
 
@@ -6612,74 +6570,25 @@ function ParseChatLine(text)
  if type(text) ~= "string" or #text < 3 then return end
  text = text:gsub("<[^>]+>",""):gsub("[\r\n]+"," "):match("^%s*(.-)%s*$") or text
 
- -- RAID Normal: "The MaFissure appeared in 6,Orc Palace [B]"
- -- RAID Ascension: "The MaFissure appeared in Ascension Tower 16 - [Monarch] Antares+1 [A]"
+ -- RAID: "The MaFissure appeared in 6,Orc Palace [B]"
  if text:find("MaFissure",1,true) and text:find("appeared",1,true) then
-
- -- Helper: ekstrak grade dari teks
- local function extractGrade(t)
- return t:match("%[M%+%+%]") and "M++" or t:match("%[M%+%]") and "M+" or
- t:match("%[SS%]") and "SS" or t:match("%[XM%]") and "XM" or
- t:match("%[ULT%]") and "ULT" or t:match("%[GOD%]") and "GOD" or
- t:match("%[([EDCBAGSNMedcbagsn])%]") or (t:find("%[M%]") and "M")
- end
-
- -- Cek apakah format Ascension: "appeared in Ascension Tower <num>"
- local isAscension = text:find("Ascension Tower", 1, true) and true or false
- local mapNum, rest, grade
-
- if isAscension then
- -- Format: "appeared in Ascension Tower 16 - [Monarch] Antares+1 [A]"
- mapNum = tonumber(text:match("Ascension Tower (%d+)"))
- rest = text:match("Ascension Tower %d+%s*[-]?%s*(.+)") or ""
- grade = extractGrade(rest) or extractGrade(text)
- if not grade and text:find("Monarch",1,true) then grade = "?" end
- else
- -- Format normal: "appeared in 6,Orc Palace [B]"
- local mapStr
- mapStr, rest = text:match("appeared in (%d+),(.+)")
+ local mapStr, rest = text:match("appeared in (%d+),(.+)")
  if not mapStr then mapStr, rest = text:match("appeared in (%d+) (.+)") end
  if mapStr then
- mapNum = tonumber(mapStr)
- grade = extractGrade(rest or "") or extractGrade(text)
+ local mapNum = tonumber(mapStr)
+ local grade = rest:match("%[M%+%+%]") and "M++" or rest:match("%[M%+%]") and "M+" or rest:match("%[SS%]") and "SS" or rest:match("%[XM%]") and "XM" or rest:match("%[ULT%]") and "ULT" or rest:match("%[GOD%]") and "GOD" or rest:match("%[([EDCBAGSNMedcbagsn])%]") or (rest:find("%[M%]") and "M")
+ if not grade then
+ grade = text:match("%[M%+%+%]") and "M++" or text:match("%[M%+%]") and "M+" or text:match("%[SS%]") and "SS" or text:match("%[XM%]") and "XM" or text:match("%[ULT%]") and "ULT" or text:match("%[([EDCBAGSNMedcbagsn])%]") or (text:find("%[M%]") and "M")
+ end
  if not grade and text:find("Monarch",1,true) then grade = "?" end
- end
- end
-
  if mapNum and grade then
- -- Update grade cache (untuk raid normal, key = mapNum; Ascension pakai key negatif agar tidak bentrok)
- local cacheKey = isAscension and (-mapNum) or mapNum
- local prev = _runeGradeCache[cacheKey]
+ local prev = _runeGradeCache[mapNum]
  local cleanPrev = prev and prev:match("^([^%s%(]+)") or prev
  local shouldUpdate = not prev or cleanPrev == "?" or (GRADE_RANK[grade] and GRADE_RANK[cleanPrev] and GRADE_RANK[grade] > GRADE_RANK[cleanPrev])
- if shouldUpdate then _runeGradeCache[cacheKey] = grade end
-
- if isAscension then
- -- [Ascension Mode] Buat entry Ascension di RAID_LIVE dengan id unik negatif
- -- mapId pakai 50000 + mapNum (sama dengan normal) tapi flag isAscension = true
- local ascId = -(50000 + mapNum) -- id negatif agar tidak bentrok dengan raid normal
- RAID_LIVE[ascId] = {
- raidId = ascId,
- mapId = 50000 + mapNum,
- spawnName = "RE1001",
- rank = 0,
- grade = grade,
- isAscension = true,
- endTime = os.time() + 300, -- estimasi 5 menit window
- label = "Ascension Tower "..mapNum.." ["..grade.."]",
- }
- if RebuildRaidList then pcall(RebuildRaidList) end
- else
- -- Update isAscension = false untuk entry normal di RAID_LIVE
- for rid, entry in pairs(RAID_LIVE) do
- if entry.mapId and (entry.mapId - 50000) == mapNum then
- entry.isAscension = false
- end
- end
- end
-
+ if shouldUpdate then _runeGradeCache[mapNum] = grade end
  if not _whSilent then TriggerWebhookDebounce() end
  if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+ end
  end
  return
  end
@@ -7128,41 +7037,25 @@ _WH.raidConns = {}
 RebuildRaidList = function()
  local sorted = {}
  for _, e in pairs(RAID_LIVE) do
-  local mn = e.mapId and (e.mapId - 50000) or 0
-  if e.isAscension then
-   -- Ascension entry (raidId negatif): selalu masuk tanpa filter mapNum
-   table.insert(sorted, e)
-  elseif e.mapId and mn >= 1 and mn <= 20 then
-   -- Normal entry: filter mapNum 1-20
+  -- [FIX] Skip AT entries yang mungkin lolos (mapNum 19+)
+  if e.mapId and (e.mapId - 50000) <= 19 then
    table.insert(sorted, e)
   end
  end
- -- Sort: normal entries by mapId ascending, Ascension entries setelahnya
- table.sort(sorted, function(a, b)
-  if a.isAscension ~= b.isAscension then
-   return not a.isAscension -- normal dulu
-  end
-  return (a.mapId or 0) < (b.mapId or 0)
- end)
+ -- Sort by mapId ascending (map 1 -> map 18)
+ table.sort(sorted, function(a, b) return (a.mapId or 0) < (b.mapId or 0) end)
  RAID_ID_LIST = {}
  for _, e in ipairs(sorted) do
- local mn = e.mapId and (e.mapId - 50000) or 0
- local lbl
- if e.isAscension then
-  lbl = "Ascension Tower "..mn.." ["..( e.grade or "?").."]"
- else
-  lbl = "Map "..mn.." - "..(MAP_NAMES[mn] or ("Map "..mn)).." - "..(RANK_LABEL[e.rank] or ("["..( e.spawnName or "?").."]")).." (ID:"..e.raidId..")"
- end
  table.insert(RAID_ID_LIST, {
- label = lbl,
+ label = "Map "..(e.mapId-50000).." - "..(MAP_NAMES[e.mapId-50000] or ("Map "..(e.mapId-50000))).." - "..(RANK_LABEL[e.rank] or ("["..e.spawnName.."]")).." (ID:"..e.raidId..")",
  id = e.raidId,
  rank = e.rank,
  mapId = e.mapId,
  spawnName = e.spawnName,
- isAscension = e.isAscension,
  })
  end
  if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
+ -- Kirim webhook setiap RAID_LIVE berubah
  if _webhookEnabled and _webhookUrl ~= "" then
  TriggerWebhookDebounce()
  end
@@ -7178,10 +7071,10 @@ ParseRaidEntry = function(k, info)
  local spawnName = info.spawnName or "RE1001"
  if not raidId or not mapId then return end
  -- Normalize mapId: 50101-50118 -> 50001-50018
- if mapId >= 50101 and mapId <= 50120 then
+ if mapId >= 50101 and mapId <= 50119 then
  mapId = mapId - 100
  end
- if mapId < 50001 or mapId > 50020 then return end
+ if mapId < 50001 or mapId > 50019 then return end
  local rank = SPAWN_RANK[spawnName] or 0
  local mapNum = mapId - 50000
  local mapName = MAP_NAMES[mapNum] or ("Map "..mapNum)
@@ -7202,32 +7095,24 @@ end
 -- [v270] GetBestGrade: grade dari RAID_CONFIG_GRADE via raidId (akurat 100%)
 -- Fallback: _runeGradeCache (chat/popup), lalu RAID_LIVE entry grade field
 -- mapNum = angka map (1-18), return string grade atau nil
-function GetBestGrade(mapNum, isAscension)
- local mapId = 50000 + mapNum
- -- [FIX] Ascension pakai cacheKey negatif
- local cacheKey = isAscension and (-mapNum) or mapNum
+function GetBestGrade(mapNum)
  -- 1. RAID_CONFIG_GRADE via raidId (data config game, paling akurat)
- -- Untuk Ascension, raidId negatif -> skip RAID_CONFIG_GRADE (tidak ada di server config)
- if not isAscension then
-  for _, ent in pairs(RAID_LIVE) do
-   if ent.mapId == mapId and ent.raidId and ent.raidId > 0 and not ent.isAscension then
-    local g = RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[ent.raidId]
-    if g and g ~= "?" then return g end
-   end
-  end
+ local mapId = 50000 + mapNum
+ for _, ent in pairs(RAID_LIVE) do
+ if ent.mapId == mapId and ent.raidId and ent.raidId > 0 then
+ local g = RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[ent.raidId]
+ if g and g ~= "?" then return g end
  end
- -- 2. Chat cache (fallback) - gunakan cacheKey sesuai mode
- if _runeGradeCache then
-  if _runeGradeCache[cacheKey] then return _runeGradeCache[cacheKey] end
-  -- Fallback ke positif jika negatif tidak ada
-  if isAscension and _runeGradeCache[mapNum] then return _runeGradeCache[mapNum] end
+ end
+ -- 2. Chat cache (fallback)
+ if _runeGradeCache and _runeGradeCache[mapNum] then
+ return _runeGradeCache[mapNum]
  end
  -- 3. RAID_LIVE entry grade field
  for _, ent in pairs(RAID_LIVE) do
-  if ent.mapId == mapId and ent.grade and ent.grade ~= "?" then
-   if isAscension and ent.isAscension then return ent.grade end
-   if not isAscension and not ent.isAscension then return ent.grade end
-  end
+ if ent.mapId == mapId and ent.grade and ent.grade ~= "?" then
+ return ent.grade
+ end
  end
  return nil
 end
@@ -7414,8 +7299,8 @@ ConnectRaidListeners = function()
  local mapId = info.mapId
  if not raidId or not mapId then break end
  -- Normalize mapId ke lobby range
- if mapId >= 50101 and mapId <= 50120 then mapId = mapId - 100 end
- if mapId < 50001 or mapId > 50020 then break end
+ if mapId >= 50101 and mapId <= 50119 then mapId = mapId - 100 end
+ if mapId < 50001 or mapId > 50019 then break end
 
  local mapNum = mapId - 50000
  local spawnName = info.spawnName or "RE1001"
@@ -7456,20 +7341,14 @@ ConnectRaidListeners = function()
  end
 
  -- EnterRaidsUpdateInfo: slotIndex + serverMapId saat masuk map
- -- [FIX] Skip event dari Tower/JTP map (50300+) agar tidak mencemari RAID state
  if _RE_Enter then
  local conn = _RE_Enter.OnClientEvent:Connect(function(data)
  if type(data) ~= "table" then return end
- -- Abaikan event dari Tower map (50300+) - JTP dan ST2 pakai range ini
- local evMapId = data.mapId or data.fromMapId or 0
- if evMapId >= 50300 then return end
- -- Abaikan jika tidak ada slotIndex sama sekali (bukan raid event)
- if data.slotIndex == nil and data.fromMapId == nil and data.mapId == nil then return end
  if data.slotIndex then RAID.slotIndex = data.slotIndex end
  if data.fromMapId then RAID.fromMapId = data.fromMapId end
  if data.mapId then
  local mid = data.mapId
- if mid >= 50101 and mid <= 50120 then
+ if mid >= 50101 and mid <= 50118 then
  RAID.serverMapId = mid
  end
  end
@@ -7605,14 +7484,6 @@ end
 -- Scan enemy/boss di workspace
 function GetRaidEnemies()
  local list = {}
- -- [FIX] Filter enemy berdasarkan proximity ke spawn point map yang sedang aktif
- -- Mencegah enemy sisa dari map sebelumnya ikut terdeteksi sebagai target
- local activeMapId = RAID and RAID.serverMapId
- local spawnPos = activeMapId and RAID_SPAWN_POS and RAID_SPAWN_POS[activeMapId]
- -- Radius filter: enemy harus dalam 2000 studs dari spawn point map aktif
- -- Jika tidak ada spawnPos (map tidak dikenal), tidak filter posisi
- local MAX_DIST = 2000
-
  for _, fname in ipairs({"Enemys","Enemy","Enemies","Bosses","Boss","RaidBoss","RaidEnemys"}) do
  local folder = workspace:FindFirstChild(fname)
  if folder then
@@ -7622,17 +7493,7 @@ function GetRaidEnemies()
  local hrp = e:FindFirstChild("HumanoidRootPart")
  local hum = e:FindFirstChildOfClass("Humanoid")
  if g and hrp and hum and hum.Health > 0 then
- -- [FIX] Validasi posisi enemy terhadap spawn point map aktif
- local valid = true
- if spawnPos then
- local dist = (hrp.Position - spawnPos).Magnitude
- if dist > MAX_DIST then
- valid = false -- enemy ini dari map lain, skip
- end
- end
- if valid then
  table.insert(list, {guid=g, hrp=hrp, model=e})
- end
  end
  end
  end
@@ -7820,7 +7681,7 @@ function StartRaidLoop()
  repeat
 
  -- [v252] Cek semua interrupt via MODE dispatcher
- -- Dungeon (priority tertinggi) -> ST2/Tower -> Siege -> baru Raid boleh jalan
+ -- Dungeon (priority tertinggi) -> Siege -> baru Raid boleh jalan
  if MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt) then
  RAID.inMap = false
  RaidStatusUpdate("[||] Dungeon aktif - menunggu...", Color3.fromRGB(255,140,0))
@@ -7832,53 +7693,12 @@ function StartRaidLoop()
  task.wait(0.1)
  end
 
- -- [FIX] Cek ST2 (Single/Ascension Tower) - pause Auto Raid selama Tower berjalan
- if ST2 and (ST2.running or ST2.inMap) then
- RAID.inMap = false
- RaidStatusUpdate("[||] Tower aktif - Auto Raid pause...", Color3.fromRGB(255,140,0))
- while ST2 and (ST2.running or ST2.inMap) and RAID.running do
- task.wait(0.5)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Tower selesai - lanjut raid...", C.ACC3)
- task.wait(0.1)
- end
-
- -- [FIX] Cek Siege - pause Auto Raid selama player di dalam Siege map
- if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
- RAID.inMap = false
- RaidStatusUpdate("[||] Siege aktif - Auto Raid pause...", Color3.fromRGB(255,140,0))
- while ((SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt) and RAID.running do
- task.wait(0.5)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Siege selesai - lanjut raid...", C.ACC3)
- task.wait(0.1)
- end
-
-        -- Prioritas: Rune Map + Pick Rank > Rune Map saja > Pick Rank > Difficulty
+        -- [INDEPENDEN] RAID tidak menunggu SIEGE - biarkan jalan bersamaan
+ -- Prioritas: Rune Map + Pick Rank > Rune Map saja > Pick Rank > Difficulty
  -- Selalu baca RAID.runeEnabled / runeGrades / runeMapTarget live
  -- sehingga kalau user ganti setting di tengah, iterasi berikutnya langsung ikut
 local function ResolveEntry()
                 if #RAID_ID_LIST == 0 then return nil end
-                -- [Ascension Mode] Filter helper: cek apakah entry sesuai mode
-                local function _ascFilter(entry)
-                    if not entry then return false end
-                    -- isAscension sudah diisi RebuildRaidList dari RAID_LIVE
-                    local isAsc = entry.isAscension == true
-                    if not isAsc then
-                        -- id bisa negatif (Ascension) atau positif (Normal)
-                        local live = entry.id and RAID_LIVE[entry.id]
-                        if live then isAsc = live.isAscension == true end
-                    end
-                    -- [FIX] Jika id negatif maka pasti Ascension (raidId negatif = Ascension entry)
-                    if entry.id and entry.id < 0 then isAsc = true end
-                    if RAID.ascensionMode then
-                        return isAsc
-                    else
-                        return not isAsc
-                    end
-                end
                 local _now0 = os.time()
                 local _pruned0 = false
                 for rid, ent in pairs(RAID_LIVE) do
@@ -7895,21 +7715,6 @@ local function ResolveEntry()
                 local runeOn = RAID.runeEnabled
                 local runeTarget = runeOn and RAID.runeMapTarget or 0
                 local hasPick = (pm == "byrank" or pm == "manual") and next(RAID.runeGrades) ~= nil
-
-                -- [FIX] Helper grade yang sadar Ascension (pakai key cache negatif untuk AT)
-                local function _getGrade(r)
-                    return GetBestGrade(r.mapId - 50000, r.isAscension == true)
-                end
-
-                -- [Ascension Mode] Filter RAID_ID_LIST sesuai mode sebelum dipakai pick mode apapun
-                local _filteredList = {}
-                for _, r in ipairs(RAID_ID_LIST) do
-                    if _ascFilter(r) then
-                        table.insert(_filteredList, r)
-                    end
-                end
-                -- Gunakan filtered list sebagai sumber utama semua pick mode
-                local RAID_ID_LIST = _filteredList
 
                 local function pickLowest(list)
                     table.sort(list, function(a, b) return a.mapId < b.mapId end)
@@ -7934,8 +7739,8 @@ local function ResolveEntry()
                     -- Helper: Sort dari Rank tertinggi ke terendah
                     local function sortHighestRank(list)
                         table.sort(list, function(a, b)
-                            local ga = _getGrade(a) or "?"
-                            local gb = _getGrade(b) or "?"
+                            local ga = GetBestGrade(a.mapId - 50000) or "?"
+                            local gb = GetBestGrade(b.mapId - 50000) or "?"
                             local ra = GRADE_RANK[ga] or 0
                             local rb = GRADE_RANK[gb] or 0
                             if ra == rb then return a.mapId < b.mapId end 
@@ -7948,7 +7753,7 @@ local function ResolveEntry()
                     local hasPreferRank = next(RAID.runeGrades) ~= nil
                     if hasPreferRank then
                         for _, r in ipairs(valid_raids) do
-                            local grade = _getGrade(r)
+                            local grade = GetBestGrade(r.mapId - 50000)
                             if grade and RAID.runeGrades[grade] then
                                 table.insert(matched, r)
                             end
@@ -7966,7 +7771,7 @@ local function ResolveEntry()
                     if RAID.updownEnabled and RAID.updownTargetGrade then
                         local udMatched = {}
                         for _, r in ipairs(valid_raids) do
-                            local grade = _getGrade(r)
+                            local grade = GetBestGrade(r.mapId - 50000)
                             if grade == RAID.updownTargetGrade then
                                 table.insert(udMatched, r)
                             end
@@ -8006,8 +7811,8 @@ local function ResolveEntry()
                         return maps1to8[_defaultRRIdx]
                     elseif pm == "byrank" then
                         table.sort(list, function(a, b)
-                            local ga = _getGrade(a) or "?"
-                            local gb = _getGrade(b) or "?"
+                            local ga = GetBestGrade(a.mapId - 50000) or "?"
+                            local gb = GetBestGrade(b.mapId - 50000) or "?"
                             local ra = GRADE_RANK[ga] or 0
                             local rb = GRADE_RANK[gb] or 0
                             if ra == rb then return a.mapId < b.mapId end 
@@ -8034,7 +7839,7 @@ local function ResolveEntry()
                 if hasPick then
                     local matched2 = {}
                     for _, r in ipairs(RAID_ID_LIST) do
-                        local grade = _getGrade(r)
+                        local grade = GetBestGrade(r.mapId - 50000)
                         if grade and RAID.runeGrades[grade] == true then table.insert(matched2, r) end
                     end
                     if #matched2 > 0 then
@@ -8102,9 +7907,9 @@ local function ResolveEntry()
  for mn in pairs(RAID.preferMaps) do table.insert(_ms,"Map "..mn) end
  table.sort(_ms)
  RaidStatusUpdate("Waiting Map: "..table.concat(_ms,", ").."...", Color3.fromRGB(100,200,100))
- elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 and next(RAID.runeGrades) ~= nil then
+ elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 and next(RAID.runeGrades) ~= nil then
  RaidStatusUpdate("Waiting grade cocok -> override Map " .. RAID.runeMapTarget .. "...", Color3.fromRGB(200,140,255))
- elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then
+ elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then
  RaidStatusUpdate("Waiting raid apapun -> override Map " .. RAID.runeMapTarget .. "...", Color3.fromRGB(147,197,253))
  elseif next(RAID.runeGrades) ~= nil then
  RaidStatusUpdate("Waiting grade cocok [" .. RAID.difficulty .. "]...", Color3.fromRGB(200,255,150))
@@ -8165,40 +7970,17 @@ local function ResolveEntry()
  end
  
  local currentWm = workspace:GetAttribute("MapId") or 0
- -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Tower/Ascension Tower (50300+)
- if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or currentWm >= 50300 then
+ -- Jangan culik player kalau lagi ada di dalam Map Siege (50201-50204) atau Dungeon (50303)
+ if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 then
      task.wait(2)
      break
- end
- -- [FIX] Pause Auto Raid jika ST2 (Single Tower) sedang aktif di dalam map
- if ST2 and ST2.inMap then
-     RaidStatusUpdate("[||] Tower aktif - Auto Raid pause...", Color3.fromRGB(255,140,0))
-     while ST2 and ST2.inMap and RAID.running do
-         task.wait(0.5)
-     end
-     if not RAID.running then break end
-     RaidStatusUpdate("> Tower selesai - lanjut raid...", C.ACC3)
-     task.wait(0.1)
  end
 
  -- Siege cek tetap pakai flag lama (siege sudah pakai MODE juga via alias)
  _raidInterrupt = true -- sync flag lama
  
 -- [v262 FIX] JANGAN set inMap=true dulu sebelum raidMapId di-assign
-                    -- [FIX Ascension] raidEntry.id negatif = Ascension entry (chat-only id)
-                    -- CreateRaidTeam butuh raidId positif dari server -> ambil dari RAID_LIVE jika tersedia
-                    local _resolvedRaidId = raidEntry.id
-                    if raidEntry.isAscension and _resolvedRaidId < 0 then
-                        -- Cari raidId positif dari RAID_LIVE entry yang sama mapId & isAscension
-                        for _rid, _ent in pairs(RAID_LIVE) do
-                            if _ent.isAscension and _ent.mapId == raidEntry.mapId and _rid > 0 then
-                                _resolvedRaidId = _rid; break
-                            end
-                        end
-                        -- Jika masih negatif: pakai abs (fallback darurat, mungkin tidak work tapi tidak crash)
-                        if _resolvedRaidId < 0 then _resolvedRaidId = math.abs(_resolvedRaidId) end
-                    end
-                    RAID.raidId = _resolvedRaidId
+                    RAID.raidId = raidEntry.id
                     RAID.raidMapId = raidEntry.mapId
                     RAID.inMap = true
                     if RAID.updateActiveLabel then pcall(RAID.updateActiveLabel) end
@@ -8212,7 +7994,7 @@ local function ResolveEntry()
                     if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
                     
                     local mn = raidEntry.mapId - 50000
-                    if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then mn = RAID.runeMapTarget end
+                    if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then mn = RAID.runeMapTarget end
                     local mapLabel = MAP_NAMES[mn] or ("Map " .. mn)
 
                     local _liveEntry = RAID_LIVE[RAID.raidId]
@@ -8243,7 +8025,7 @@ local function ResolveEntry()
                     if pm == "manual" then
                         if RAID.manualMatchMode == "primary" then
                             -- TAHAP 1: MATCH PREFERRED RANK -> HANYA RUNE YANG BOLEH JALAN!
-                            if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then 
+                            if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then 
                                 -- [SISTEM ANTI-MUBAZIR]
                                 if (raidEntry.mapId - 50000) == RAID.runeMapTarget then
                                     useRune = false -- Map sudah sama, simpan Rune-nya!
@@ -8267,7 +8049,7 @@ local function ResolveEntry()
                         end
                     else
                         -- Mode selain Manual (ByRank, dll)
-                        if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then 
+                        if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then 
                             if (raidEntry.mapId - 50000) == RAID.runeMapTarget then
                                 useRune = false
                             else
@@ -8491,25 +8273,7 @@ local function ResolveEntry()
 
  if boss and RAID.running and not RAID._raidDone then
  local bossGuid = boss.guid
- -- [FIX] Validasi bossPos - cegah TP ke 0,0,0 atau jurang/void
- local function GetSafeBossPos()
- if boss.hrp and boss.hrp.Parent then
- local p = boss.hrp.Position
- if p.Y > -200 then return p end
- end
- return nil
- end
- local bossPos = GetSafeBossPos()
- if not bossPos then
- local _waitPos = 0
- while not bossPos and _waitPos < 3 and RAID.running and not RAID._raidDone do
- task.wait(0.3); _waitPos = _waitPos + 0.3
- bossPos = GetSafeBossPos()
- end
- end
- if not bossPos then
- RaidStatusUpdate("[!] Boss pos tidak valid - skip TP boss", Color3.fromRGB(255,80,80))
- end
+ local bossPos = (boss.hrp and boss.hrp.Position) or Vector3.new(0,0,0)
  -- [v259] Teleport delay user-controlled (RAID.bossDelay 1-10s)
  local _bd = math.max(1, math.min(10, RAID.bossDelay or 3))
  for _ci = _bd, 1, -1 do
@@ -8517,7 +8281,7 @@ local function ResolveEntry()
  RaidStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ".._ci.."s...", Color3.fromRGB(255,160,60))
  task.wait(1)
  end
- if RAID.running and not RAID._raidDone and bossPos then
+ if RAID.running and not RAID._raidDone then
  RaidStatusUpdate("[K] Boss: " .. boss.model.Name .. " - Attack!", Color3.fromRGB(255,80,80))
 
  -- 
@@ -8529,43 +8293,33 @@ local function ResolveEntry()
  pcall(function()
  local char = LP.Character
  local hrp = char and char:FindFirstChild("HumanoidRootPart")
- -- [FIX] Hanya teleport jika Y valid (bukan void/jurang)
- local safePos = GetSafeBossPos()
- if hrp and safePos then hrp.CFrame = CFrame.new(safePos + Vector3.new(3,0,0)) end
+ if hrp then hrp.CFrame = CFrame.new(bossPos + Vector3.new(3,0,0)) end
  end)
 
  -- 2) TP SEMUA hero client-side ke boss SEKARANG
  pcall(function()
- local safePos2 = GetSafeBossPos()
- if not safePos2 then return end
  local heroFolder = workspace:FindFirstChild("Heros")
  if heroFolder then
  for _, hModel in ipairs(heroFolder:GetChildren()) do
  local hHrp = hModel:FindFirstChild("HumanoidRootPart")
  if hHrp then
- hHrp.CFrame = CFrame.new(safePos2 + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
+ hHrp.CFrame = CFrame.new(bossPos + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
  end
  end
  end
  end)
 
  -- 3) Fire SEMUA hero remote ke boss SEKARANG
- pcall(function()
- local safePos3 = GetSafeBossPos()
- if safePos3 then FireHeroRemotes(bossGuid, safePos3) end
- end)
+ pcall(function() FireHeroRemotes(bossGuid, bossPos) end)
  if RE.HeroStand and #HERO_GUIDS > 0 then
- local safePos3b = GetSafeBossPos()
- if safePos3b then
  for _, hGuid in ipairs(HERO_GUIDS) do
  pcall(function()
  RE.HeroStand:FireServer({
  heroGuid = hGuid,
  userId = MY_USER_ID,
- standPos = safePos3b + Vector3.new(1, 0, 1),
+ standPos = bossPos + Vector3.new(1, 0, 1),
  })
  end)
- end
  end
  end
 
@@ -8582,31 +8336,23 @@ local function ResolveEntry()
 
  -- 5) TP ulang semua hero setelah re-equip (hero spawn ulang di posisi baru)
  pcall(function()
- local safePos5 = GetSafeBossPos()
- if not safePos5 then return end
  local heroFolder = workspace:FindFirstChild("Heros")
  if heroFolder then
  for _, hModel in ipairs(heroFolder:GetChildren()) do
  local hHrp = hModel:FindFirstChild("HumanoidRootPart")
  if hHrp then
- hHrp.CFrame = CFrame.new(safePos5 + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
+ hHrp.CFrame = CFrame.new(bossPos + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
  end
  end
  end
  end)
- pcall(function()
- local safePos5b = GetSafeBossPos()
- if safePos5b then FireHeroRemotes(bossGuid, safePos5b) end
- end)
+ pcall(function() FireHeroRemotes(bossGuid, bossPos) end)
 
  -- 6) Background thread: TP player+hero terus ke boss tiap 0.5s
  local _tpTh = task.spawn(function()
  while RAID.running and not RAID._raidDone do
  pcall(function()
- -- [FIX] Selalu ambil posisi live dari boss.hrp, validasi Y sebelum TP
- -- Jangan pernah fallback ke bossPos lama yang mungkin sudah tidak valid
- local pos = GetSafeBossPos()
- if not pos then return end -- skip frame ini jika posisi tidak valid
+ local pos = (boss.hrp and boss.hrp.Position) or bossPos
  -- TP player
  local char = LP.Character
  local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -8645,8 +8391,7 @@ local function ResolveEntry()
  if not boss.model or not boss.model.Parent then break end
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
  if hum and hum.Health <= 0 then break end
- local p = GetSafeBossPos()
- if not p then task.wait(0.08); continue end
+ local p = (boss.hrp and boss.hrp.Position) or bossPos
  task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
  task.wait(0.08)
  end
@@ -8728,7 +8473,7 @@ local function ResolveEntry()
  local _quitRe = Remotes:FindFirstChild("QuitRaidsMap")
  if _quitRe then
  pcall(function()
- _quitRe:FireServer({ currentSlotIndex = RAID.slotIndex or 2, toMapId = _toMapId })
+ _quitRe:FireServer({ currentSlotIndex = RAID.slotIndex, toMapId = _toMapId })
  end)
  end
  task.wait(0.3)
@@ -8741,7 +8486,7 @@ local function ResolveEntry()
  task.wait(1)
  if _quitRe then
  pcall(function()
- _quitRe:FireServer({ currentSlotIndex = RAID.slotIndex or 2, toMapId = _toMapId })
+ _quitRe:FireServer({ currentSlotIndex = RAID.slotIndex, toMapId = _toMapId })
  end)
  end
  task.wait(0.2)
@@ -8921,7 +8666,7 @@ do
  if RAID.inMap and RAID.raidMapId then
  local rawMn = RAID.raidMapId - 50000
  -- Kalau Rune Map aktif, tampilkan map tujuan (bukan kendaraan)
- local mn = (RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20) and RAID.runeMapTarget or rawMn
+ local mn = (RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19) and RAID.runeMapTarget or rawMn
  local nm = MAP_NAMES and MAP_NAMES[mn] or ("Map "..tostring(mn))
  local grade = (_runeGradeCache and _runeGradeCache[mn]) or ""
  local gs = grade ~= "" and grade ~= "?" and (" ["..grade.."]") or ""
@@ -9095,7 +8840,7 @@ do
 
  -- [PERBAIKAN 1: Default All Maps terpilih otomatis]
  if not next(RAID.preferMaps) then
-     for mn=1, 20 do RAID.preferMaps[mn] = true end
+     for mn=1, 19 do RAID.preferMaps[mn] = true end
  end
 
  local function UpdatePrefLabel()
@@ -9125,7 +8870,7 @@ do
     popup.ZIndex=9999; popup.ClipsDescendants=true
     Corner(popup, 10); Stroke(popup,Color3.fromRGB(100,180,255),1,0.2)
     local hdr=Frame(popup,C.BG3,UDim2.new(1,0,0,HDR)); hdr.ZIndex=9999
-    local cntL=Label(hdr,"0/20 Selected",10.5,Color3.fromRGB(100,180,255),Enum.Font.GothamBold)
+    local cntL=Label(hdr,"0/18 Selected",10.5,Color3.fromRGB(100,180,255),Enum.Font.GothamBold)
     cntL.Size=UDim2.new(0.6,0,1,0); cntL.Position=UDim2.new(0,8,0,0); cntL.ZIndex=9999
     local clrB=Btn(hdr,Color3.fromRGB(120,30,30),UDim2.new(0,48,0,20))
     clrB.Position=UDim2.new(1,-54,0.5,-10); Corner(clrB,5); clrB.ZIndex=9999
@@ -9134,7 +8879,7 @@ do
     local sf=Instance.new("ScrollingFrame"); sf.Parent=popup
     sf.BackgroundTransparency=1; sf.BorderSizePixel=0
     sf.Position=UDim2.new(0,0,0,HDR); sf.Size=UDim2.new(1,0,0,scrollH)
-    sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+    sf.CanvasSize=UDim2.new(0,0,0,20*(IH+2)+8)
     sf.ScrollBarThickness=5; sf.ScrollBarImageColor3=Color3.fromRGB(100,180,255)
     sf.ZIndex=9999
     local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder
@@ -9143,9 +8888,9 @@ do
     local rr={}
     local function UpdCnt()
         local n=0; for _ in pairs(RAID.preferMaps) do n=n+1 end
-        cntL.Text=n.."/20 Selected"
+        cntL.Text=n.."/19 Selected"
     end
-    for mn=1,20 do
+    for mn=1,19 do
         local it=Instance.new("TextButton",sf)
         it.Size=UDim2.new(1,-4,0,IH); it.LayoutOrder=mn
         it.BackgroundColor3=RAID.preferMaps[mn] and C.BORD or C.BG3
@@ -9176,7 +8921,7 @@ do
     end
     UpdCnt()
     clrB.MouseButton1Click:Connect(function()
-        for mn=1,20 do
+        for mn=1,19 do
             RAID.preferMaps[mn]=nil
             if rr[mn] then
                 rr[mn].tick.Text=""
@@ -9340,11 +9085,11 @@ do
  runeArr.Size=UDim2.new(0,18,1,0); runeArr.Position=UDim2.new(1,-20,0,0)
 
  local function SyncRuneState()
-    if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then RAID.runeEnabled=true
+    if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then RAID.runeEnabled=true
     else RAID.runeEnabled=false end
  end
  SyncRuneState()
- if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then
+ if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then
     runeDDVal.Text=" Map "..RAID.runeMapTarget.." - "..(MAP_NAMES[RAID.runeMapTarget] or "")
     runeDDVal.TextColor3=C.ACC2
  end
@@ -9368,7 +9113,7 @@ do
     local sf=Instance.new("ScrollingFrame",popup)
     sf.Size=UDim2.new(1,0,1,0); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
     sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC; sf.ZIndex=9999
-    sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+    sf.CanvasSize=UDim2.new(0,0,0,20*(IH+2)+8)
     local sfl=Instance.new("UIListLayout",sf)
     sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
     Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
@@ -9390,7 +9135,7 @@ do
         runeDDVal.Text=" -- NOT SELECTED --"; runeDDVal.TextColor3=C.TXT3
     end)
     
-    for mn=1,20 do
+    for mn=1,19 do
         local ml=mn; local mnm=MAP_NAMES[mn] or ("Map "..mn)
         local it=Instance.new("TextButton",sf)
         it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
@@ -9654,29 +9399,6 @@ do
  end
  end)
 
- --  ASCENSION MODE TOGGLE 
- local ascRow=Frame(raidInner,C.SURFACE,UDim2.new(1,0,0,44))
- ascRow.LayoutOrder=18; Corner(ascRow,10); Stroke(ascRow,C.BORD,1.5,0.3)
- local ascL=Label(ascRow,"Ascension Mode",13,C.TXT,Enum.Font.GothamBold)
- ascL.Size=UDim2.new(1,-68,0,20); ascL.Position=UDim2.new(0,14,0.5,-10)
- local ascSubL=Label(ascRow,"Normal / Ascension",10,C.TXT3,Enum.Font.Gotham)
- ascSubL.Size=UDim2.new(1,-68,0,14); ascSubL.Position=UDim2.new(0,14,0.5,12)
- local ascPill=Btn(ascRow,C.PILL_OFF,UDim2.new(0,52,0,30))
- ascPill.AnchorPoint=Vector2.new(1,0.5); ascPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascPill,13)
- local ascKnob=Frame(ascPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
- ascKnob.AnchorPoint=Vector2.new(0,0.5); ascKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascKnob,10)
- local function SetAscToggle(on)
- RAID.ascensionMode=on
- TweenService:Create(ascPill,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
- TweenService:Create(ascKnob,TweenInfo.new(0.16),{
- Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
- BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
- }):Play()
- ascSubL.Text=on and "Hanya Ascension" or "Hanya Normal"
- ascSubL.TextColor3=on and C.ACC2 or C.TXT3
- end
- ascPill.MouseButton1Click:Connect(function() SetAscToggle(not RAID.ascensionMode) end)
-
  --  APPLY PICK MODE LOCK 
  -- Lock/unlock field berdasarkan Pick Mode
  -- Tampilkan gembok pada field yang terkunci
@@ -9743,7 +9465,7 @@ do
   curPM = 1; RAID.pickMode = PM_KEYS[1]; RAID.difficulty = PM_TO_DIFF[PM_KEYS[1]]; RAID.snapshotMapId = nil
   pmDDLbl.Text = " "..PM_OPTS[1]; pmDDLbl.TextColor3 = PM_COLORS[1]; pmDescLbl.Text = PM_DESC[1]
   for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
-  for mn = 1, 20 do RAID.preferMaps[mn] = true end
+  for mn = 1, 19 do RAID.preferMaps[mn] = true end
   pcall(UpdatePrefLabel)
   for _, g in ipairs(GRADE_LIST) do RAID.runeGrades[g] = nil end
   pcall(RefreshRankDDLabel)
@@ -9770,7 +9492,6 @@ do
   local udDir     = content:match('"updownDir":"([^"]*)"') or "up"
   local udGrade   = content:match('"updownTargetGrade":"([^"]*)"') or ""
   local killBoss  = content:match('"autoKillBoss":(%a+)') == "true"
-  local ascMode   = content:match('"ascensionMode":(%a+)') == "true"
   local bDelay    = tonumber(content:match('"bossDelay":(%d+)')) or 3
   local rOn       = content:match('"raidOn":(%a+)') == "true"
   for i, key in ipairs(PM_KEYS) do
@@ -9783,7 +9504,7 @@ do
   for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
   if mapsStr ~= "" then
    for mn in mapsStr:gmatch("(%d+)") do
-    local n = tonumber(mn); if n and n >= 1 and n <= 20 then RAID.preferMaps[n] = true end
+    local n = tonumber(mn); if n and n >= 1 and n <= 19 then RAID.preferMaps[n] = true end
    end
   end
   pcall(UpdatePrefLabel)
@@ -9791,7 +9512,7 @@ do
   if gradesStr ~= "" then for g in gradesStr:gmatch("([^|]+)") do RAID.runeGrades[g] = true end end
   pcall(RefreshRankDDLabel)
   RAID.runeMapTarget = runeTarget
-  if runeTarget >= 1 and runeTarget <= 20 then
+  if runeTarget >= 1 and runeTarget <= 19 then
    RAID.runeEnabled = true
    pcall(function() runeDDVal.Text = " Map "..runeTarget.." - "..(MAP_NAMES[runeTarget] or ""); runeDDVal.TextColor3 = C.ACC2 end)
   else
@@ -9808,8 +9529,6 @@ do
    pcall(function() gradeDDLbl.Text = " Target: ["..RAID.updownTargetGrade.."]"; gradeDDLbl.TextColor3 = C.ACC2 end)
   end
   RAID.autoKillBoss = killBoss
-  RAID.ascensionMode = ascMode
-  if SetAscToggle then pcall(SetAscToggle, ascMode) end
   TweenService:Create(bPill, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundColor3=killBoss and C.PILL_ON or C.PILL_OFF}):Play()
   TweenService:Create(bKnob, TweenInfo.new(0.16), {
    Position=killBoss and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
@@ -9862,7 +9581,6 @@ SIEGE = {
  dot = nil,
  countLbls = {},
  count = {[3]=0,[7]=0,[10]=0,[13]=0,[18]=0},
- countSummaryLbl = nil, -- [v41] single summary label
  killed = 0, -- [v150] FIX: inisialisasi killed agar tidak nil saat EnemyDeath event
  live = {}, -- {[cityRaidId] = mapNum} - diisi notif server
 }
@@ -9886,12 +9604,10 @@ SiegeStatus = function(msg, color)
 end
 
 SiegeCounterUpdate = function()
- if SIEGE.countSummaryLbl then
-  local parts = {}
-  for _, mn in ipairs(SIEGE_MAP_NUMS) do
-   table.insert(parts, "M"..mn..":".. (SIEGE.count[mn] or 0))
-  end
-  SIEGE.countSummaryLbl.Text = table.concat(parts, "  ")
+ for _, mn in ipairs(SIEGE_MAP_NUMS) do
+ if SIEGE.countLbls[mn] then
+ SIEGE.countLbls[mn].Text = "SUCCES: "..(SIEGE.count[mn] or 0)
+ end
  end
 end
 
@@ -10040,20 +9756,12 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     local _deadG_Siege = {}
 
     -- Helper: cek apakah player sudah kembali ke baseMapId (server TP keluar)
-    -- [FIX] _confirmedInSiege: hanya anggap "balik ke lobby" jika player PERNAH masuk 50201-50205 dulu
-    -- Tanpa ini, cek range 50001-50020 bisa false-positive saat player masih di baseMapId sebelum masuk siege
-    local _confirmedInSiege = false
     local function isBackAtBase()
         local ok, wm = pcall(function()
             return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
         end)
-        if ok and type(wm) == "number" then
-            -- Track: player sudah masuk siege map?
-            if wm >= 50201 and wm <= 50205 then _confirmedInSiege = true end
-            -- Prioritas 1: exact baseMapId
-            if baseMapId and wm == baseMapId and _confirmedInSiege then return true end
-            -- Prioritas 2: range lobby 50001-50020 HANYA setelah pernah masuk siege
-            if _confirmedInSiege and wm >= 50001 and wm <= 50020 then return true end
+        if ok and type(wm) == "number" and baseMapId then
+            return wm == baseMapId
         end
         return false
     end
@@ -10089,11 +9797,6 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     -- ============================================================
     local wt = 0
     while wt < 10 and SIEGE.running and SIEGE.inMap do
-        -- Track konfirmasi masuk siege
-        pcall(function()
-            local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
-            if type(wm) == "number" and wm >= 50201 and wm <= 50205 then _confirmedInSiege = true end
-        end)
         local enemies = GetSiegeEnemies()
         -- filter dead lokal
         local liveNow = 0
@@ -10133,6 +9836,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     while SIEGE.running and SIEGE.inMap do
         totalTime = totalTime + 0.08
 
+-- [FIX v38] JANGAN hide RewardsFrame/ResultFrame di Siege
         -- Server kirim countdown timer dan nama map di sana
         -- Cuma hide popup reward hasil boss saja setelah keluar
         -- Auto hide UI reward (kecuali Siege UI penting)
@@ -10335,73 +10039,54 @@ StartSiegeLoop = function()
             SiegeStatus("[>>] Masuk "..d.name.."...", Color3.fromRGB(180,120,255))
             if SIEGE.dot then SIEGE.dot.BackgroundColor3 = Color3.fromRGB(180,120,255) end
 
-            -- Helper lokal: kirim seluruh sequence remote untuk masuk siege
-            -- Dipanggil pertama kali + di-retry tiap 4 detik jika belum masuk
-            local function _fireSiegeEntry()
-                local _RE = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-                if not _RE then return false end
-                local enterRe = _RE:FindFirstChild("EnterCityRaidMap")
-                if not enterRe then return false end
-                -- Step 1: EnterCityRaidMap (daftarkan player ke city raid di server)
-                pcall(function() enterRe:FireServer(d.cityRaidId) end)
-                task.wait(0.8)
-                if not SIEGE.running then return false end
-                -- Step 2: GetRaidTeamInfos (sync tim)
-                local grtRe = _RE:FindFirstChild("GetRaidTeamInfos")
-                if grtRe then task.spawn(function() pcall(function() grtRe:InvokeServer() end) end) end
-                task.wait(0.3)
-                -- Step 3: StartLocalPlayerTeleport ke tpMapId (50201-50205) -> yang bawa player masuk
-                local stpRe = _RE:FindFirstChild("StartLocalPlayerTeleport")
-                if stpRe then pcall(function() stpRe:FireServer({mapId=d.tpMapId}) end) end
-                task.wait(0.5)
-                -- Step 4: EquipHeroWithData
-                local eqRe = _RE:FindFirstChild("EquipHeroWithData")
-                if eqRe then pcall(function() eqRe:FireServer() end) end
-                task.wait(0.3)
-                -- Step 5: LocalPlayerTeleportSuccess (konfirmasi ke server)
-                local ltpRe = _RE:FindFirstChild("LocalPlayerTeleportSuccess")
-                if ltpRe then task.spawn(function() pcall(function() ltpRe:InvokeServer() end) end) end
-                task.wait(0.3)
-                -- Step 6: GetRaidTeamInfos kedua (final sync)
-                local grtRe2 = _RE:FindFirstChild("GetRaidTeamInfos")
-                if grtRe2 then task.spawn(function() pcall(function() grtRe2:InvokeServer() end) end) end
-                task.wait(0.3)
-                return true
-            end
-
-            -- Cek remote tersedia sebelum mulai
-            do
-                local _RE0 = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-                if not (_RE0 and _RE0:FindFirstChild("EnterCityRaidMap")) then
+            local RE = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+            if RE then
+                local enterRe = RE:FindFirstChild("EnterCityRaidMap")
+                if not enterRe then
                     _siegeInterrupt = false; MODE:Release("siege")
                     SiegeStatus("[!] EnterCityRaidMap Not Found - retry 5s...", Color3.fromRGB(255,100,60))
                     task.wait(5); break
                 end
+                -- [FIX v39] EnterCityRaidMap dikirim SETELAH baseMap confirm
+                pcall(function() enterRe:FireServer(d.cityRaidId) end)
+                task.wait(0.8) -- [FIX v39] diperbesar 0.5->0.8 agar server proses join sebelum TP
+                if not SIEGE.running then _siegeInterrupt = false; MODE:Release("siege"); break end
+
+                local grtRe = RE:FindFirstChild("GetRaidTeamInfos")
+                if grtRe then task.spawn(function() pcall(function() grtRe:InvokeServer() end) end) end
+                task.wait(0.3)
+
+                local stpRe = RE:FindFirstChild("StartLocalPlayerTeleport")
+                if stpRe then pcall(function() stpRe:FireServer({mapId=d.tpMapId}) end) end
+                task.wait(0.5) -- [FIX v39] diperbesar 0.3->0.5
+
+                local eqRe = RE:FindFirstChild("EquipHeroWithData")
+                if eqRe then pcall(function() eqRe:FireServer() end) end
+                task.wait(0.3)
+
+                local ltpRe = RE:FindFirstChild("LocalPlayerTeleportSuccess")
+                if ltpRe then task.spawn(function() pcall(function() ltpRe:InvokeServer() end) end) end
+                task.wait(0.3)
+
+                local grtRe2 = RE:FindFirstChild("GetRaidTeamInfos")
+                if grtRe2 then task.spawn(function() pcall(function() grtRe2:InvokeServer() end) end) end
+                task.wait(0.3)
             end
             if not SIEGE.running then _siegeInterrupt = false; MODE:Release("siege"); break end
 
-            -- Fire entry sequence pertama kali
-            if not _fireSiegeEntry() then _siegeInterrupt = false; MODE:Release("siege"); break end
-            if not SIEGE.running then _siegeInterrupt = false; MODE:Release("siege"); break end
-
-            -- Tunggu konfirmasi masuk siege, retry fire tiap 4 detik jika belum masuk (max 15s total)
+            -- [FIX v39] Deteksi masuk: HANYA via MapId workspace (50201-50204) atau GetSiegeEnemies
+            -- CityRaidEnter DIHAPUS dari cek - ada di baseMap juga, menyebabkan false-positive!
             SiegeStatus("[FLa] Waiting Enter Siege...", Color3.fromRGB(180,120,255))
             local _entered = false
             local _entWait = 0
-            local _sinceLastFire = 2.5 -- sudah fire di atas, beri jeda 4s sebelum retry pertama
-            while not _entered and _entWait < 15 and SIEGE.running do
-                task.wait(0.5); _entWait = _entWait + 0.5; _sinceLastFire = _sinceLastFire + 0.5
-                -- Cek 1: MapId sudah di range Siege (50201-50205)
+            while not _entered and _entWait < 12 and SIEGE.running do
+                task.wait(0.5); _entWait = _entWait + 0.5
+                -- Cek 1: MapId sudah di range Siege (50201-50204) = KONFIRMASI PALING RELIABLE
                 local inSiege, _ = IsInSiegeMap()
                 if inSiege then _entered = true; break end
-                -- Cek 2: Musuh Siege sudah spawn
+                -- Cek 2: Musuh Siege sudah spawn di workspace
                 if #GetSiegeEnemies() > 0 then _entered = true; break end
-                -- Retry fire jika sudah 4 detik sejak fire terakhir dan belum masuk
-                if _sinceLastFire >= 4.0 then
-                    SiegeStatus("[~] Retry Enter "..d.name.."...", Color3.fromRGB(255,200,60))
-                    _sinceLastFire = 0
-                    if not _fireSiegeEntry() then break end
-                end
+                -- [FIX v39] TIDAK lagi cek CityRaidEnter - bisa ada di baseMap (false positive)
             end
 
             if not _entered then
@@ -10513,17 +10198,35 @@ do
   _visSiege = _vis
  end
 
- -- [v41] Count ringkas: 1 baris teks "M3:0  M7:0  M10:0  M13:0  M18:0"
- local cntCard = Frame(p, C.SURFACE, UDim2.new(1,0,0,26))
- cntCard.LayoutOrder = 2; Corner(cntCard, 8); Stroke(cntCard,C.BORD, 1.5,0.5)
- New("UIPadding",{Parent=cntCard,PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
- local cntSummary = Label(cntCard,"M3:0  M7:0  M10:0  M13:0  M18:0",9,C.ACC2,Enum.Font.GothamBold,Enum.TextXAlignment.Left)
- cntSummary.Size = UDim2.new(1,0,1,0)
- SIEGE.countSummaryLbl = cntSummary
+ -- [v273] EXCLUDE MAP: Semua map masuk by default, user pilih map yg di-skip
+ -- SIEGE.excludeMaps = {[3]=false,[7]=false,[10]=false,[13]=false}
+ -- mapActive selalu true kecuali map di-exclude
+ if not SIEGE.excludeMaps then
+ SIEGE.excludeMaps = {[3]=false,[7]=false,[10]=false,[13]=false}
+ end
+ -- Sync mapActive: semua ON kecuali yang di-exclude
+ -- Counter card (sukses per map)
+ local cntCard = Frame(p, C.SURFACE, UDim2.new(1,0,0,0))
+ cntCard.LayoutOrder = 2; cntCard.AutomaticSize = Enum.AutomaticSize.Y
+ Corner(cntCard, 10); Stroke(cntCard,C.BORD, 1.5,0.5)
+ New("UIPadding",{Parent=cntCard,PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0, 10),PaddingRight=UDim.new(0, 10)})
+ local cntInner = Frame(cntCard, C.BLACK, UDim2.new(1,0,0,0))
+ cntInner.BackgroundTransparency=1; cntInner.AutomaticSize=Enum.AutomaticSize.Y
+ New("UIListLayout",{Parent=cntInner,FillDirection=Enum.FillDirection.Horizontal,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,4)})
+ for _, mn in ipairs(SIEGE_MAP_NUMS) do
+ local cntF = Frame(cntInner, C.BG3, UDim2.new(0.25,-4,0,28))
+ cntF.LayoutOrder=mn; Corner(cntF,6)
+ local cntLbl = Label(cntF,"M"..mn..": 0",9,C.ACC2,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ cntLbl.Size=UDim2.new(1,0,1,0)
+ SIEGE.countLbls[mn] = cntLbl
+ end
 
     -- ============================================================
     -- EXCLUDE MAP: Dropdown list pilih map yang di-skip
     -- ============================================================
+    if not SIEGE.excludeMaps then
+        SIEGE.excludeMaps = {[3]=false,[7]=false,[10]=false,[13]=false}
+    end
 
     -- Dropdown button + list
     local ddCard = Frame(p, C.SURFACE, UDim2.new(1,0,0,0))
@@ -11864,284 +11567,6 @@ do
 end
 
 
--- ============================================================
--- PANEL : JOIN TO TOWER PLAYER (UI) - mapId 50301
--- SCAN = ambil semua player dari Players service (global workspace)
--- JOIN = LocalPlayerTeleport:FireServer({mapId=50301, hostId=UserId})
--- Tidak ada cara mengetahui siapa yg ada di Tower Map 2 dari client,
--- jadi semua player di server ditampilkan → user pilih sendiri → JOIN.
--- ============================================================
-do
-    local p = Panels["autoraid"]
-    if p then
-
-    -- ── State ──────────────────────────────────────────────────────────────
-    local JTP_players    = {}   -- { {name=string, userId=number} } semua player di server
-    local JTP_selIdx     = nil  -- index row yang dipilih
-    local JTP_joining    = false
-    local JTP_MAPID      = 50301
-
-    -- ── Header collapsible ────────────────────────────────────────────────
-    local jtpOpen = false
-
-    local jtpHeader = Btn(p, C.SURFACE, UDim2.new(1,0,0,42))
-    jtpHeader.LayoutOrder = 26; Corner(jtpHeader,10)
-    Stroke(jtpHeader, Color3.fromRGB(80,200,120), 1.5, 0.3)
-
-    local jtpArrow = Label(jtpHeader,">",13,Color3.fromRGB(80,200,120),Enum.Font.GothamBold)
-    jtpArrow.Size = UDim2.new(0,22,1,0); jtpArrow.Position = UDim2.new(0,10,0,0)
-
-    local jtpHeaderLbl = Label(jtpHeader,"⚡ Join to Tower Player",14,C.TXT2,Enum.Font.GothamBold)
-    jtpHeaderLbl.Size = UDim2.new(1,-50,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
-
-    local jtpBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
-    jtpBody.LayoutOrder = 27; jtpBody.ClipsDescendants = true
-    Corner(jtpBody,10); Stroke(jtpBody,Color3.fromRGB(80,200,120),1.5,0.25)
-    jtpBody.Visible = false
-
-    local jtpInner = Frame(jtpBody, C.BLACK, UDim2.new(1,-16,0,0))
-    jtpInner.BackgroundTransparency = 1; jtpInner.Position = UDim2.new(0,8,0,8)
-    local jtpLayout = New("UIListLayout",{
-        Parent=jtpInner, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)
-    })
-
-    local function ResizeJTPBody()
-        task.spawn(function()
-            task.wait(0)
-            jtpLayout:ApplyLayout()
-            local h = jtpLayout.AbsoluteContentSize.Y + 16
-            jtpInner.Size = UDim2.new(1,0,0,h)
-            jtpBody.Size  = UDim2.new(1,0,0,h+16)
-        end)
-    end
-
-    jtpHeader.MouseButton1Click:Connect(function()
-        jtpOpen = not jtpOpen
-        jtpBody.Visible = jtpOpen
-        jtpArrow.Text = jtpOpen and "v" or ">"
-        if jtpOpen then task.defer(ResizeJTPBody) end
-    end)
-
-    -- ── Info card ─────────────────────────────────────────────────────────
-    local infoCard = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
-    infoCard.LayoutOrder = 0; infoCard.AutomaticSize = Enum.AutomaticSize.Y; Corner(infoCard,10)
-    New("UIPadding",{Parent=infoCard,
-        PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),
-        PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
-    local infoLbl = Label(infoCard,
-        "SCAN = ambil semua player di server (global).\nPilih player yg kamu yakin ada di Tower Map 2,\nlalu tekan JOIN → masuk via hostId = UserId mereka.",
-        10, C.TXT3, Enum.Font.Gotham)
-    infoLbl.Size = UDim2.new(1,0,0,0); infoLbl.AutomaticSize = Enum.AutomaticSize.Y
-    infoLbl.TextWrapped = true; infoLbl.LineHeight = 1.3
-
-    -- ── Status bar ────────────────────────────────────────────────────────
-    local jtpStatCard = Frame(jtpInner, C.SURFACE, UDim2.new(1,0,0,28))
-    jtpStatCard.LayoutOrder = 1; Corner(jtpStatCard,10)
-    New("UIPadding",{Parent=jtpStatCard,PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
-    local jtpStatLbl = Label(jtpStatCard,"Tekan SCAN untuk muat daftar player.", 10, C.TXT3, Enum.Font.Gotham)
-    jtpStatLbl.Size = UDim2.new(1,0,1,0)
-    jtpStatLbl.TextTruncate = Enum.TextTruncate.AtEnd
-
-    local function JTPStat(msg, col)
-        pcall(function() jtpStatLbl.Text = msg; jtpStatLbl.TextColor3 = col or C.TXT3 end)
-    end
-
-    -- ── SCAN button ───────────────────────────────────────────────────────
-    local scanBtn = Btn(jtpInner, Color3.fromRGB(25,65,45), UDim2.new(1,0,0,36))
-    scanBtn.LayoutOrder = 2; Corner(scanBtn,10)
-    Stroke(scanBtn, Color3.fromRGB(80,200,120), 1.5, 0.15)
-    local scanLbl = Label(scanBtn,"🔍  SCAN  Player (Global Server)",13,
-        Color3.fromRGB(100,230,150), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-    scanLbl.Size = UDim2.new(1,0,1,0)
-
-    -- ── Player list box ───────────────────────────────────────────────────
-    -- Scrollable frame agar list panjang tetap rapi
-    local listOuter = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
-    listOuter.LayoutOrder = 3; listOuter.AutomaticSize = Enum.AutomaticSize.Y
-    listOuter.Visible = false; Corner(listOuter,10)
-    Stroke(listOuter, C.BORD, 1.5, 0.5)
-    New("UIPadding",{Parent=listOuter,
-        PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4),
-        PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)})
-
-    local listTitleLbl = Label(listOuter,"Pilih player → tap untuk select :",10,C.TXT3,Enum.Font.GothamBold)
-    listTitleLbl.LayoutOrder = 0; listTitleLbl.Size = UDim2.new(1,0,0,20)
-
-    local listInner = Frame(listOuter, C.BLACK, UDim2.new(1,0,0,0))
-    listInner.BackgroundTransparency = 1; listInner.LayoutOrder = 1
-    listInner.AutomaticSize = Enum.AutomaticSize.Y
-    local listLL = New("UIListLayout",{Parent=listInner,
-        SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,4)})
-
-    local playerRows = {}  -- frame per row
-
-    -- ── JOIN button ───────────────────────────────────────────────────────
-    local joinBtn = Btn(jtpInner, Color3.fromRGB(15,35,110), UDim2.new(1,0,0,40))
-    joinBtn.LayoutOrder = 4; Corner(joinBtn,10)
-    Stroke(joinBtn, Color3.fromRGB(55,105,255), 2, 0.05)
-    local joinLbl = Label(joinBtn,"🚀  JOIN  ke Tower Map 2",15,
-        Color3.fromRGB(148,195,255), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-    joinLbl.Size = UDim2.new(1,0,1,0)
-
-    -- ── Helper: hapus semua row lama ─────────────────────────────────────
-    local function ClearRows()
-        for _, r in ipairs(playerRows) do pcall(function() r:Destroy() end) end
-        playerRows = {}
-        JTP_selIdx = nil
-    end
-
-    -- ── Helper: render daftar player ─────────────────────────────────────
-    local function RenderList()
-        ClearRows()
-        listOuter.Visible = (#JTP_players > 0)
-        for i, entry in ipairs(JTP_players) do
-            local ii = i
-            local row = Btn(listInner, C.SURFACE, UDim2.new(1,0,0,34))
-            row.LayoutOrder = i; Corner(row,8)
-            Stroke(row, C.BORD, 1.5, 0.65)
-
-            -- Nama player (kiri)
-            local nLbl = Label(row, entry.name, 11, C.TXT2, Enum.Font.GothamBold)
-            nLbl.Size = UDim2.new(0.6,0,1,0); nLbl.Position = UDim2.new(0,10,0,0)
-            nLbl.TextTruncate = Enum.TextTruncate.AtEnd
-
-            -- UserId (kanan, sebagai hostId nanti)
-            local uLbl = Label(row,"UID: "..tostring(entry.userId),9,C.TXT3,Enum.Font.Gotham,Enum.TextXAlignment.Right)
-            uLbl.Size = UDim2.new(0.4,-14,1,0); uLbl.Position = UDim2.new(0.6,0,0,0)
-            uLbl.TextTruncate = Enum.TextTruncate.AtEnd
-
-            -- Indikator pilihan
-            local dot = Frame(row, Color3.fromRGB(80,210,130), UDim2.new(0,7,0,7))
-            dot.AnchorPoint = Vector2.new(0,0.5); dot.Position = UDim2.new(0,1,0.5,0)
-            Corner(dot,4); dot.Visible = false
-
-            row.MouseButton1Click:Connect(function()
-                JTP_selIdx = ii
-                for j, r2 in ipairs(playerRows) do
-                    local d2 = r2:FindFirstChildOfClass("Frame")
-                    if d2 then d2.Visible = (j == ii) end
-                    r2.BackgroundColor3 = (j == ii)
-                        and Color3.fromRGB(18,52,32)
-                        or  C.SURFACE
-                end
-                JTPStat("✔ Dipilih: "..entry.name.." (hostId = "..entry.userId..")",
-                    Color3.fromRGB(100,230,150))
-            end)
-
-            table.insert(playerRows, row)
-        end
-        task.defer(ResizeJTPBody)
-    end
-
-    -- ── SCAN logic : Players:GetPlayers() global — tidak filter mapId ─────
-    local _jtpBusy = false
-    scanBtn.MouseButton1Click:Connect(function()
-        if _jtpBusy then return end
-        _jtpBusy = true
-        scanLbl.Text = "⏳  Scanning..."
-        JTPStat("🔄 Mengambil daftar player di server...", C.YEL)
-        listOuter.Visible = false
-        JTP_selIdx = nil
-        ClearRows()
-
-        task.spawn(function()
-            local found = {}
-            -- Ambil semua player di game (global workspace Players service)
-            for _, plr in ipairs(Players:GetPlayers()) do
-                if plr ~= LP then   -- skip diri sendiri
-                    table.insert(found, {
-                        name   = plr.Name,
-                        userId = plr.UserId,  -- UserId = hostId untuk remote
-                    })
-                end
-            end
-
-            JTP_players = found
-            _jtpBusy = false
-            scanLbl.Text = "🔍  SCAN  Player (Global Server)"
-
-            if #found == 0 then
-                JTPStat("⚠️ Tidak ada player lain di server ini.", C.YEL)
-                listOuter.Visible = false
-                task.defer(ResizeJTPBody)
-            else
-                JTPStat("✅ "..#found.." player ditemukan. Pilih → JOIN.", Color3.fromRGB(100,230,150))
-                RenderList()
-            end
-        end)
-    end)
-
-    -- ── JOIN logic ────────────────────────────────────────────────────────
-    -- Remote: LocalPlayerTeleport:FireServer({mapId=50301, hostId=UserId})
-    joinBtn.MouseButton1Click:Connect(function()
-        if JTP_joining then return end
-        if not JTP_selIdx then
-            JTPStat("⚠️ Belum ada player yang dipilih!", C.YEL)
-            return
-        end
-        local entry = JTP_players[JTP_selIdx]
-        if not entry then
-            JTPStat("⚠️ Data tidak valid, coba SCAN ulang.", C.YEL)
-            return
-        end
-
-        JTP_joining = true
-        joinLbl.Text = "⏳  JOINING..."
-        joinLbl.TextColor3 = C.YEL
-        JTPStat("🚀 Menuju room "..entry.name.." (hostId="..entry.userId..")...", C.YEL)
-
-        task.spawn(function()
-            local ok, err = pcall(function()
-                -- Ambil remote
-                local reLocalTp = Remotes:WaitForChild("LocalPlayerTeleport", 5)
-                local reStartTp = Remotes:FindFirstChild("StartLocalPlayerTeleport")
-                local reEquip   = Remotes:FindFirstChild("EquipHeroWithData")
-                local reTpSucc  = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
-
-                if not reLocalTp then error("Remote LocalPlayerTeleport tidak ditemukan!") end
-
-                -- ══ Step 1: LocalPlayerTeleport (sesuai SimpleSpy capture) ══
-                -- args[1] = { mapId = 50301, hostId = UserId_target }
-                reLocalTp:FireServer({mapId = JTP_MAPID, hostId = entry.userId})
-                task.wait(0.35)
-
-                -- ══ Step 2: StartLocalPlayerTeleport ══
-                if reStartTp then
-                    reStartTp:FireServer({mapId = JTP_MAPID, hostId = entry.userId})
-                end
-                task.wait(0.4)
-
-                -- ══ Step 3: EquipHeroWithData ══
-                if reEquip then
-                    pcall(function() reEquip:FireServer() end)
-                end
-                task.wait(0.3)
-
-                -- ══ Step 4: LocalPlayerTeleportSuccess ══
-                if reTpSucc then
-                    pcall(function() reTpSucc:InvokeServer() end)
-                end
-            end)
-
-            JTP_joining = false
-            joinLbl.Text = "🚀  JOIN  ke Tower Map 2"
-            joinLbl.TextColor3 = Color3.fromRGB(148,195,255)
-
-            if ok then
-                JTPStat("✅ Berhasil join room "..entry.name.."!", Color3.fromRGB(80,220,140))
-                SystemNotify("✅ Joined Tower: "..entry.name, 4)
-            else
-                JTPStat("❌ Gagal: "..(tostring(err):sub(1,60)), Color3.fromRGB(220,80,80))
-                SystemNotify("❌ Join Tower gagal!", 3)
-            end
-        end)
-    end)
-
-    task.defer(ResizeJTPBody)
-
-    end -- if p
-end -- do JTP
-
 -- Pasang listener dungeon segera setelah GUI load (scan state walau toggle OFF)
 task.spawn(function()
  task.wait(6) -- buffer setelah ConnectUpdateCityRaidListener
@@ -12459,13 +11884,13 @@ do
   -- Kumpulkan mapSelState untuk Attack
   local maMapKeys = {}
   if _maMapSelState then
-   for mn = 1, 20 do
+   for mn = 1, 19 do
     if _maMapSelState[mn] then table.insert(maMapKeys, tostring(mn)) end
    end
   end
   -- Kumpulkan RAID data lewat _RAID_SaveConfig logic (ambil nilai langsung)
   local raidMapKeys = {}
-  for mn = 1, 20 do
+  for mn = 1, 19 do
    if RAID.preferMaps[mn] then table.insert(raidMapKeys, tostring(mn)) end
   end
   local raidGradeKeys = {}
@@ -12485,7 +11910,7 @@ do
    '"farm":{"randomAttack":%s},'..
    '"attack":{"massAttack":%s,"killTargetIdx":%d,"delayIdx":%d,"maMaps":"%s"},'..
    '"player":{"noClip":%s,"antiAfk":%s,"walkSpeed":%d},'..
-   '"automation":{"raid":{"pickMode":"%s","preferMaps":"%s","runeGrades":"%s","runeMapTarget":%d,"updownEnabled":%s,"updownDir":"%s","updownTargetGrade":"%s","autoKillBoss":%s,"bossDelay":%d,"ascensionMode":%s,"raidOn":%s},"siege":{"excludeMaps":"%s","siegeOn":%s},"dungeon":{"dungeonOn":%s},"st2On":%s},'..
+   '"automation":{"raid":{"pickMode":"%s","preferMaps":"%s","runeGrades":"%s","runeMapTarget":%d,"updownEnabled":%s,"updownDir":"%s","updownTargetGrade":"%s","autoKillBoss":%s,"bossDelay":%d,"raidOn":%s},"siege":{"excludeMaps":"%s","siegeOn":%s},"dungeon":{"dungeonOn":%s},"st2On":%s},'..
    '"settings":{"potatoMode":%s,"webhookEnabled":%s,"webhookUrl":"%s","webhookModeIdx":%d},'..
    '"theme":{"name":"%s","transparency":%d}'..
    '}',
@@ -12559,7 +11984,7 @@ do
   pcall(function() if _setKillDDGlobal then _setKillDDGlobal(1) end end)
   pcall(function() if _setDelayDDGlobal then _setDelayDDGlobal(2) end end)
   if _maMapSelState then
-   for mn = 1, 20 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
+   for mn = 1, 19 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
   end
   pcall(UpdateMapDDLbl)
   -- Player (reset speed ke 16)
@@ -12716,10 +12141,10 @@ do
   pcall(function() if _setKillDDGlobal  then _setKillDDGlobal(killIdx)  end end)
   pcall(function() if _setDelayDDGlobal then _setDelayDDGlobal(delayIdx) end end)  -- Restore map selection Attack
   if _maMapSelState then
-   for mn = 1, 20 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
+   for mn = 1, 19 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
    if maMaps ~= "" then
     for mn in maMaps:gmatch("(%d+)") do
-     local n = tonumber(mn); if n and n>=1 and n<=20 then _maMapSelState[n]=true; MR.selected[n]=true end
+     local n = tonumber(mn); if n and n>=1 and n<=19 then _maMapSelState[n]=true; MR.selected[n]=true end
     end
    end
   end
