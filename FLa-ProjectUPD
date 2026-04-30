@@ -4424,13 +4424,19 @@ end
 -- AUTO COLLECT GOLD & ITEM TOGGLE (inject ke panel MAIN)
 -- ============================================================
 do
- local p = Panels["main"]
- local row, setFn, visFn = ToggleRow(p, "AUTO COLLECT GOLD & ITEM", "TP & collect semua gold/item ke player", 5, function(on)
-     DoAutoCollectGoldItem(on)
+ local ok, err = pcall(function()
+  local p = Panels["main"]
+  if not p then warn("[FLa] Panels[main] is nil!") return end
+  local row, setFn, visFn = ToggleRow(p, "AUTO COLLECT GOLD & ITEM", "TP & collect semua gold/item ke player", 5, function(on)
+      DoAutoCollectGoldItem(on)
+  end)
+  if not row then warn("[FLa] ToggleRow returned nil!") return end
+  row.LayoutOrder = 5
+  _setAutoCollectToggle = setFn
+  _visAutoCollect = visFn
+  warn("[FLa] AUTO COLLECT GOLD & ITEM toggle injected OK, LayoutOrder="..tostring(row.LayoutOrder))
  end)
- row.LayoutOrder = 5
- _setAutoCollectToggle = setFn
- _visAutoCollect = visFn
+ if not ok then warn("[FLa] inject error: "..tostring(err)) end
 end
 
 
