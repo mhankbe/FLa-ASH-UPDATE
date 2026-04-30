@@ -7202,24 +7202,32 @@ end
 -- [v270] GetBestGrade: grade dari RAID_CONFIG_GRADE via raidId (akurat 100%)
 -- Fallback: _runeGradeCache (chat/popup), lalu RAID_LIVE entry grade field
 -- mapNum = angka map (1-18), return string grade atau nil
-function GetBestGrade(mapNum)
- -- 1. RAID_CONFIG_GRADE via raidId (data config game, paling akurat)
+function GetBestGrade(mapNum, isAscension)
  local mapId = 50000 + mapNum
- for _, ent in pairs(RAID_LIVE) do
- if ent.mapId == mapId and ent.raidId and ent.raidId > 0 then
- local g = RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[ent.raidId]
- if g and g ~= "?" then return g end
+ -- [FIX] Ascension pakai cacheKey negatif
+ local cacheKey = isAscension and (-mapNum) or mapNum
+ -- 1. RAID_CONFIG_GRADE via raidId (data config game, paling akurat)
+ -- Untuk Ascension, raidId negatif -> skip RAID_CONFIG_GRADE (tidak ada di server config)
+ if not isAscension then
+  for _, ent in pairs(RAID_LIVE) do
+   if ent.mapId == mapId and ent.raidId and ent.raidId > 0 and not ent.isAscension then
+    local g = RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[ent.raidId]
+    if g and g ~= "?" then return g end
+   end
+  end
  end
- end
- -- 2. Chat cache (fallback)
- if _runeGradeCache and _runeGradeCache[mapNum] then
- return _runeGradeCache[mapNum]
+ -- 2. Chat cache (fallback) - gunakan cacheKey sesuai mode
+ if _runeGradeCache then
+  if _runeGradeCache[cacheKey] then return _runeGradeCache[cacheKey] end
+  -- Fallback ke positif jika negatif tidak ada
+  if isAscension and _runeGradeCache[mapNum] then return _runeGradeCache[mapNum] end
  end
  -- 3. RAID_LIVE entry grade field
  for _, ent in pairs(RAID_LIVE) do
- if ent.mapId == mapId and ent.grade and ent.grade ~= "?" then
- return ent.grade
- end
+  if ent.mapId == mapId and ent.grade and ent.grade ~= "?" then
+   if isAscension and ent.isAscension then return ent.grade end
+   if not isAscension and not ent.isAscension then return ent.grade end
+  end
  end
  return nil
 end
@@ -7856,13 +7864,15 @@ local function ResolveEntry()
                 -- [Ascension Mode] Filter helper: cek apakah entry sesuai mode
                 local function _ascFilter(entry)
                     if not entry then return false end
-                    -- Baca isAscension langsung dari RAID_ID_LIST entry (sudah diisi RebuildRaidList)
-                    -- Fallback ke RAID_LIVE jika tidak ada di entry
+                    -- isAscension sudah diisi RebuildRaidList dari RAID_LIVE
                     local isAsc = entry.isAscension == true
                     if not isAsc then
+                        -- id bisa negatif (Ascension) atau positif (Normal)
                         local live = entry.id and RAID_LIVE[entry.id]
-                        isAsc = live and live.isAscension == true
+                        if live then isAsc = live.isAscension == true end
                     end
+                    -- [FIX] Jika id negatif maka pasti Ascension (raidId negatif = Ascension entry)
+                    if entry.id and entry.id < 0 then isAsc = true end
                     if RAID.ascensionMode then
                         return isAsc
                     else
@@ -7885,6 +7895,11 @@ local function ResolveEntry()
                 local runeOn = RAID.runeEnabled
                 local runeTarget = runeOn and RAID.runeMapTarget or 0
                 local hasPick = (pm == "byrank" or pm == "manual") and next(RAID.runeGrades) ~= nil
+
+                -- [FIX] Helper grade yang sadar Ascension (pakai key cache negatif untuk AT)
+                local function _getGrade(r)
+                    return GetBestGrade(r.mapId - 50000, r.isAscension == true)
+                end
 
                 -- [Ascension Mode] Filter RAID_ID_LIST sesuai mode sebelum dipakai pick mode apapun
                 local _filteredList = {}
@@ -7919,8 +7934,8 @@ local function ResolveEntry()
                     -- Helper: Sort dari Rank tertinggi ke terendah
                     local function sortHighestRank(list)
                         table.sort(list, function(a, b)
-                            local ga = GetBestGrade(a.mapId - 50000) or "?"
-                            local gb = GetBestGrade(b.mapId - 50000) or "?"
+                            local ga = _getGrade(a) or "?"
+                            local gb = _getGrade(b) or "?"
                             local ra = GRADE_RANK[ga] or 0
                             local rb = GRADE_RANK[gb] or 0
                             if ra == rb then return a.mapId < b.mapId end 
@@ -7933,7 +7948,7 @@ local function ResolveEntry()
                     local hasPreferRank = next(RAID.runeGrades) ~= nil
                     if hasPreferRank then
                         for _, r in ipairs(valid_raids) do
-                            local grade = GetBestGrade(r.mapId - 50000)
+                            local grade = _getGrade(r)
                             if grade and RAID.runeGrades[grade] then
                                 table.insert(matched, r)
                             end
@@ -7951,7 +7966,7 @@ local function ResolveEntry()
                     if RAID.updownEnabled and RAID.updownTargetGrade then
                         local udMatched = {}
                         for _, r in ipairs(valid_raids) do
-                            local grade = GetBestGrade(r.mapId - 50000)
+                            local grade = _getGrade(r)
                             if grade == RAID.updownTargetGrade then
                                 table.insert(udMatched, r)
                             end
@@ -7991,8 +8006,8 @@ local function ResolveEntry()
                         return maps1to8[_defaultRRIdx]
                     elseif pm == "byrank" then
                         table.sort(list, function(a, b)
-                            local ga = GetBestGrade(a.mapId - 50000) or "?"
-                            local gb = GetBestGrade(b.mapId - 50000) or "?"
+                            local ga = _getGrade(a) or "?"
+                            local gb = _getGrade(b) or "?"
                             local ra = GRADE_RANK[ga] or 0
                             local rb = GRADE_RANK[gb] or 0
                             if ra == rb then return a.mapId < b.mapId end 
@@ -8019,7 +8034,7 @@ local function ResolveEntry()
                 if hasPick then
                     local matched2 = {}
                     for _, r in ipairs(RAID_ID_LIST) do
-                        local grade = GetBestGrade(r.mapId - 50000)
+                        local grade = _getGrade(r)
                         if grade and RAID.runeGrades[grade] == true then table.insert(matched2, r) end
                     end
                     if #matched2 > 0 then
@@ -8170,7 +8185,20 @@ local function ResolveEntry()
  _raidInterrupt = true -- sync flag lama
  
 -- [v262 FIX] JANGAN set inMap=true dulu sebelum raidMapId di-assign
-                    RAID.raidId = raidEntry.id
+                    -- [FIX Ascension] raidEntry.id negatif = Ascension entry (chat-only id)
+                    -- CreateRaidTeam butuh raidId positif dari server -> ambil dari RAID_LIVE jika tersedia
+                    local _resolvedRaidId = raidEntry.id
+                    if raidEntry.isAscension and _resolvedRaidId < 0 then
+                        -- Cari raidId positif dari RAID_LIVE entry yang sama mapId & isAscension
+                        for _rid, _ent in pairs(RAID_LIVE) do
+                            if _ent.isAscension and _ent.mapId == raidEntry.mapId and _rid > 0 then
+                                _resolvedRaidId = _rid; break
+                            end
+                        end
+                        -- Jika masih negatif: pakai abs (fallback darurat, mungkin tidak work tapi tidak crash)
+                        if _resolvedRaidId < 0 then _resolvedRaidId = math.abs(_resolvedRaidId) end
+                    end
+                    RAID.raidId = _resolvedRaidId
                     RAID.raidMapId = raidEntry.mapId
                     RAID.inMap = true
                     if RAID.updateActiveLabel then pcall(RAID.updateActiveLabel) end
@@ -10012,12 +10040,17 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     local _deadG_Siege = {}
 
     -- Helper: cek apakah player sudah kembali ke baseMapId (server TP keluar)
+    -- [FIX] Cek range 50001-50020 (semua lobby normal) bukan hanya exact baseMapId
+    -- karena server bisa TP ke map mana saja di range ini setelah Siege selesai
     local function isBackAtBase()
         local ok, wm = pcall(function()
             return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
         end)
-        if ok and type(wm) == "number" and baseMapId then
-            return wm == baseMapId
+        if ok and type(wm) == "number" then
+            -- Prioritas 1: exact baseMapId (paling reliable)
+            if baseMapId and wm == baseMapId then return true end
+            -- Prioritas 2: range lobby 50001-50020 (server bisa TP ke map lain)
+            if wm >= 50001 and wm <= 50020 then return true end
         end
         return false
     end
@@ -10092,7 +10125,16 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     while SIEGE.running and SIEGE.inMap do
         totalTime = totalTime + 0.08
 
--- [FIX v38] JANGAN hide RewardsFrame/ResultFrame di Siege
+        -- [FIX] Jika player sudah di lobby (50001-50020) sebelum atau selama serangan -> sukses langsung
+        do
+            local _ok2, _wm2 = pcall(function()
+                return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+            end)
+            if _ok2 and type(_wm2) == "number" and _wm2 >= 50001 and _wm2 <= 50020 then
+                if onStatus then onStatus("[OK] Sudah di lobby map "..tostring(_wm2).." - Siege DONE!") end
+                cleanup(); return "exited_clean"
+            end
+        end
         -- Server kirim countdown timer dan nama map di sana
         -- Cuma hide popup reward hasil boss saja setelah keluar
         -- Auto hide UI reward (kecuali Siege UI penting)
