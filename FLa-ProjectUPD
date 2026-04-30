@@ -1305,6 +1305,7 @@ _whSilent = false -- true saat scan history awal (jangan fire webhook duplikat)
 
 
 RAID.autoKillBoss = false -- toggle: teleport ke raja + auto attack sampai mati
+RAID.ascensionMode = false -- toggle: true=hanya Ascension raid, false=hanya Normal raid
 RAID.bossDelay = 3 -- detik delay sebelum TP ke boss (1-10, user-controlled)
 
 _maStatusLbl, _noClipConn, _antiAfkThread, _antiAfkStart = nil, nil, nil, nil
@@ -6627,6 +6628,13 @@ function ParseChatLine(text)
  local cleanPrev = prev and prev:match("^([^%s%(]+)") or prev
  local shouldUpdate = not prev or cleanPrev == "?" or (GRADE_RANK[grade] and GRADE_RANK[cleanPrev] and GRADE_RANK[grade] > GRADE_RANK[cleanPrev])
  if shouldUpdate then _runeGradeCache[mapNum] = grade end
+ -- [Ascension Mode] Tandai entry RAID_LIVE apakah tipe Ascension dari nama notifikasi
+ local isAscension = (rest and rest:find("Ascension", 1, true)) and true or false
+ for rid, entry in pairs(RAID_LIVE) do
+ if entry.mapId and (entry.mapId - 50000) == mapNum then
+ entry.isAscension = isAscension
+ end
+ end
  if not _whSilent then TriggerWebhookDebounce() end
  if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
  end
@@ -7769,6 +7777,19 @@ function StartRaidLoop()
  -- sehingga kalau user ganti setting di tengah, iterasi berikutnya langsung ikut
 local function ResolveEntry()
                 if #RAID_ID_LIST == 0 then return nil end
+                -- [Ascension Mode] Filter helper: cek apakah entry sesuai mode
+                local function _ascFilter(entry)
+                    if not entry then return false end
+                    local live = entry.id and RAID_LIVE[entry.id]
+                    local isAsc = live and live.isAscension == true
+                    if RAID.ascensionMode then
+                        -- Mode Ascension: hanya entry yang ditandai isAscension
+                        return isAsc
+                    else
+                        -- Mode Normal: hanya entry yang BUKAN Ascension (atau belum ada info)
+                        return not isAsc
+                    end
+                end
                 local _now0 = os.time()
                 local _pruned0 = false
                 for rid, ent in pairs(RAID_LIVE) do
@@ -7785,6 +7806,16 @@ local function ResolveEntry()
                 local runeOn = RAID.runeEnabled
                 local runeTarget = runeOn and RAID.runeMapTarget or 0
                 local hasPick = (pm == "byrank" or pm == "manual") and next(RAID.runeGrades) ~= nil
+
+                -- [Ascension Mode] Filter RAID_ID_LIST sesuai mode sebelum dipakai pick mode apapun
+                local _filteredList = {}
+                for _, r in ipairs(RAID_ID_LIST) do
+                    if _ascFilter(r) then
+                        table.insert(_filteredList, r)
+                    end
+                end
+                -- Gunakan filtered list sebagai sumber utama semua pick mode
+                local RAID_ID_LIST = _filteredList
 
                 local function pickLowest(list)
                     table.sort(list, function(a, b) return a.mapId < b.mapId end)
@@ -8353,7 +8384,25 @@ local function ResolveEntry()
 
  if boss and RAID.running and not RAID._raidDone then
  local bossGuid = boss.guid
- local bossPos = (boss.hrp and boss.hrp.Position) or Vector3.new(0,0,0)
+ -- [FIX] Validasi bossPos - cegah TP ke 0,0,0 atau jurang/void
+ local function GetSafeBossPos()
+ if boss.hrp and boss.hrp.Parent then
+ local p = boss.hrp.Position
+ if p.Y > -200 then return p end
+ end
+ return nil
+ end
+ local bossPos = GetSafeBossPos()
+ if not bossPos then
+ local _waitPos = 0
+ while not bossPos and _waitPos < 3 and RAID.running and not RAID._raidDone do
+ task.wait(0.3); _waitPos = _waitPos + 0.3
+ bossPos = GetSafeBossPos()
+ end
+ end
+ if not bossPos then
+ RaidStatusUpdate("[!] Boss pos tidak valid - skip TP boss", Color3.fromRGB(255,80,80))
+ end
  -- [v259] Teleport delay user-controlled (RAID.bossDelay 1-10s)
  local _bd = math.max(1, math.min(10, RAID.bossDelay or 3))
  for _ci = _bd, 1, -1 do
@@ -8361,7 +8410,7 @@ local function ResolveEntry()
  RaidStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ".._ci.."s...", Color3.fromRGB(255,160,60))
  task.wait(1)
  end
- if RAID.running and not RAID._raidDone then
+ if RAID.running and not RAID._raidDone and bossPos then
  RaidStatusUpdate("[K] Boss: " .. boss.model.Name .. " - Attack!", Color3.fromRGB(255,80,80))
 
  -- 
@@ -8373,33 +8422,43 @@ local function ResolveEntry()
  pcall(function()
  local char = LP.Character
  local hrp = char and char:FindFirstChild("HumanoidRootPart")
- if hrp then hrp.CFrame = CFrame.new(bossPos + Vector3.new(3,0,0)) end
+ -- [FIX] Hanya teleport jika Y valid (bukan void/jurang)
+ local safePos = GetSafeBossPos()
+ if hrp and safePos then hrp.CFrame = CFrame.new(safePos + Vector3.new(3,0,0)) end
  end)
 
  -- 2) TP SEMUA hero client-side ke boss SEKARANG
  pcall(function()
+ local safePos2 = GetSafeBossPos()
+ if not safePos2 then return end
  local heroFolder = workspace:FindFirstChild("Heros")
  if heroFolder then
  for _, hModel in ipairs(heroFolder:GetChildren()) do
  local hHrp = hModel:FindFirstChild("HumanoidRootPart")
  if hHrp then
- hHrp.CFrame = CFrame.new(bossPos + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
+ hHrp.CFrame = CFrame.new(safePos2 + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
  end
  end
  end
  end)
 
  -- 3) Fire SEMUA hero remote ke boss SEKARANG
- pcall(function() FireHeroRemotes(bossGuid, bossPos) end)
+ pcall(function()
+ local safePos3 = GetSafeBossPos()
+ if safePos3 then FireHeroRemotes(bossGuid, safePos3) end
+ end)
  if RE.HeroStand and #HERO_GUIDS > 0 then
+ local safePos3b = GetSafeBossPos()
+ if safePos3b then
  for _, hGuid in ipairs(HERO_GUIDS) do
  pcall(function()
  RE.HeroStand:FireServer({
  heroGuid = hGuid,
  userId = MY_USER_ID,
- standPos = bossPos + Vector3.new(1, 0, 1),
+ standPos = safePos3b + Vector3.new(1, 0, 1),
  })
  end)
+ end
  end
  end
 
@@ -8416,23 +8475,31 @@ local function ResolveEntry()
 
  -- 5) TP ulang semua hero setelah re-equip (hero spawn ulang di posisi baru)
  pcall(function()
+ local safePos5 = GetSafeBossPos()
+ if not safePos5 then return end
  local heroFolder = workspace:FindFirstChild("Heros")
  if heroFolder then
  for _, hModel in ipairs(heroFolder:GetChildren()) do
  local hHrp = hModel:FindFirstChild("HumanoidRootPart")
  if hHrp then
- hHrp.CFrame = CFrame.new(bossPos + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
+ hHrp.CFrame = CFrame.new(safePos5 + Vector3.new(math.random(-2,2), 0, math.random(-2,2)))
  end
  end
  end
  end)
- pcall(function() FireHeroRemotes(bossGuid, bossPos) end)
+ pcall(function()
+ local safePos5b = GetSafeBossPos()
+ if safePos5b then FireHeroRemotes(bossGuid, safePos5b) end
+ end)
 
  -- 6) Background thread: TP player+hero terus ke boss tiap 0.5s
  local _tpTh = task.spawn(function()
  while RAID.running and not RAID._raidDone do
  pcall(function()
- local pos = (boss.hrp and boss.hrp.Position) or bossPos
+ -- [FIX] Selalu ambil posisi live dari boss.hrp, validasi Y sebelum TP
+ -- Jangan pernah fallback ke bossPos lama yang mungkin sudah tidak valid
+ local pos = GetSafeBossPos()
+ if not pos then return end -- skip frame ini jika posisi tidak valid
  -- TP player
  local char = LP.Character
  local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -8471,7 +8538,8 @@ local function ResolveEntry()
  if not boss.model or not boss.model.Parent then break end
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
  if hum and hum.Health <= 0 then break end
- local p = (boss.hrp and boss.hrp.Position) or bossPos
+ local p = GetSafeBossPos()
+ if not p then task.wait(0.08); continue end
  task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
  task.wait(0.08)
  end
@@ -9479,6 +9547,29 @@ do
  end
  end)
 
+ --  ASCENSION MODE TOGGLE 
+ local ascRow=Frame(raidInner,C.SURFACE,UDim2.new(1,0,0,44))
+ ascRow.LayoutOrder=18; Corner(ascRow,10); Stroke(ascRow,C.BORD,1.5,0.3)
+ local ascL=Label(ascRow,"Ascension Mode",13,C.TXT,Enum.Font.GothamBold)
+ ascL.Size=UDim2.new(1,-68,0,20); ascL.Position=UDim2.new(0,14,0.5,-10)
+ local ascSubL=Label(ascRow,"Normal / Ascension",10,C.TXT3,Enum.Font.Gotham)
+ ascSubL.Size=UDim2.new(1,-68,0,14); ascSubL.Position=UDim2.new(0,14,0.5,12)
+ local ascPill=Btn(ascRow,C.PILL_OFF,UDim2.new(0,52,0,30))
+ ascPill.AnchorPoint=Vector2.new(1,0.5); ascPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascPill,13)
+ local ascKnob=Frame(ascPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
+ ascKnob.AnchorPoint=Vector2.new(0,0.5); ascKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascKnob,10)
+ local function SetAscToggle(on)
+ RAID.ascensionMode=on
+ TweenService:Create(ascPill,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
+ TweenService:Create(ascKnob,TweenInfo.new(0.16),{
+ Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
+ BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
+ }):Play()
+ ascSubL.Text=on and "Hanya Ascension" or "Hanya Normal"
+ ascSubL.TextColor3=on and C.ACC2 or C.TXT3
+ end
+ ascPill.MouseButton1Click:Connect(function() SetAscToggle(not RAID.ascensionMode) end)
+
  --  APPLY PICK MODE LOCK 
  -- Lock/unlock field berdasarkan Pick Mode
  -- Tampilkan gembok pada field yang terkunci
@@ -9572,6 +9663,7 @@ do
   local udDir     = content:match('"updownDir":"([^"]*)"') or "up"
   local udGrade   = content:match('"updownTargetGrade":"([^"]*)"') or ""
   local killBoss  = content:match('"autoKillBoss":(%a+)') == "true"
+  local ascMode   = content:match('"ascensionMode":(%a+)') == "true"
   local bDelay    = tonumber(content:match('"bossDelay":(%d+)')) or 3
   local rOn       = content:match('"raidOn":(%a+)') == "true"
   for i, key in ipairs(PM_KEYS) do
@@ -9609,6 +9701,8 @@ do
    pcall(function() gradeDDLbl.Text = " Target: ["..RAID.updownTargetGrade.."]"; gradeDDLbl.TextColor3 = C.ACC2 end)
   end
   RAID.autoKillBoss = killBoss
+  RAID.ascensionMode = ascMode
+  if SetAscToggle then pcall(SetAscToggle, ascMode) end
   TweenService:Create(bPill, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundColor3=killBoss and C.PILL_ON or C.PILL_OFF}):Play()
   TweenService:Create(bKnob, TweenInfo.new(0.16), {
    Position=killBoss and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
@@ -12253,7 +12347,7 @@ do
    '"farm":{"randomAttack":%s},'..
    '"attack":{"massAttack":%s,"killTargetIdx":%d,"delayIdx":%d,"maMaps":"%s"},'..
    '"player":{"noClip":%s,"antiAfk":%s,"walkSpeed":%d},'..
-   '"automation":{"raid":{"pickMode":"%s","preferMaps":"%s","runeGrades":"%s","runeMapTarget":%d,"updownEnabled":%s,"updownDir":"%s","updownTargetGrade":"%s","autoKillBoss":%s,"bossDelay":%d,"raidOn":%s},"siege":{"excludeMaps":"%s","siegeOn":%s},"dungeon":{"dungeonOn":%s},"st2On":%s},'..
+   '"automation":{"raid":{"pickMode":"%s","preferMaps":"%s","runeGrades":"%s","runeMapTarget":%d,"updownEnabled":%s,"updownDir":"%s","updownTargetGrade":"%s","autoKillBoss":%s,"bossDelay":%d,"ascensionMode":%s,"raidOn":%s},"siege":{"excludeMaps":"%s","siegeOn":%s},"dungeon":{"dungeonOn":%s},"st2On":%s},'..
    '"settings":{"potatoMode":%s,"webhookEnabled":%s,"webhookUrl":"%s","webhookModeIdx":%d},'..
    '"theme":{"name":"%s","transparency":%d}'..
    '}',
