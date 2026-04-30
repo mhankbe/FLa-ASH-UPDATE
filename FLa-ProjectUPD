@@ -11600,7 +11600,7 @@ end
 -- ============================================================
 do
     local p = Panels["autoraid"]
-    if not p then goto jtp_skip end
+    if p then
 
     -- ── State ──────────────────────────────────────────────────────────────
     local JTP_players    = {}   -- { {name=string, userId=number} } semua player di server
@@ -11866,7 +11866,7 @@ do
 
     task.defer(ResizeJTPBody)
 
-    ::jtp_skip::
+    end -- if p
 end -- do JTP
 
 -- Pasang listener dungeon segera setelah GUI load (scan state walau toggle OFF)
