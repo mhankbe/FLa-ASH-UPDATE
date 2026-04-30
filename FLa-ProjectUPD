@@ -11591,6 +11591,355 @@ do
 end
 
 
+-- ============================================================
+-- PANEL : JOIN TO TOWER PLAYER (UI) - mapId 50301
+-- Scan semua player yang berada di Tower Map 2 via GetRaidTeamInfos / Players list
+-- Gunakan HOSTID tiap player untuk join room mereka di mapId = 50301
+-- ============================================================
+do
+    local p = Panels["autoraid"]
+    if p then
+
+    -- ── State ──────────────────────────────────────────────────────────────
+    local JTP_scannedPlayers = {}   -- { {name=string, userId=number, hostId=number} }
+    local JTP_selectedIdx    = nil  -- index yang dipilih dari list
+    local JTP_joining        = false
+
+    -- ── Header (collapsible) ───────────────────────────────────────────────
+    local jtpOpen = false
+
+    local jtpHeader = Btn(p, C.SURFACE, UDim2.new(1,0,0,42))
+    jtpHeader.LayoutOrder = 26; Corner(jtpHeader,10)
+    Stroke(jtpHeader, Color3.fromRGB(80,200,120), 1.5, 0.3)
+
+    local jtpArrow = Label(jtpHeader,">",13,Color3.fromRGB(80,200,120),Enum.Font.GothamBold)
+    jtpArrow.Size = UDim2.new(0,22,1,0); jtpArrow.Position = UDim2.new(0,10,0,0)
+
+    local jtpHeaderLbl = Label(jtpHeader,"⚡ Join to Tower Player",14,C.TXT,Enum.Font.GothamBold)
+    jtpHeaderLbl.Size = UDim2.new(1,-50,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
+
+    local jtpBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
+    jtpBody.LayoutOrder = 27; jtpBody.ClipsDescendants = true
+    Corner(jtpBody,10); Stroke(jtpBody,Color3.fromRGB(80,200,120),1.5,0.25); jtpBody.Visible = false
+
+    local jtpInner = Frame(jtpBody, C.BLACK, UDim2.new(1,-16,0,0))
+    jtpInner.BackgroundTransparency = 1; jtpInner.Position = UDim2.new(0,8,0,8)
+    local jtpLayout = New("UIListLayout",{Parent=jtpInner,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6)})
+
+    local function ResizeJTPBody()
+        task.spawn(function()
+            task.wait(0)
+            jtpLayout:ApplyLayout()
+            local h = jtpLayout.AbsoluteContentSize.Y + 16
+            jtpInner.Size = UDim2.new(1,0,0,h)
+            jtpBody.Size  = UDim2.new(1,0,0,h+16)
+        end)
+    end
+
+    jtpHeader.MouseButton1Click:Connect(function()
+        jtpOpen = not jtpOpen; jtpBody.Visible = jtpOpen
+        jtpArrow.Text = jtpOpen and "v" or ">"
+        if jtpOpen then task.defer(ResizeJTPBody) end
+    end)
+
+    -- ── Info card ──────────────────────────────────────────────────────────
+    local infoCard2 = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
+    infoCard2.LayoutOrder = 0; infoCard2.AutomaticSize = Enum.AutomaticSize.Y
+    Corner(infoCard2,10)
+    New("UIPadding",{Parent=infoCard2,PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
+    local infoLbl2 = Label(infoCard2,
+        "Scan player di Tower Map 2 (mapId=50301). Pilih nama player → klik JOIN untuk masuk ke room mereka via HOSTID.",
+        10, C.TXT3, Enum.Font.Gotham)
+    infoLbl2.Size = UDim2.new(1,0,0,0); infoLbl2.AutomaticSize = Enum.AutomaticSize.Y
+    infoLbl2.TextWrapped = true
+
+    -- ── Status label ───────────────────────────────────────────────────────
+    local jtpStatusCard = Frame(jtpInner, C.SURFACE, UDim2.new(1,0,0,30))
+    jtpStatusCard.LayoutOrder = 1; Corner(jtpStatusCard,10)
+    New("UIPadding",{Parent=jtpStatusCard,PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
+    local jtpStatusLbl = Label(jtpStatusCard,"Belum di-scan. Tekan SCAN dulu.", 10, C.TXT3, Enum.Font.Gotham)
+    jtpStatusLbl.Size = UDim2.new(1,0,1,0); jtpStatusLbl.TextWrapped = true
+    jtpStatusLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+    local function JTPSetStatus(msg, color)
+        pcall(function()
+            jtpStatusLbl.Text = msg
+            jtpStatusLbl.TextColor3 = color or C.TXT3
+        end)
+    end
+
+    -- ── SCAN button ────────────────────────────────────────────────────────
+    local scanBtn = Btn(jtpInner, Color3.fromRGB(30,80,55), UDim2.new(1,0,0,36))
+    scanBtn.LayoutOrder = 2; Corner(scanBtn,10)
+    Stroke(scanBtn, Color3.fromRGB(80,200,120), 1.5, 0.2)
+    local scanLbl = Label(scanBtn,"🔍  SCAN  Player di Tower Map 2",13,Color3.fromRGB(110,230,160),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+    scanLbl.Size = UDim2.new(1,0,1,0)
+
+    -- ── Player list container ──────────────────────────────────────────────
+    local listCard = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
+    listCard.LayoutOrder = 3; listCard.AutomaticSize = Enum.AutomaticSize.Y
+    listCard.Visible = false; Corner(listCard,10)
+    Stroke(listCard, C.BORD, 1.5, 0.5)
+    New("UIPadding",{Parent=listCard,PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)})
+    local listLayout2 = New("UIListLayout",{Parent=listCard,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,4)})
+
+    local listTitle = Label(listCard,"Pilih Player (tap untuk select):",10,C.TXT3,Enum.Font.GothamBold)
+    listTitle.LayoutOrder = 0; listTitle.Size = UDim2.new(1,0,0,18)
+
+    -- placeholder holder untuk tombol player
+    local playerRows = {}  -- { frame } per entry
+
+    -- ── JOIN button ────────────────────────────────────────────────────────
+    local joinBtn = Btn(jtpInner, Color3.fromRGB(20,40,120), UDim2.new(1,0,0,40))
+    joinBtn.LayoutOrder = 4; Corner(joinBtn,10)
+    Stroke(joinBtn, Color3.fromRGB(55,105,255), 2, 0.1)
+    local joinLbl = Label(joinBtn,"JOIN",15,Color3.fromRGB(148,195,255),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+    joinLbl.Size = UDim2.new(1,0,1,0)
+
+    -- ── Helper: destroy semua row player ──────────────────────────────────
+    local function ClearPlayerRows()
+        for _, r in ipairs(playerRows) do pcall(function() r:Destroy() end) end
+        playerRows = {}
+        JTP_selectedIdx = nil
+    end
+
+    -- ── Helper: render player list ─────────────────────────────────────────
+    local function RenderPlayerList()
+        ClearPlayerRows()
+        listCard.Visible = (#JTP_scannedPlayers > 0)
+
+        for i, entry in ipairs(JTP_scannedPlayers) do
+            local ii = i
+            local row = Btn(listCard, C.SURFACE, UDim2.new(1,0,0,32))
+            row.LayoutOrder = i; Corner(row,8)
+            Stroke(row, C.BORD, 1.5, 0.6)
+
+            local nameLbl = Label(row, entry.name, 11, C.TXT, Enum.Font.GothamBold)
+            nameLbl.Size = UDim2.new(0.58,0,1,0); nameLbl.Position = UDim2.new(0,8,0,0)
+            nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+            local hostLbl = Label(row, "ID:"..tostring(entry.hostId), 9, C.TXT3, Enum.Font.Gotham, Enum.TextXAlignment.Right)
+            hostLbl.Size = UDim2.new(0.42,-8,1,0); hostLbl.Position = UDim2.new(0.58,0,0,0)
+            hostLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+            local selDot = Frame(row, Color3.fromRGB(80,200,120), UDim2.new(0,6,0,6))
+            selDot.Position = UDim2.new(1,-10,0.5,-3); Corner(selDot,3); selDot.Visible = false
+
+            row.MouseButton1Click:Connect(function()
+                JTP_selectedIdx = ii
+                -- Update semua visual seleksi
+                for j, r2 in ipairs(playerRows) do
+                    local d = r2:FindFirstChildOfClass("Frame")
+                    if d then d.Visible = (j == ii) end
+                    r2.BackgroundColor3 = (j == ii) and Color3.fromRGB(20,55,35) or C.SURFACE
+                end
+                JTPSetStatus("Dipilih: "..entry.name.." (hostId="..tostring(entry.hostId)..")", Color3.fromRGB(110,230,160))
+            end)
+
+            table.insert(playerRows, row)
+        end
+
+        task.defer(ResizeJTPBody)
+    end
+
+    -- ── SCAN logic ─────────────────────────────────────────────────────────
+    local JTP_TOWER_MAP_ID = 50301
+    local _jtpScanning = false
+
+    local function JTPScan()
+        if _jtpScanning then return end
+        _jtpScanning = true
+        JTPSetStatus("🔄 Scanning...", C.YEL)
+        listCard.Visible = false
+
+        task.spawn(function()
+            local found = {}
+
+            -- ── Metode 1: GetRaidTeamInfos (invoke server, return list room) ──
+            pcall(function()
+                local reGRT = Remotes:FindFirstChild("GetRaidTeamInfos")
+                if reGRT then
+                    local result = reGRT:InvokeServer()
+                    if type(result) == "table" then
+                        for _, room in ipairs(result) do
+                            if type(room) == "table" then
+                                local mid = room.mapId or room.MapId
+                                local hid = room.hostId or room.HostId or room.userId or room.UserId
+                                local nm  = room.hostName or room.name or room.Name or ("Player_"..tostring(hid))
+                                if mid == JTP_TOWER_MAP_ID and hid then
+                                    -- deduplicate
+                                    local dup = false
+                                    for _, ex in ipairs(found) do if ex.hostId == hid then dup=true; break end end
+                                    if not dup then
+                                        table.insert(found, {name=tostring(nm), userId=hid, hostId=hid})
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+
+            -- ── Metode 2: Scan Players di game, cek attribute mapId / CurrentMapId ──
+            pcall(function()
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= LP then
+                        local pid = plr.UserId
+                        -- Cek attribute map dari Player atau Character
+                        local plrMapId = nil
+                        pcall(function()
+                            plrMapId = plr:GetAttribute("MapId")
+                                    or plr:GetAttribute("mapId")
+                                    or plr:GetAttribute("CurrentMapId")
+                        end)
+                        if not plrMapId and plr.Character then
+                            pcall(function()
+                                plrMapId = plr.Character:GetAttribute("MapId")
+                                         or plr.Character:GetAttribute("mapId")
+                            end)
+                        end
+
+                        if plrMapId == JTP_TOWER_MAP_ID then
+                            local dup = false
+                            for _, ex in ipairs(found) do if ex.hostId == pid then dup=true; break end end
+                            if not dup then
+                                table.insert(found, {name=plr.Name, userId=pid, hostId=pid})
+                            end
+                        end
+                    end
+                end
+            end)
+
+            -- ── Metode 3: Scan workspace Maps folder untuk model bertag hostId ──
+            pcall(function()
+                local mapsFolder = workspace:FindFirstChild("Maps")
+                if mapsFolder then
+                    for _, mapModel in ipairs(mapsFolder:GetChildren()) do
+                        local mid = mapModel:GetAttribute("MapId") or mapModel:GetAttribute("mapId")
+                        local hid = mapModel:GetAttribute("HostId") or mapModel:GetAttribute("hostId")
+                        if (mid == JTP_TOWER_MAP_ID) and hid then
+                            local hname = "Player_"..tostring(hid)
+                            -- coba lookup nama dari Players service
+                            for _, plr in ipairs(Players:GetPlayers()) do
+                                if plr.UserId == hid then hname = plr.Name; break end
+                            end
+                            local dup = false
+                            for _, ex in ipairs(found) do if ex.hostId == hid then dup=true; break end end
+                            if not dup then
+                                table.insert(found, {name=hname, userId=hid, hostId=hid})
+                            end
+                        end
+                    end
+                end
+            end)
+
+            -- ── Metode 4: LocalPlayerTeleport remote (jika ada GetRoomList) ──
+            pcall(function()
+                local reRoomList = Remotes:FindFirstChild("GetTowerRoomList")
+                              or  Remotes:FindFirstChild("GetRoomList")
+                              or  Remotes:FindFirstChild("GetSingleTowerRooms")
+                if reRoomList then
+                    local res = reRoomList:InvokeServer({mapId = JTP_TOWER_MAP_ID})
+                    if type(res) == "table" then
+                        for _, room in ipairs(res) do
+                            if type(room) == "table" then
+                                local hid = room.hostId or room.HostId or room.userId
+                                local nm  = room.name or room.hostName or ("Player_"..tostring(hid))
+                                if hid then
+                                    local dup = false
+                                    for _, ex in ipairs(found) do if ex.hostId == hid then dup=true; break end end
+                                    if not dup then
+                                        table.insert(found, {name=tostring(nm), userId=hid, hostId=hid})
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+
+            JTP_scannedPlayers = found
+            _jtpScanning = false
+
+            if #found == 0 then
+                JTPSetStatus("❌ Tidak ada player ditemukan di Tower Map 2.", Color3.fromRGB(220,80,80))
+                listCard.Visible = false
+                task.defer(ResizeJTPBody)
+            else
+                JTPSetStatus("✅ Ditemukan "..#found.." player. Pilih lalu tekan JOIN.", Color3.fromRGB(110,230,160))
+                RenderPlayerList()
+            end
+        end)
+    end
+
+    scanBtn.MouseButton1Click:Connect(JTPScan)
+
+    -- ── JOIN logic ─────────────────────────────────────────────────────────
+    joinBtn.MouseButton1Click:Connect(function()
+        if JTP_joining then return end
+        if not JTP_selectedIdx then
+            JTPSetStatus("⚠️ Pilih player dulu dari list!", C.YEL)
+            return
+        end
+        local entry = JTP_scannedPlayers[JTP_selectedIdx]
+        if not entry then
+            JTPSetStatus("⚠️ Data player tidak valid, coba SCAN ulang.", C.YEL)
+            return
+        end
+
+        JTP_joining = true
+        joinLbl.Text = "JOINING..."
+        joinLbl.TextColor3 = C.YEL
+        JTPSetStatus("🚀 Joining "..entry.name.." (hostId="..tostring(entry.hostId)..")...", C.YEL)
+
+        task.spawn(function()
+            local ok, errMsg = pcall(function()
+                local reLocalTp  = Remotes:FindFirstChild("LocalPlayerTeleport")
+                local reStartTp  = Remotes:FindFirstChild("StartLocalPlayerTeleport")
+                local reEquip    = Remotes:FindFirstChild("EquipHeroWithData")
+                local reTpSucc   = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
+
+                if not reLocalTp and not reStartTp then
+                    error("Remote teleport tidak ditemukan!")
+                end
+
+                -- Step 1 : LocalPlayerTeleport (pre-join, sama seperti SimpleSpy capture)
+                if reLocalTp then
+                    reLocalTp:FireServer({mapId = JTP_TOWER_MAP_ID, hostId = entry.hostId})
+                end
+                task.wait(0.4)
+
+                -- Step 2 : StartLocalPlayerTeleport (trigger teleport sebenarnya)
+                if reStartTp then
+                    reStartTp:FireServer({mapId = JTP_TOWER_MAP_ID, hostId = entry.hostId})
+                end
+                task.wait(0.5)
+
+                -- Step 3 : EquipHeroWithData (agar hero terpasang di room baru)
+                if reEquip then pcall(function() reEquip:FireServer() end) end
+                task.wait(0.3)
+
+                -- Step 4 : LocalPlayerTeleportSuccess (konfirmasi masuk map)
+                if reTpSucc then pcall(function() reTpSucc:InvokeServer() end) end
+            end)
+
+            JTP_joining = false
+            joinLbl.Text = "JOIN"
+            joinLbl.TextColor3 = Color3.fromRGB(148,195,255)
+
+            if ok then
+                JTPSetStatus("✅ JOIN berhasil ke room "..entry.name.."!", Color3.fromRGB(80,220,140))
+                SystemNotify("✅ Join Tower: "..entry.name, 4)
+            else
+                JTPSetStatus("❌ JOIN gagal: "..(errMsg or "unknown error"), Color3.fromRGB(220,80,80))
+            end
+        end)
+    end)
+
+    task.defer(ResizeJTPBody)
+    end -- if p
+end -- do JTP
+
 -- Pasang listener dungeon segera setelah GUI load (scan state walau toggle OFF)
 task.spawn(function()
  task.wait(6) -- buffer setelah ConnectUpdateCityRaidListener
