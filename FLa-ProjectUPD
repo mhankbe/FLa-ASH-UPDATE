@@ -6629,11 +6629,24 @@ function ParseChatLine(text)
  local mapNum, rest, grade
 
  if isAscension then
- -- Format: "appeared in Ascension Tower 16 - [Monarch] Antares+1 [A]"
+ -- Format: "appeared in Ascension Tower 8 - [Monarch] Frostborne+1 [E]"
  mapNum = tonumber(text:match("Ascension Tower (%d+)"))
  rest = text:match("Ascension Tower %d+%s*[-]?%s*(.+)") or ""
  grade = extractGrade(rest) or extractGrade(text)
  if not grade and text:find("Monarch",1,true) then grade = "?" end
+ -- [FIX] Ekstrak nama boss dari sisa teks setelah nomor tower
+ -- Contoh rest: "[Monarch] Frostborne+1 [E]" -> _ascBossName = "frostborne"
+ _ascBossName = nil
+ if rest ~= "" then
+ -- Hapus prefix [Monarch]/[King]/etc, suffix grade [E]/[N]/[M+]/[M++], dan +N
+ local raw = rest
+  :gsub("%[M%+%+%]",""):gsub("%[M%+%]","")
+  :gsub("%[[A-Za-z0-9%+]+%]",""):gsub("%+%d+","")
+  :match("^%s*(.-)%s*$")
+ if raw and #raw > 1 then
+  _ascBossName = raw:lower()
+ end
+ end
  else
  -- Format normal: "appeared in 6,Orc Palace [B]"
  local mapStr
@@ -6665,8 +6678,9 @@ function ParseChatLine(text)
  rank = 0,
  grade = grade,
  isAscension = true,
+ bossName = _ascBossName, -- [FIX] nama boss dari teks notifikasi, lowercase
  endTime = os.time() + 300, -- estimasi 5 menit window
- label = "Ascension Tower "..mapNum.." ["..grade.."]",
+ label = "Ascension Tower "..mapNum..(_ascBossName and (" - "..(_ascBossName:gsub("^%l",string.upper))) or "").." ["..grade.."]",
  }
  if RebuildRaidList then pcall(RebuildRaidList) end
  else
@@ -7149,7 +7163,9 @@ RebuildRaidList = function()
  local mn = e.mapId and (e.mapId - 50000) or 0
  local lbl
  if e.isAscension then
-  lbl = "Ascension Tower "..mn.." ["..( e.grade or "?").."]"
+  -- [FIX] Tampilkan nama boss di label jika tersedia
+  local _bn = e.bossName and (e.bossName:gsub("^%l",string.upper)) or nil
+  lbl = "Ascension Tower "..mn..(_bn and (" - ".._bn) or "").." ["..(e.grade or "?").."]"
  else
   lbl = "Map "..mn.." - "..(MAP_NAMES[mn] or ("Map "..mn)).." - "..(RANK_LABEL[e.rank] or ("["..( e.spawnName or "?").."]")).." (ID:"..e.raidId..")"
  end
@@ -7160,6 +7176,7 @@ RebuildRaidList = function()
  mapId = e.mapId,
  spawnName = e.spawnName,
  isAscension = e.isAscension,
+ bossName = e.bossName, -- [FIX] nama boss Ascension Tower untuk prioritas scan
  })
  end
  if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
@@ -7603,41 +7620,54 @@ function RaidCollectAll()
 end
 
 -- Scan enemy/boss di workspace
+-- [GODMODE FIX] Relax filter jarak, tambah fallback scan seluruh workspace
 function GetRaidEnemies()
  local list = {}
- -- [FIX] Filter enemy berdasarkan proximity ke spawn point map yang sedang aktif
- -- Mencegah enemy sisa dari map sebelumnya ikut terdeteksi sebagai target
+ local seen = {}
+
  local activeMapId = RAID and RAID.serverMapId
  local spawnPos = activeMapId and RAID_SPAWN_POS and RAID_SPAWN_POS[activeMapId]
- -- Radius filter: enemy harus dalam 2000 studs dari spawn point map aktif
- -- Jika tidak ada spawnPos (map tidak dikenal), tidak filter posisi
- local MAX_DIST = 2000
+ -- [FIX] Perbesar radius 2000->8000 agar boss yang spawn jauh tetap terdeteksi
+ -- Map 19/20 punya spawnPos 0,0,0 - jika spawnPos tidak valid (magnitude<1), nonaktifkan filter
+ local MAX_DIST = 8000
+ local useDistFilter = spawnPos and spawnPos.Magnitude > 1
 
- for _, fname in ipairs({"Enemys","Enemy","Enemies","Bosses","Boss","RaidBoss","RaidEnemys"}) do
- local folder = workspace:FindFirstChild(fname)
- if folder then
- for _, e in ipairs(folder:GetChildren()) do
- if e:IsA("Model") then
+ local function addEnemy(e)
+ if not e:IsA("Model") then return end
  local g = e:GetAttribute("EnemyGuid") or e:GetAttribute("BossGuid") or e:GetAttribute("Guid") or e:GetAttribute("GUID")
+ if not g or seen[g] then return end
  local hrp = e:FindFirstChild("HumanoidRootPart")
  local hum = e:FindFirstChildOfClass("Humanoid")
- if g and hrp and hum and hum.Health > 0 then
- -- [FIX] Validasi posisi enemy terhadap spawn point map aktif
- local valid = true
- if spawnPos then
+ if not (hrp and hum and hum.Health > 0) then return end
+ if useDistFilter then
  local dist = (hrp.Position - spawnPos).Magnitude
- if dist > MAX_DIST then
- valid = false -- enemy ini dari map lain, skip
+ if dist > MAX_DIST then return end
  end
- end
- if valid then
+ seen[g] = true
  table.insert(list, {guid=g, hrp=hrp, model=e})
  end
+
+ -- Scan folder-folder utama
+ for _, fname in ipairs({"Bosses","Boss","RaidBoss","Enemys","Enemy","Enemies","RaidEnemys","Monsters","Monster"}) do
+ local folder = workspace:FindFirstChild(fname)
+ if folder then
+ for _, e in ipairs(folder:GetChildren()) do addEnemy(e) end
+ end
+ end
+
+ -- [GODMODE FIX] Fallback: scan langsung children workspace jika folder tidak ketemu / list kosong
+ if #list == 0 then
+ for _, obj in ipairs(workspace:GetChildren()) do
+ if obj:IsA("Model") then
+ addEnemy(obj)
+ -- Scan nested (beberapa game taruh enemy di sub-model)
+ for _, child in ipairs(obj:GetChildren()) do
+ addEnemy(child)
  end
  end
  end
  end
- end
+
  return list
 end
 
@@ -8437,23 +8467,49 @@ local function ResolveEntry()
  RAID._raidDone = true
  end) end
 
- -- [FIX v256] Reduced wait: 3s untuk map load, SAMBIL cari boss
- -- Sebelumnya: diam 7s -> baru cari boss -> TP -> 2s -> UnEquip -> Equip -> serang
- -- Sekarang: cari boss sejak detik ke-2 -> TP player+hero bareng -> Equip -> langsung serang
+ -- [GODMODE FIX] Perpanjang loading wait: 3s->6s, gunakan IsBoss yang sama untuk early detect
+ -- Ini mencegah boss belum spawn saat pertama kali dicari
  RaidStatusUpdate("[..] Enter Map - loading...", Color3.fromRGB(160,148,135))
  local _loadWait = 0
  local _earlyBoss = nil
- while _loadWait < 3 and RAID.running and not RAID._raidDone do
+
+ -- Definisi BOSS_KEYS lebih awal agar bisa dipakai di early detection juga
+ local BOSS_KEYS_EARLY = {
+ "goblin king","giant arachnid","buryura","igris",
+ "leader of the polar","arch lich","kargalgan","baran",
+ "beru","grendal","monarch plague","frostborne","legia",
+ "monarch beastly","beastly fangs","silas","unbreakable monarch",
+ "yogumunt","monarch of transfiguration","transfiguration",
+ "antares","ashborn","dominion","absolute","monarch","fragment","boss",
+ "legendary super saiyan","broly",
+ "goku[super4]","goku super4","goku super 4",
+ }
+ local function IsBossEarly(name)
+ local n = name:lower()
+ for _, k in ipairs(BOSS_KEYS_EARLY) do if n:find(k,1,true) then return true end end
+ return false
+ end
+
+ -- [FIX Ascension] Ambil hint bossName dari raidEntry sedini mungkin untuk early detect
+ local _earlyAscHint = (raidEntry and raidEntry.isAscension and raidEntry.bossName) or nil
+ local function IsBossEarlyWithHint(name)
+  local n = name:lower()
+  if _earlyAscHint and n:find(_earlyAscHint, 1, true) then return true end
+  return IsBossEarly(name)
+ end
+
+ while _loadWait < 6 and RAID.running and not RAID._raidDone do
  task.wait(0.5); _loadWait = _loadWait + 0.5
- -- Mulai cari boss dari detik ke-2
- if _loadWait >= 2 and not _earlyBoss then
+ -- Mulai cari boss sejak detik ke-1 (bukan ke-2)
+ if _loadWait >= 1 and not _earlyBoss then
  for _, e in ipairs(GetRaidEnemies()) do
- local n = e.model.Name:lower()
- if n:find("king",1,true) or n:find("arachnid",1,true) or n:find("buryura",1,true) or n:find("igris",1,true) or n:find("arch lich",1,true) or n:find("baran",1,true) or n:find("monarch",1,true) or n:find("boss",1,true) or n:find("beru",1,true) or n:find("legia",1,true) or n:find("ashborn",1,true) or n:find("antares",1,true) then
+ -- [FIX] Gunakan IsBossEarlyWithHint - sadar hint nama boss Ascension Tower
+ if IsBossEarlyWithHint(e.model.Name) then
  _earlyBoss = e; break
  end
  end
  end
+ if _earlyBoss then break end -- Boss ketemu lebih awal, langsung lanjut
  end
 
  if RAID.running and not RAID._raidDone and RAID.autoKillBoss then
@@ -8466,6 +8522,8 @@ local function ResolveEntry()
  "antares","ashborn","dominion","absolute","monarch","fragment","boss",
  -- Map 19 Dragon Ball City
  "legendary super saiyan","broly",
+ -- Goku Super Saiyan 4
+ "goku[super4]","goku super4","goku super 4",
  }
  local function IsBoss(name)
  local n = name:lower()
@@ -8473,21 +8531,82 @@ local function ResolveEntry()
  return false
  end
 
- -- Pakai boss dari early detection kalau sudah ada
- local boss = _earlyBoss
- if boss and not IsBoss(boss.model.Name) then boss = nil end
+ -- [FIX Ascension] Ambil bossName hint dari raidEntry jika Ascension Tower
+ -- Nama boss sudah diketahui dari teks notifikasi -> pakai sebagai filter prioritas tertinggi
+ local _ascHintName = nil
+ if raidEntry and raidEntry.isAscension and raidEntry.bossName then
+  _ascHintName = raidEntry.bossName -- lowercase, misal "frostborne"
+ end
 
- -- Cari boss max 15s (kalau belum ketemu dari early)
+ -- Helper IsBoss yang sadar Ascension hint
+ local function IsBossWithHint(name)
+  local n = name:lower()
+  -- Jika ada hint nama boss Ascension, prioritaskan kecocokan tepat
+  if _ascHintName then
+   if n:find(_ascHintName, 1, true) then return true end
+  end
+  return IsBoss(name)
+ end
+
+ -- Pakai boss dari early detection kalau sudah ada DAN valid
+ local boss = (_earlyBoss and IsBossWithHint(_earlyBoss.model.Name)) and _earlyBoss or nil
+ -- Juga retry dengan IsBossWithHint jika early boss ditolak IsBoss tapi cocok dengan hint
+ if not boss and _earlyBoss and _ascHintName then
+  local n = _earlyBoss.model.Name:lower()
+  if n:find(_ascHintName, 1, true) then boss = _earlyBoss end
+ end
+
+ -- [GODMODE FIX] Tingkatkan timeout: 15s -> 30s, scan lebih agresif tiap 0.3s
+ -- Tambah retry: jika folder kosong, tunggu folder muncul via ChildAdded
  local waitBoss = 0
- while RAID.running and not boss and waitBoss < 15 and not RAID._raidDone do
+ local _bossFoundViaEvent = false
+
+ -- [GODMODE FIX] Listen ChildAdded di semua folder enemy agar deteksi instan
+ local _bossEventConns = {}
+ local function _tryAddBossFromObj(obj)
+ if boss or not obj:IsA("Model") then return end
+ if IsBossWithHint(obj.Name) then
+ local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
+ local hrp = obj:FindFirstChild("HumanoidRootPart")
+ local hum = obj:FindFirstChildOfClass("Humanoid")
+ if g and hrp and hum and hum.Health > 0 then
+ boss = {guid=g, hrp=hrp, model=obj}
+ _bossFoundViaEvent = true
+ end
+ end
+ end
+ for _, fname in ipairs({"Bosses","Boss","RaidBoss","Enemys","Enemy","Enemies","RaidEnemys","Monsters"}) do
+ local folder = workspace:FindFirstChild(fname)
+ if folder then
+ table.insert(_bossEventConns, folder.ChildAdded:Connect(_tryAddBossFromObj))
+ end
+ end
+ -- Juga listen workspace ChildAdded untuk folder baru
+ table.insert(_bossEventConns, workspace.ChildAdded:Connect(function(obj)
+ if obj:IsA("Folder") or obj:IsA("Model") then
+ -- Coba langsung
+ _tryAddBossFromObj(obj)
+ -- Kalau folder, pantau isinya
+ pcall(function()
+ table.insert(_bossEventConns, obj.ChildAdded:Connect(_tryAddBossFromObj))
+ for _, child in ipairs(obj:GetChildren()) do _tryAddBossFromObj(child) end
+ end)
+ end
+ end))
+
+ while RAID.running and not boss and waitBoss < 30 and not RAID._raidDone do
  for _, e in ipairs(GetRaidEnemies()) do
- if IsBoss(e.model.Name) then boss = e; break end
+ if IsBossWithHint(e.model.Name) then boss = e; break end
  end
  if not boss then
- RaidStatusUpdate("Find Boss... (" .. math.floor(waitBoss) .. "s/15s)", Color3.fromRGB(160,148,135))
- task.wait(0.5); waitBoss = waitBoss + 0.5
+ RaidStatusUpdate("Find Boss... (" .. math.floor(waitBoss) .. "s/30s)", Color3.fromRGB(160,148,135))
+ task.wait(0.3); waitBoss = waitBoss + 0.3
  end
  end
+
+ -- Lepaskan semua event listener boss
+ for _, c in ipairs(_bossEventConns) do pcall(function() c:Disconnect() end) end
+ _bossEventConns = {}
 
  if boss and RAID.running and not RAID._raidDone then
  local bossGuid = boss.guid
@@ -8657,12 +8776,34 @@ local function ResolveEntry()
  RaidStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
  end -- if RAID.running after delay
  else
- -- Boss tidak ditemukan setelah 15s
+ -- [GODMODE FIX] Boss tidak ditemukan setelah 30s - coba sekali lagi scan penuh workspace sebelum menyerah
+ local _lastChance = nil
+ pcall(function()
+ for _, obj in ipairs(workspace:GetDescendants()) do
+ if obj:IsA("Model") and IsBossWithHint(obj.Name) then
+ local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
+ local hrp = obj:FindFirstChild("HumanoidRootPart")
+ local hum = obj:FindFirstChildOfClass("Humanoid")
+ if g and hrp and hum and hum.Health > 0 then
+ _lastChance = {guid=g, hrp=hrp, model=obj}; break
+ end
+ end
+ end
+ end)
+ if _lastChance and RAID.running and not RAID._raidDone then
+ -- Dapat dari last chance scan
+ boss = _lastChance
+ RaidStatusUpdate("[!] Boss found (last chance): " .. boss.model.Name, Color3.fromRGB(255,200,50))
+ -- lanjut ke serangan via goto workaround: set boss dan re-enter attack block
+ -- karena Lua tidak punya goto, kita re-trigger logika serangan inline
+ goto BOSS_ATTACK
+ end
  if RAID.running then
- RaidStatusUpdate("[FLa] Boss not found - Go Out...", Color3.fromRGB(255,150,50))
+ RaidStatusUpdate("[FLa] Boss not found (30s) - Go Out...", Color3.fromRGB(255,150,50))
  task.wait(3)
  end
  end -- if boss
+ ::BOSS_ATTACK::
  elseif RAID.running and not RAID._raidDone then
  -- Auto Kill Boss OFF - tunggu event ChallengeRaidsSuccess max 5 menit
  local _wt = 0
