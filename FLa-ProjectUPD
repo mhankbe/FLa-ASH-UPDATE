@@ -1903,13 +1903,14 @@ function AttackLoop_Mass(onStatus)
    or (SIEGE and SIEGE.inMap) then
    return "interrupted"
   end
-  -- [FIX GODMODE] Guard: STOP serang jika player bukan di basemap normal (50001-50020)
-  -- Blok Siege (50201+), Raid (50101+), Tower (50300+), dan map lain di luar range
+  -- [v54 FIX] Guard: STOP serang jika player jelas di map non-lobby
+  -- wm == 0 = transisi (Maps folder belum load) -> jangan interrupt, tunggu saja
+  -- hanya interrupt jika wm diketahui pasti di luar range lobby (50001-50020)
   do
    local ok, wm = pcall(function()
     return _readMapId()
    end)
-   if ok and type(wm) == "number" then
+   if ok and type(wm) == "number" and wm ~= 0 then
     if wm < 50001 or wm > 50020 then
      return "interrupted"
     end
@@ -2278,9 +2279,18 @@ function WaitRaidDone()
         local _lobbyWait = 0
         while MA.running and _lobbyWait < 15 do
             local _wm = _readMapId()
-            -- Lobby = MapId 50001-50020 (dropdown Select Map)
+            -- Lobby = MapId 50001-50020 (dropdown Select Map) -> langsung resume
             if type(_wm) == "number" and _wm >= 50001 and _wm <= 50020 then break end
-            -- Jika masih transisi (mapId=0) tunggu sebentar
+            -- wm==0 = transisi map (Maps folder belum load) -> anggap sudah di lobby jika
+            -- tidak ada flag aktif apapun (tidak sedang di dalam raid/siege/dungeon)
+            if _wm == 0 then
+                local _anyActive = _raidInterrupt or _siegeInterrupt
+                    or (DUNGEON and (DUNGEON.inMap or DUNGEON.interrupt))
+                    or (SIEGE and SIEGE.inMap)
+                    or (RAID and RAID.inMap)
+                    or (ASC and ASC.running and ASC.inMap)
+                if not _anyActive then break end
+            end
             task.wait(0.5)
             _lobbyWait = _lobbyWait + 0.5
             if _maStatusLbl then
