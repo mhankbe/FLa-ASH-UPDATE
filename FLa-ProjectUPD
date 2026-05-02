@@ -1182,6 +1182,31 @@ RAID = {
 }
 _raidOn = false
 
+-- ============================================================
+-- AUTO ASCENSION STATE TABLE
+-- ============================================================
+ASC = {
+ running  = false,
+ inMap    = false,
+ thread   = nil,
+ sukses   = 0,
+ pickMode = "easy",   -- "easy" | "hard" | "manual"
+ runeGrades    = {},    -- filter grade (Preferred Rank)
+ runeEnabled   = false, -- rune map item aktif
+ runeMapTarget = 0,     -- target map rune (Preferred Rune)
+ updownEnabled     = false, -- UP/DOWN Rank toggle
+ updownDir         = "up",  -- "up" | "down"
+ updownTargetGrade = nil,   -- grade target UP/DOWN
+ autoKillBoss = false, -- AUTO BOSS KILL toggle
+ bossDelay    = 3,     -- delay sebelum TP ke boss (1-10s)
+ statusLbl = nil,
+ dot       = nil,
+ suksesLbl = nil,
+}
+_ascOn = false
+_ascWakeup = nil -- BindableEvent untuk wakeup loop
+_visAscension = nil -- visual pill toggle
+
 -- Pre-deklarasi variabel expose antar-block (diisi saat masing-masing block UI terbentuk)
 _RAID_SaveConfig    = nil  -- diisi oleh Auto Raid do block
 _RAID_ResetConfig   = nil  -- diisi oleh Auto Raid do block
@@ -1305,7 +1330,7 @@ _whSilent = false -- true saat scan history awal (jangan fire webhook duplikat)
 
 
 RAID.autoKillBoss = false -- toggle: teleport ke raja + auto attack sampai mati
-RAID.ascensionMode = false -- toggle: true=hanya Ascension raid, false=hanya Normal raid
+RAID.ascensionMode = false -- [DEPRECATED] tetap ada agar tidak crash referensi lama
 RAID.bossDelay = 3 -- detik delay sebelum TP ke boss (1-10, user-controlled)
 
 _maStatusLbl, _noClipConn, _antiAfkThread, _antiAfkStart = nil, nil, nil, nil
@@ -1796,13 +1821,14 @@ function AttackLoop_Mass(onStatus)
    or (SIEGE and SIEGE.inMap) then
    return "interrupted"
   end
-  -- [FIX] Hanya serang di BaseMapId normal (50001-50019)
+  -- [FIX GODMODE] Guard: STOP serang jika player bukan di basemap normal (50001-50020)
+  -- Blok Siege (50201+), Raid (50101+), Tower (50300+), dan map lain di luar range
   do
    local ok, wm = pcall(function()
     return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
    end)
    if ok and type(wm) == "number" then
-    if wm < 50001 or wm > 50019 then
+    if wm < 50001 or wm > 50020 then
      return "interrupted"
     end
    end
@@ -6629,11 +6655,24 @@ function ParseChatLine(text)
  local mapNum, rest, grade
 
  if isAscension then
- -- Format: "appeared in Ascension Tower 16 - [Monarch] Antares+1 [A]"
+ -- Format: "appeared in Ascension Tower 8 - [Monarch] Frostborne+1 [E]"
  mapNum = tonumber(text:match("Ascension Tower (%d+)"))
  rest = text:match("Ascension Tower %d+%s*[-]?%s*(.+)") or ""
  grade = extractGrade(rest) or extractGrade(text)
  if not grade and text:find("Monarch",1,true) then grade = "?" end
+ -- [FIX] Ekstrak nama boss dari sisa teks setelah nomor tower
+ -- Contoh rest: "[Monarch] Frostborne+1 [E]" -> _ascBossName = "frostborne"
+ _ascBossName = nil
+ if rest ~= "" then
+ -- Hapus prefix [Monarch]/[King]/etc, suffix grade [E]/[N]/[M+]/[M++], dan +N
+ local raw = rest
+  :gsub("%[M%+%+%]",""):gsub("%[M%+%]","")
+  :gsub("%[[A-Za-z0-9%+]+%]",""):gsub("%+%d+","")
+  :match("^%s*(.-)%s*$")
+ if raw and #raw > 1 then
+  _ascBossName = raw:lower()
+ end
+ end
  else
  -- Format normal: "appeared in 6,Orc Palace [B]"
  local mapStr
@@ -6665,10 +6704,13 @@ function ParseChatLine(text)
  rank = 0,
  grade = grade,
  isAscension = true,
+ bossName = _ascBossName, -- [FIX] nama boss dari teks notifikasi, lowercase
  endTime = os.time() + 300, -- estimasi 5 menit window
- label = "Ascension Tower "..mapNum.." ["..grade.."]",
+ label = "Ascension Tower "..mapNum..(_ascBossName and (" - "..(_ascBossName:gsub("^%l",string.upper))) or "").." ["..grade.."]",
  }
  if RebuildRaidList then pcall(RebuildRaidList) end
+ -- [v46] Wakeup Auto Ascension loop jika sedang menunggu
+ if _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
  else
  -- Update isAscension = false untuk entry normal di RAID_LIVE
  for rid, entry in pairs(RAID_LIVE) do
@@ -6760,7 +6802,6 @@ task.spawn(function()
  if not channels then return end
 
  local function watchChannel(ch)
- if true then return end -- KODE PELUMPUH
  if not ch:IsA("TextChannel") then return end
  ch.ChildAdded:Connect(function(obj)
  if obj:IsA("TextChatMessage") then
@@ -6815,7 +6856,6 @@ task.spawn(function()
  if not ec then return end
 
  local function checkBodyText(lbl)
- if true then return end -- KODE PELUMPUH
  pcall(function()
  if not lbl:IsA("TextLabel") or lbl.Name ~= "BodyText" then return end
  local function read()
@@ -6926,8 +6966,9 @@ _WH.SendRaid = function(url)
 
  local normalRaids, atRaids = {}, {}
  for _, entry in ipairs(raidList) do
- local mn = (entry.mapId or 50000) - 50000
- local isAT = entry.isAT or (entry.raidId and entry.raidId >= 935001) or (mn >= 20)
+ -- [FIX Map 20] Gunakan flag isAscension dari entry, bukan mn >= 20
+ -- Map 20 normal (raidId positif) harus masuk normalRaids, bukan atRaids
+ local isAT = entry.isAscension == true or (entry.raidId and entry.raidId < 0) or (entry.raidId and entry.raidId >= 935001)
  if isAT then table.insert(atRaids, entry)
  else table.insert(normalRaids, entry) end
  end
@@ -7138,9 +7179,12 @@ RebuildRaidList = function()
   end
  end
  -- Sort: normal entries by mapId ascending, Ascension entries setelahnya
+ -- [FIX] Normalisasi isAscension ke boolean agar sort tidak invalid (nil ~= false = true)
  table.sort(sorted, function(a, b)
-  if a.isAscension ~= b.isAscension then
-   return not a.isAscension -- normal dulu
+  local aAsc = a.isAscension and true or false
+  local bAsc = b.isAscension and true or false
+  if aAsc ~= bAsc then
+   return not aAsc -- normal dulu
   end
   return (a.mapId or 0) < (b.mapId or 0)
  end)
@@ -7149,7 +7193,9 @@ RebuildRaidList = function()
  local mn = e.mapId and (e.mapId - 50000) or 0
  local lbl
  if e.isAscension then
-  lbl = "Ascension Tower "..mn.." ["..( e.grade or "?").."]"
+  -- [FIX] Tampilkan nama boss di label jika tersedia
+  local _bn = e.bossName and (e.bossName:gsub("^%l",string.upper)) or nil
+  lbl = "Ascension Tower "..mn..(_bn and (" - ".._bn) or "").." ["..(e.grade or "?").."]"
  else
   lbl = "Map "..mn.." - "..(MAP_NAMES[mn] or ("Map "..mn)).." - "..(RANK_LABEL[e.rank] or ("["..( e.spawnName or "?").."]")).." (ID:"..e.raidId..")"
  end
@@ -7160,6 +7206,7 @@ RebuildRaidList = function()
  mapId = e.mapId,
  spawnName = e.spawnName,
  isAscension = e.isAscension,
+ bossName = e.bossName, -- [FIX] nama boss Ascension Tower untuk prioritas scan
  })
  end
  if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
@@ -7187,14 +7234,38 @@ ParseRaidEntry = function(k, info)
  local mapName = MAP_NAMES[mapNum] or ("Map "..mapNum)
  local grade = (RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[raidId]) or (_runeGradeCache and _runeGradeCache[mapNum]) or "?"
  local rankLbl = grade ~= "?" and ("["..grade.."]") or "[?]"
+ -- [FIX Ascension] Preserve isAscension dan bossName dari entry chat yang sudah ada
+ -- (Chat parser buat entry negatif dulu, ParseRaidEntry replace dengan raidId asli dari server)
+ -- [FIX Map 20] Map 20 normal dan Ascension Tower 20 punya mapId/mapNum sama (50020/20)
+ -- Gunakan raidId > 0 sebagai penjaga: entry ini adalah raid NORMAL, jangan warisi isAscension
+ local _prevAsc = false
+ local _prevBossName = nil
+ -- Satu-satunya sumber kebenaran isAscension = entry negatif YANG MASIH ADA di RAID_LIVE.
+ -- Chat parser membuat RAID_LIVE[-(mapId)] saat notif Ascension Tower masuk.
+ -- Saat server kirim raidId asli, ParseRaidEntry replace entry temp itu dengan raidId positif.
+ -- JANGAN pakai _runeGradeCache negatif: cache itu persisten lintas batch,
+ -- akan salah mark RAID Normal sebagai Ascension di batch berikutnya.
+ local _ascCacheKey = -(mapId)
+ if RAID_LIVE[_ascCacheKey] and RAID_LIVE[_ascCacheKey].isAscension then
+  _prevAsc = true
+  _prevBossName = RAID_LIVE[_ascCacheKey].bossName
+  RAID_LIVE[_ascCacheKey] = nil -- hapus entry temp, ganti dengan raidId asli server
+ end
+ -- raidId positif dari server = RAID Normal, KECUALI entry temp Ascension di atas terpenuhi.
+ -- RAID Normal dan Ascension pakai mapId yang SAMA (50001-50020).
+ -- Pembeda satu-satunya adalah flag isAscension dari chat parser via entry negatif.
  RAID_LIVE[raidId] = {
  raidId = raidId,
  mapId = mapId,
  spawnName = spawnName,
  rank = rank,
  grade = grade,
+ isAscension = _prevAsc,
+ bossName = _prevBossName,
  endTime = info.endTime,
- label = "Map "..mapNum.." - "..mapName.." "..rankLbl,
+ label = _prevAsc
+  and ("Ascension Tower "..mapNum..(_prevBossName and (" - "..(_prevBossName:gsub("^%l",string.upper))) or "").." ["..grade.."]")
+  or ("Map "..mapNum.." - "..mapName.." "..rankLbl),
  }
 end
 end
@@ -7261,7 +7332,7 @@ end
 -- Child RaidEnterX muncul di RE1001/RE1002 = raid Map X buka
 local function _onRaidChildAdded(child, slotName)
  local mapNum = _parseRaidEnterName(child.Name)
- if not mapNum or mapNum < 1 or mapNum > 19 then return end -- Map 1-19 valid, AT (20+) diblokir
+ if not mapNum or mapNum < 1 or mapNum > 20 then return end -- Map 1-20 valid
  local mapId = 50000 + mapNum
  -- Cek sudah ada entry raidId asli untuk map ini
  for _, ent in pairs(RAID_LIVE) do
@@ -7269,25 +7340,40 @@ local function _onRaidChildAdded(child, slotName)
  end
  -- Buat entry sementara (tempKey negatif agar tidak bentrok raidId server)
  local tempKey = -(mapId)
+ -- [FIX] Preserve isAscension & bossName jika chat parser sudah buat entry Ascension di key ini
+ -- Chat notif bisa datang SEBELUM workspace event, jangan timpa flag isAscension-nya
+ local _prevIsAsc = false
+ local _prevBossName = nil
+ local _prevGrade = "?"
+ if RAID_LIVE[tempKey] and RAID_LIVE[tempKey].isAscension then
+  _prevIsAsc = true
+  _prevBossName = RAID_LIVE[tempKey].bossName
+  _prevGrade = RAID_LIVE[tempKey].grade or "?"
+ end
+ local _mn = mapNum
  RAID_LIVE[tempKey] = {
- raidId = tempKey,
- mapId = mapId,
- spawnName = slotName or "RE1001",
- rank = 0,
- grade = "?",
- endTime = nil,
- _tempEntry = true,
- label = "Map "..mapNum.." - "..(MAP_NAMES[mapNum] or "Map "..mapNum).." [?]",
+  raidId = tempKey,
+  mapId = mapId,
+  spawnName = slotName or "RE1001",
+  rank = 0,
+  grade = _prevGrade,
+  endTime = nil,
+  _tempEntry = true,
+  isAscension = _prevIsAsc,
+  bossName = _prevBossName,
+  label = _prevIsAsc
+   and ("Ascension Tower ".._mn..(_prevBossName and (" - "..(_prevBossName:gsub("^%l",string.upper))) or "").." [".._prevGrade.."]")
+   or ("Map ".._mn.." - "..(MAP_NAMES[_mn] or "Map ".._mn).." [?]"),
  }
  RebuildRaidList()
  if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+ if _prevIsAsc and _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
  -- [v271] Trigger webhook LANGSUNG saat raid muncul di workspace
- -- Tidak tunggu chat/TipsPanel - workspace adalah sumber tercepat
  if not _whSilent then
- task.spawn(function()
- task.wait(0.5) -- beri waktu RebuildRaidList selesai
- TriggerWebhookDebounce()
- end)
+  task.spawn(function()
+   task.wait(0.5)
+   TriggerWebhookDebounce()
+  end)
  end
 end
 
@@ -7307,7 +7393,6 @@ end
 
 -- Pasang watcher ke satu slot (RE1001 atau RE1002)
 local function _watchRaidSlot(reFolder)
- if true then return end -- KODE PELUMPUH
  if not reFolder then return end
  for _, child in ipairs(reFolder:GetChildren()) do
  _onRaidChildAdded(child, reFolder.Name)
@@ -7422,28 +7507,49 @@ ConnectRaidListeners = function()
  local rank = SPAWN_RANK[spawnName] or 0
  -- [v271] Grade dari RAID_CONFIG_GRADE (formula matematika, cover semua seri)
  local grade = (RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[raidId]) or (_runeGradeCache and _runeGradeCache[mapNum]) or "?"
- local tempKey = -(mapId)
+ local tempKey = -(mapId) -- key entry chat Ascension (negatif)
+ -- Detect isAscension: HANYA dari entry negatif yang masih hidup di RAID_LIVE (bukan runeGradeCache).
+ -- runeGradeCache negatif bersifat persisten lintas batch -> tidak aman sebagai sinyal isAscension.
+ local _isAsc = false
+ local _bnAsc = nil
+ if RAID_LIVE[tempKey] and RAID_LIVE[tempKey].isAscension then
+  -- Entry temp Ascension dari chat parser masih ada -> ini adalah Ascension Tower
+  _isAsc = true; _bnAsc = RAID_LIVE[tempKey].bossName
+ elseif RAID_LIVE[raidId] and RAID_LIVE[raidId].isAscension then
+  -- Entry sudah ada sebelumnya dan sudah di-mark Ascension -> preserve
+  _isAsc = true; _bnAsc = RAID_LIVE[raidId].bossName
+ end
+ -- Build label
+ local _lbl = _isAsc
+  and ("Ascension Tower "..mapNum..(_bnAsc and (" - "..(_bnAsc:gsub("^%l",string.upper))) or "").." ["..grade.."]")
+  or ("Map "..mapNum.." - "..(MAP_NAMES[mapNum] or "Map "..mapNum).." ["..grade.."](ID:"..raidId..")")
  local entryData = {
  raidId = raidId,
  mapId = mapId,
  spawnName = spawnName,
  rank = rank,
  grade = grade,
+ isAscension = _isAsc,
+ bossName = _bnAsc,
  endTime = info.endTime,
- label = "Map "..mapNum.." - "..(MAP_NAMES[mapNum] or "Map "..mapNum).." ["..grade.."](ID:"..raidId..")",
+ label = _lbl,
  }
- -- Kalau ada entry temp dari workspace, replace dengan raidId asli
+ -- Kalau ada entry temp Ascension dari chat (negatif), replace dengan raidId asli server
  if RAID_LIVE[tempKey] then
- RAID_LIVE[raidId] = entryData
- RAID_LIVE[tempKey] = nil
+  RAID_LIVE[raidId] = entryData
+  RAID_LIVE[tempKey] = nil
  elseif not RAID_LIVE[raidId] then
- -- Entry baru (workspace belum detect, atau AT)
- ParseRaidEntry(k, info)
+  -- Entry baru dari server: ParseRaidEntry handle ini (sudah fix, hanya cek tempKey)
+  ParseRaidEntry(k, info)
  else
- -- Sudah ada, update grade saja
- RAID_LIVE[raidId].grade = grade
- RAID_LIVE[raidId].rank = rank
- RAID_LIVE[raidId].label = entryData.label
+  -- Sudah ada entry: update grade/rank/label, preserve isAscension yang sudah true
+  RAID_LIVE[raidId].grade = grade
+  RAID_LIVE[raidId].rank = rank
+  RAID_LIVE[raidId].label = _lbl
+  if _isAsc then
+   RAID_LIVE[raidId].isAscension = true
+   if _bnAsc then RAID_LIVE[raidId].bossName = _bnAsc end
+  end
  end
  until true
  end
@@ -7519,7 +7625,9 @@ function StopRaid()
  _defaultRRIdx = 0 -- reset RR saat RAID habis
  RAID_ID_LIST = {}
  if _runeGradeCache then
- for k in pairs(_runeGradeCache) do _runeGradeCache[k] = nil end
+  -- Reset semua cache grade saat sesi RAID baru dimulai (StopRaid dipanggil sebelum StartRaid)
+  -- Ini memastikan batch notif lama tidak mencemari sesi baru
+  for k in pairs(_runeGradeCache) do _runeGradeCache[k] = nil end
  end
  if RebuildRaidList then pcall(RebuildRaidList) end
  -- [FIX] JANGAN reset setting user (difficulty/rune/grades/preferMaps) di sini!
@@ -7549,6 +7657,302 @@ function RaidCounterUpdate()
  if RAID.suksesLbl then RAID.suksesLbl.Text = tostring(RAID.sukses) end
 end
 
+-- ============================================================
+-- AUTO ASCENSION : LOGIC
+-- ============================================================
+function StopAscension()
+ ASC.running = false
+ ASC.inMap   = false
+ if ASC.thread then
+  pcall(function() task.cancel(ASC.thread) end)
+  ASC.thread = nil
+ end
+ if _ascWakeup then
+  pcall(function() _ascWakeup:Destroy() end)
+  _ascWakeup = nil
+ end
+end
+
+function AscStatusUpdate(msg, color)
+ if ASC.statusLbl then
+  ASC.statusLbl.Text = msg
+  ASC.statusLbl.TextColor3 = color or Color3.fromRGB(255,200,100)
+ end
+ if ASC.dot then
+  ASC.dot.BackgroundColor3 = color or Color3.fromRGB(100,100,100)
+ end
+end
+
+function AscCounterUpdate()
+ if ASC.suksesLbl then ASC.suksesLbl.Text = tostring(ASC.sukses) end
+end
+
+-- Helper: ambil semua entry Ascension dari RAID_LIVE (sorted)
+local function GetAscensionList()
+ local list = {}
+ for rid, ent in pairs(RAID_LIVE) do
+  if ent.isAscension == true then
+   -- Resolve raidId positif jika entry chat (negatif)
+   local resolvedId = rid
+   if rid < 0 then
+    -- Cari raidId positif dari RAID_LIVE yang sama mapId & isAscension
+    for rid2, ent2 in pairs(RAID_LIVE) do
+     if rid2 > 0 and ent2.isAscension and ent2.mapId == ent.mapId then
+      resolvedId = rid2; break
+     end
+    end
+    -- Jika masih negatif, berarti raidId dari server belum datang
+    -- Gunakan nilai absolut sebagai ID sementara supaya CreateRaidTeam bisa dicoba
+    -- (server akan reject jika ID tidak valid, dan loop akan retry)
+    if resolvedId < 0 then resolvedId = math.abs(resolvedId) end
+   end
+   local mn = (ent.mapId or 50000) - 50000
+   -- [manual] filter grade jika pickMode manual & ada grade dipilih
+   local gradeOk = true
+   if ASC.pickMode == "manual" and next(ASC.runeGrades) then
+    local g = ent.grade or "?"
+    gradeOk = ASC.runeGrades[g] == true
+   end
+   if gradeOk then
+    table.insert(list, {
+     id      = resolvedId,
+     rawId   = rid,
+     mapId   = ent.mapId,
+     mapNum  = mn,
+     grade   = ent.grade or "?",
+     bossName= ent.bossName,
+     isAscension = true,
+    })
+   end
+  end
+ end
+ return list
+end
+
+function StartAscensionLoop()
+ StopAscension()
+ ASC.running = true
+ ASC.sukses  = 0
+ AscCounterUpdate()
+ if _ascWakeup then pcall(function() _ascWakeup:Destroy() end) end
+ _ascWakeup = Instance.new("BindableEvent")
+
+ AscStatusUpdate("Siap. Menunggu Ascension Tower...", Color3.fromRGB(180,180,60))
+
+ ASC.thread = task.spawn(function()
+  while ASC.running do
+   repeat
+
+    -- Tunggu ada Ascension Tower di RAID_LIVE
+    local ascList = GetAscensionList()
+    if #ascList == 0 then
+     -- Jika Auto Raid aktif → dia yang fallback, Ascension cukup standby
+     if RAID.running then
+      AscStatusUpdate("[Standby] Auto Raid fallback - tunggu Ascension Tower...", Color3.fromRGB(140,100,200))
+     else
+      AscStatusUpdate("Menunggu Ascension Tower...", Color3.fromRGB(140,140,60))
+     end
+     -- Tunggu max 30s, bisa di-wakeup oleh chat parser
+     local _woken = false
+     local _wConn
+     if _ascWakeup then
+      _wConn = _ascWakeup.Event:Connect(function() _woken = true end)
+     end
+     local _wt = 0
+     while not _woken and _wt < 30 and ASC.running do
+      task.wait(1); _wt = _wt + 1
+      ascList = GetAscensionList()
+      if #ascList > 0 then _woken = true end
+     end
+     if _wConn then pcall(function() _wConn:Disconnect() end) end
+     if not ASC.running then break end
+     ascList = GetAscensionList()
+     if #ascList == 0 then break end
+    end
+
+    -- Pick entry berdasarkan pickMode
+    local pm = ASC.pickMode or "easy"
+    local raidEntry = nil
+    if pm == "easy" then
+     -- Tower mapNum terendah
+     table.sort(ascList, function(a,b) return a.mapNum < b.mapNum end)
+     raidEntry = ascList[1]
+    elseif pm == "hard" then
+     -- Tower mapNum tertinggi
+     table.sort(ascList, function(a,b) return a.mapNum > b.mapNum end)
+     raidEntry = ascList[1]
+    else -- manual
+     -- Pilih mapNum terendah dari yang lolos filter grade
+     table.sort(ascList, function(a,b) return a.mapNum < b.mapNum end)
+     raidEntry = ascList[1]
+    end
+
+    if not raidEntry then break end
+
+    local mn = raidEntry.mapNum
+    local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
+    AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
+
+    -- Pause jika Dungeon / Siege / ST2 sedang jalan (hormat prioritas global)
+    if MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt) then
+     AscStatusUpdate("[||] Dungeon aktif - tunggu...", Color3.fromRGB(255,140,0))
+     while (MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt)) and ASC.running do task.wait(0.5) end
+     if not ASC.running then break end
+    end
+    if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
+     AscStatusUpdate("[||] Siege aktif - tunggu...", Color3.fromRGB(255,140,0))
+     while ((SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt) and ASC.running do task.wait(0.5) end
+     if not ASC.running then break end
+    end
+    if ST2 and (ST2.running or ST2.inMap) then
+     AscStatusUpdate("[||] Tower aktif - tunggu...", Color3.fromRGB(255,140,0))
+     while ST2 and (ST2.running or ST2.inMap) and ASC.running do task.wait(0.5) end
+     if not ASC.running then break end
+    end
+
+    -- Blokir jika sudah di dalam map raid/tower/siege
+    local curWm = workspace:GetAttribute("MapId") or 0
+    if (curWm >= 50101 and curWm <= 50120) or (curWm >= 50201 and curWm <= 50205) or curWm >= 50300 then
+     AscStatusUpdate("[||] Sedang di dalam map lain...", Color3.fromRGB(255,140,0))
+     task.wait(3); break
+    end
+
+    ASC.inMap = true
+
+    -- STEP: CreateRaidTeam + StartChallengeRaidMap
+    -- Ascension Tower pakai mapId normal (50000+mn) -> area = +100 (50100+mn)
+    local targetMapId = raidEntry.mapId + 100
+    if RE.CreateRaidTeam then
+     pcall(function() RE.CreateRaidTeam:InvokeServer(raidEntry.id) end)
+    end
+    task.wait(0.2)
+    if not ASC.running then ASC.inMap = false; break end
+
+    -- [manual] Rune Map Override (opsional)
+    if pm == "manual" and ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then
+     local RUNE_IDS = {
+      [1]=10265,[2]=10266,[3]=10267,[4]=10268,[5]=10269,[6]=10314,[7]=10315,[8]=10316,
+      [9]=10357,[10]=10358,[11]=10359,[12]=10360,[13]=10361,[14]=10362,[15]=10363,[16]=10364,[17]=10365,[18]=10366,
+     }
+     local itemId = RUNE_IDS[ASC.runeMapTarget]
+     if itemId and RE.UseRaidItem then
+      pcall(function() RE.UseRaidItem:FireServer(itemId) end)
+      task.wait(0.2)
+      targetMapId = 50100 + ASC.runeMapTarget
+     end
+    end
+
+    local _cfail = false
+    local _cfConn
+    local _cfRe = Remotes:FindFirstChild("ChallengeRaidsFail")
+    if _cfRe then _cfConn = _cfRe.OnClientEvent:Connect(function() _cfail = true end) end
+
+    if RE.StartChallengeRaidMap then
+     pcall(function() RE.StartChallengeRaidMap:FireServer({mapId = targetMapId}) end)
+    end
+
+    -- Tunggu masuk map (max 10s)
+    local _serverMap = nil
+    local _tpOk = false
+    local _tpW  = 0
+    while not _tpOk and _tpW < 15 and ASC.running and not _cfail do
+     task.wait(0.3); _tpW = _tpW + 0.3
+     pcall(function()
+      local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId")
+      -- [FIX] Ascension Tower masuk ke range map yang sama dengan RAID normal (50101-50120)
+      -- Server tidak beda-bedakan mapId antara Normal Raid dan Ascension Tower
+      if wm and wm >= 50101 and wm <= 50120 then
+       _serverMap = wm; _tpOk = true
+      end
+     end)
+     if not _tpOk and #GetEnemies() > 0 then _tpOk = true end
+    end
+    if _cfConn then pcall(function() _cfConn:Disconnect() end) end
+
+    if not _tpOk or _cfail then
+     -- Expired / gagal masuk
+     RAID_LIVE[raidEntry.rawId] = nil
+     if raidEntry.rawId ~= raidEntry.id then RAID_LIVE[raidEntry.id] = nil end
+     if RebuildRaidList then pcall(RebuildRaidList) end
+     ASC.inMap = false
+     AscStatusUpdate("Gagal masuk Tower - tunggu...", Color3.fromRGB(255,80,80))
+     task.wait(2); break
+    end
+
+    -- STEP: Dalam map - tunggu boss / attack
+    AscStatusUpdate("[~] Dalam Tower "..mn.."...", Color3.fromRGB(100,200,255))
+    task.wait(ASC.bossDelay or 3)
+
+    -- Cari boss dan serang (reuse logika dari Auto Raid)
+    if ASC.autoKillBoss then
+     local _bDone = false
+     local function IsBossAsc()
+      local char = LP.Character
+      local hrp = char and char:FindFirstChild("HumanoidRootPart")
+      if not hrp then return false end
+      for _, obj in ipairs(workspace:GetDescendants()) do
+       if obj:IsA("Model") and obj:GetAttribute("IsBoss") then return true end
+       if obj.Name:lower():find("boss") and obj:IsA("Model") then return true end
+      end
+      return false
+     end
+     local _bTimeout = 0
+     while not _bDone and _bTimeout < 60 and ASC.running do
+      task.wait(1); _bTimeout = _bTimeout + 1
+      local enemies = GetEnemies()
+      if #enemies > 0 then
+       local tgt = enemies[1]
+       pcall(function()
+        if RE.Click then RE.Click:FireServer(tgt:GetAttribute("GUID") or "") end
+       end)
+       for _, hg in ipairs(HERO_GUIDS) do
+        pcall(function()
+         if RE.HeroUseSkill then RE.HeroUseSkill:FireServer({heroGuid=hg, targetGuid=tgt:GetAttribute("GUID") or ""}) end
+        end)
+       end
+      else
+       _bDone = true
+      end
+     end
+    else
+     -- Tanpa autoKillBoss: tunggu map selesai sendiri
+     local _doneW = 0
+     while ASC.running and _doneW < 90 do
+      task.wait(1); _doneW = _doneW + 1
+      local wm = workspace:GetAttribute("MapId") or 0
+      if wm == 0 or (wm >= 50001 and wm <= 50020) then break end
+     end
+    end
+
+    -- Collect reward
+    if RaidCollectAll then pcall(RaidCollectAll) end
+    task.wait(0.5)
+    if RE.GainRaidsRewards then pcall(function() RE.GainRaidsRewards:FireServer(1) end) end
+    task.wait(0.5)
+
+    -- Hapus entry dari RAID_LIVE (sudah selesai)
+    RAID_LIVE[raidEntry.rawId] = nil
+    if raidEntry.rawId ~= raidEntry.id then RAID_LIVE[raidEntry.id] = nil end
+    if RebuildRaidList then pcall(RebuildRaidList) end
+
+    ASC.inMap  = false
+    ASC.sukses = ASC.sukses + 1
+    AscCounterUpdate()
+    AscStatusUpdate("Tower "..mn.." selesai! ("..ASC.sukses.."x)", Color3.fromRGB(110,231,183))
+    task.wait(3)
+
+   until true
+  end -- while ASC.running
+
+  ASC.running = false
+  ASC.inMap   = false
+  _ascOn      = false
+  AscStatusUpdate("Auto Ascension STOP", Color3.fromRGB(160,148,135))
+  if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
+ end)
+end
+
+-- ============================================================
 -- [v73 FIX] RaidCollectAll - scan lebih agresif:
 -- 1. Scan semua folder reward yang mungkin
 -- 2. Scan workspace root langsung (ada item yang tidak di-folder)
@@ -7602,11 +8006,34 @@ function RaidCollectAll()
  end
 end
 
+-- [FIX GODMODE] Helper: baca mapId player saat ini secara realtime
+local function GetCurrentMapId()
+ local ok, wm = pcall(function()
+  return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+ end)
+ return (ok and type(wm) == "number") and wm or nil
+end
+
+-- [FIX GODMODE] Helper: player posisi realtime
+local function GetPlayerPos()
+ local char = LP and LP.Character
+ local hrp = char and char:FindFirstChild("HumanoidRootPart")
+ return hrp and hrp.Position or nil
+end
+
 -- Scan enemy/boss di workspace
 -- [GODMODE FIX] Relax filter jarak, tambah fallback scan seluruh workspace
+-- [GODMODE FIX 2] Validasi mapId realtime - pastikan player di dalam raid map
 function GetRaidEnemies()
  local list = {}
  local seen = {}
+
+ -- [FIX] Validasi: player harus berada di raid map (50101-50120)
+ -- Jika player sudah keluar ke basemap atau map lain, return list kosong
+ local currentMapId = GetCurrentMapId()
+ if currentMapId and (currentMapId < 50101 or currentMapId > 50120) then
+  return list -- player bukan di raid map, jangan ambil enemy apapun
+ end
 
  local activeMapId = RAID and RAID.serverMapId
  local spawnPos = activeMapId and RAID_SPAWN_POS and RAID_SPAWN_POS[activeMapId]
@@ -7857,6 +8284,32 @@ function StartRaidLoop()
  task.wait(0.1)
  end
 
+ -- [FIX v46] Cek Ascension Mode sedang di dalam map - pause Auto Raid
+ if ASC.inMap then
+ RAID.inMap = false
+ RaidStatusUpdate("[||] Ascension Tower aktif - Auto Raid pause...", Color3.fromRGB(180,100,255))
+ while ASC.inMap and RAID.running do
+  task.wait(0.5)
+ end
+ if not RAID.running then break end
+ RaidStatusUpdate("> Ascension selesai - lanjut raid...", C.ACC3)
+ task.wait(0.1)
+ end
+
+ -- [FIX v46] Fallback logic: jika Ascension Mode aktif DAN ada Ascension Tower tersedia,
+ -- Auto Raid mengalah dan menunggu Ascension Mode selesai menangani Tower.
+ -- Auto Raid hanya jalan jika: Ascension Mode OFF, atau Ascension Mode ON tapi tidak ada Tower.
+ if ASC.running and #GetAscensionList() > 0 then
+ RAID.inMap = false
+ RaidStatusUpdate("[||] Ascension Tower tersedia - menunggu Ascension Mode...", Color3.fromRGB(180,100,255))
+ while ASC.running and #GetAscensionList() > 0 and RAID.running do
+  task.wait(1)
+ end
+ if not RAID.running then break end
+ RaidStatusUpdate("> Tidak ada Ascension Tower - Auto Raid ambil alih...", C.ACC3)
+ task.wait(0.1)
+ end
+
  -- [FIX] Cek Siege - pause Auto Raid selama player di dalam Siege map
  if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
  RAID.inMap = false
@@ -7874,23 +8327,22 @@ function StartRaidLoop()
  -- sehingga kalau user ganti setting di tengah, iterasi berikutnya langsung ikut
 local function ResolveEntry()
                 if #RAID_ID_LIST == 0 then return nil end
-                -- [Ascension Mode] Filter helper: cek apakah entry sesuai mode
+                -- [v46] Auto Raid selalu filter Normal saja (Ascension ditangani Auto Ascension)
                 local function _ascFilter(entry)
                     if not entry then return false end
-                    -- isAscension sudah diisi RebuildRaidList dari RAID_LIVE
-                    local isAsc = entry.isAscension == true
-                    if not isAsc then
-                        -- id bisa negatif (Ascension) atau positif (Normal)
-                        local live = entry.id and RAID_LIVE[entry.id]
-                        if live then isAsc = live.isAscension == true end
+                    -- Cek flag isAscension dari entry RAID_ID_LIST itu sendiri
+                    if entry.isAscension == true then return false end
+                    -- Cek dari RAID_LIVE via id entry
+                    local live = entry.id and RAID_LIVE[entry.id]
+                    if live and live.isAscension == true then return false end
+                    -- Safety net: cek RAID_LIVE[-(mapId)] - entry chat Ascension yang belum di-resolve
+                    if entry.mapId then
+                        local chatKey = -(entry.mapId)
+                        local chatEnt = RAID_LIVE[chatKey]
+                        if chatEnt and chatEnt.isAscension == true then return false end
                     end
-                    -- [FIX] Jika id negatif maka pasti Ascension (raidId negatif = Ascension entry)
-                    if entry.id and entry.id < 0 then isAsc = true end
-                    if RAID.ascensionMode then
-                        return isAsc
-                    else
-                        return not isAsc
-                    end
+                    -- Lolos semua cek = RAID Normal
+                    return true
                 end
                 local _now0 = os.time()
                 local _pruned0 = false
@@ -8368,23 +8820,31 @@ local function ResolveEntry()
  -- 
  RaidStatusUpdate("[~] Waiting...", Color3.fromRGB(180,100,255))
  local _tpOk = false
+ local _mapIdOk = false
  local _tpWait = 0
- while not _tpOk and _tpWait < 10 and RAID.running do
- task.wait(0.3); _tpWait = _tpWait + 0.3
- pcall(function()
- local wMapId = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
- if wMapId then
- if RAID.serverMapId and wMapId == RAID.serverMapId then
- _tpOk = true
- elseif RAID.runeEnabled then
- local ok = (wMapId >= 50101 and wMapId <= 50118)
- if ok then RAID.serverMapId = wMapId; _tpOk = true end
- elseif (wMapId >= 50101 and wMapId <= 50118) then
- _tpOk = true
- end
- end
- end)
- if not _tpOk and #GetEnemies() > 0 then _tpOk = true end
+ -- [FIX] Dua kondisi WAJIB sebelum lanjut:
+ -- 1. workspace.MapId sudah masuk range raid (50101-50120)
+ -- 2. Ada enemy yang sudah spawn di workspace (GetRaidEnemies > 0)
+ -- Mencegah TP ke boss saat map masih loading dan enemy belum ada
+ while not _tpOk and _tpWait < 15 and RAID.running do
+  task.wait(0.3); _tpWait = _tpWait + 0.3
+  pcall(function()
+   local wMapId = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+   if wMapId then
+    if RAID.serverMapId and wMapId == RAID.serverMapId then
+     _mapIdOk = true
+    elseif RAID.runeEnabled then
+     local ok = (wMapId >= 50101 and wMapId <= 50120)
+     if ok then RAID.serverMapId = wMapId; _mapIdOk = true end
+    elseif (wMapId >= 50101 and wMapId <= 50120) then
+     _mapIdOk = true
+    end
+   end
+  end)
+  local _enemyReady = #GetRaidEnemies() > 0
+  if _mapIdOk and _enemyReady then _tpOk = true end
+  -- Fallback: enemy sudah ada tapi MapId belum update setelah 3s
+  if not _mapIdOk and _enemyReady and _tpWait >= 3 then _tpOk = true end
  end
 
  if not _tpOk and RAID.running then
@@ -8465,7 +8925,7 @@ local function ResolveEntry()
  "yogumunt","monarch of transfiguration","transfiguration",
  "antares","ashborn","dominion","absolute","monarch","fragment","boss",
  "legendary super saiyan","broly",
- "goku[super4]",
+ "goku[super4]","goku super4","goku super 4",
  }
  local function IsBossEarly(name)
  local n = name:lower()
@@ -8473,18 +8933,38 @@ local function ResolveEntry()
  return false
  end
 
- while _loadWait < 6 and RAID.running and not RAID._raidDone do
+ -- [FIX Ascension] Ambil hint bossName dari raidEntry sedini mungkin untuk early detect
+ local _earlyAscHint = (raidEntry and raidEntry.isAscension and raidEntry.bossName) or nil
+ local function IsBossEarlyWithHint(name)
+  local n = name:lower()
+  if _earlyAscHint and n:find(_earlyAscHint, 1, true) then return true end
+  return IsBossEarly(name)
+ end
+
+ while _loadWait < 8 and RAID.running and not RAID._raidDone do
  task.wait(0.5); _loadWait = _loadWait + 0.5
  -- Mulai cari boss sejak detik ke-1 (bukan ke-2)
  if _loadWait >= 1 and not _earlyBoss then
- for _, e in ipairs(GetRaidEnemies()) do
- -- [FIX] Gunakan IsBoss yang sama - bukan keyword campuran yang kurang akurat
- if IsBossEarly(e.model.Name) then
- _earlyBoss = e; break
+  for _, e in ipairs(GetRaidEnemies()) do
+   -- [FIX] Gunakan IsBossEarlyWithHint - sadar hint nama boss Ascension Tower
+   if IsBossEarlyWithHint(e.model.Name) then
+    _earlyBoss = e; break
+   end
+  end
  end
+ -- [FIX] Jangan break hanya karena boss terdeteksi - validasi posisinya juga
+ -- Boss yang baru spawn sering punya posisi Y tidak valid (masih falling/loading)
+ if _earlyBoss then
+  local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
+  -- Posisi valid: Y > -200, magnitude > 1 (bukan 0,0,0), dan sudah stabil (>= 1.5s)
+  if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then
+   break -- Boss terdeteksi DAN posisinya sudah valid
+  end
+  -- Belum valid: reset earlyBoss agar dicari ulang di iterasi berikut
+  if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then
+   _earlyBoss = nil -- posisi buruk, cari ulang
+  end
  end
- end
- if _earlyBoss then break end -- Boss ketemu lebih awal, langsung lanjut
  end
 
  if RAID.running and not RAID._raidDone and RAID.autoKillBoss then
@@ -8498,7 +8978,7 @@ local function ResolveEntry()
  -- Map 19 Dragon Ball City
  "legendary super saiyan","broly",
  -- Goku Super Saiyan 4
- "goku[super4]",
+ "goku[super4]","goku super4","goku super 4",
  }
  local function IsBoss(name)
  local n = name:lower()
@@ -8506,8 +8986,30 @@ local function ResolveEntry()
  return false
  end
 
+ -- [FIX Ascension] Ambil bossName hint dari raidEntry jika Ascension Tower
+ -- Nama boss sudah diketahui dari teks notifikasi -> pakai sebagai filter prioritas tertinggi
+ local _ascHintName = nil
+ if raidEntry and raidEntry.isAscension and raidEntry.bossName then
+  _ascHintName = raidEntry.bossName -- lowercase, misal "frostborne"
+ end
+
+ -- Helper IsBoss yang sadar Ascension hint
+ local function IsBossWithHint(name)
+  local n = name:lower()
+  -- Jika ada hint nama boss Ascension, prioritaskan kecocokan tepat
+  if _ascHintName then
+   if n:find(_ascHintName, 1, true) then return true end
+  end
+  return IsBoss(name)
+ end
+
  -- Pakai boss dari early detection kalau sudah ada DAN valid
- local boss = (_earlyBoss and IsBoss(_earlyBoss.model.Name)) and _earlyBoss or nil
+ local boss = (_earlyBoss and IsBossWithHint(_earlyBoss.model.Name)) and _earlyBoss or nil
+ -- Juga retry dengan IsBossWithHint jika early boss ditolak IsBoss tapi cocok dengan hint
+ if not boss and _earlyBoss and _ascHintName then
+  local n = _earlyBoss.model.Name:lower()
+  if n:find(_ascHintName, 1, true) then boss = _earlyBoss end
+ end
 
  -- [GODMODE FIX] Tingkatkan timeout: 15s -> 30s, scan lebih agresif tiap 0.3s
  -- Tambah retry: jika folder kosong, tunggu folder muncul via ChildAdded
@@ -8518,7 +9020,7 @@ local function ResolveEntry()
  local _bossEventConns = {}
  local function _tryAddBossFromObj(obj)
  if boss or not obj:IsA("Model") then return end
- if IsBoss(obj.Name) then
+ if IsBossWithHint(obj.Name) then
  local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
  local hrp = obj:FindFirstChild("HumanoidRootPart")
  local hum = obj:FindFirstChildOfClass("Humanoid")
@@ -8528,7 +9030,7 @@ local function ResolveEntry()
  end
  end
  end
- for _, fname in ipairs({"Enemys","Boss","RaidBoss","Bosses","Enemy","Enemies","RaidEnemys","Monsters"}) do
+ for _, fname in ipairs({"Bosses","Boss","RaidBoss","Enemys","Enemy","Enemies","RaidEnemys","Monsters"}) do
  local folder = workspace:FindFirstChild(fname)
  if folder then
  table.insert(_bossEventConns, folder.ChildAdded:Connect(_tryAddBossFromObj))
@@ -8549,7 +9051,7 @@ local function ResolveEntry()
 
  while RAID.running and not boss and waitBoss < 30 and not RAID._raidDone do
  for _, e in ipairs(GetRaidEnemies()) do
- if IsBoss(e.model.Name) then boss = e; break end
+ if IsBossWithHint(e.model.Name) then boss = e; break end
  end
  if not boss then
  RaidStatusUpdate("Find Boss... (" .. math.floor(waitBoss) .. "s/30s)", Color3.fromRGB(160,148,135))
@@ -8585,9 +9087,23 @@ local function ResolveEntry()
  -- [v259] Teleport delay user-controlled (RAID.bossDelay 1-10s)
  local _bd = math.max(1, math.min(10, RAID.bossDelay or 3))
  for _ci = _bd, 1, -1 do
- if not RAID.running or RAID._raidDone then break end
- RaidStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ".._ci.."s...", Color3.fromRGB(255,160,60))
- task.wait(1)
+  if not RAID.running or RAID._raidDone then break end
+  RaidStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ".._ci.."s...", Color3.fromRGB(255,160,60))
+  task.wait(1)
+ end
+ -- [FIX] Refresh bossPos SETELAH countdown - posisi boss saat countdown mungkin belum stabil
+ -- Boss yang baru spawn butuh beberapa detik sebelum posisinya final di terrain
+ local _refreshWait = 0
+ bossPos = GetSafeBossPos()
+ while not bossPos and _refreshWait < 3 and RAID.running and not RAID._raidDone do
+  task.wait(0.3); _refreshWait = _refreshWait + 0.3
+  bossPos = GetSafeBossPos()
+ end
+ -- Validasi tambahan: pastikan posisi Y cukup tinggi (bukan void/jurang)
+ if bossPos and bossPos.Y < -100 then
+  RaidStatusUpdate("[!] Posisi boss terlalu rendah - tunggu stabilisasi...", Color3.fromRGB(255,160,60))
+  task.wait(1)
+  bossPos = GetSafeBossPos()
  end
  if RAID.running and not RAID._raidDone and bossPos then
  RaidStatusUpdate("[K] Boss: " .. boss.model.Name .. " - Attack!", Color3.fromRGB(255,80,80))
@@ -8674,6 +9190,9 @@ local function ResolveEntry()
  -- 6) Background thread: TP player+hero terus ke boss tiap 0.5s
  local _tpTh = task.spawn(function()
  while RAID.running and not RAID._raidDone do
+ -- [FIX GODMODE] Stop TP jika player sudah keluar dari raid map
+ local _tpMap = GetCurrentMapId()
+ if _tpMap and (_tpMap < 50101 or _tpMap > 50120) then break end
  pcall(function()
  -- [FIX] Selalu ambil posisi live dari boss.hrp, validasi Y sebelum TP
  -- Jangan pernah fallback ke bossPos lama yang mungkin sudah tidak valid
@@ -8714,6 +9233,13 @@ local function ResolveEntry()
  -- 7) SERANG BOSS - langsung tanpa jeda
  RaidStatusUpdate("[FLa] Attack: " .. boss.model.Name, Color3.fromRGB(255,80,80))
  while RAID.running and not RAID._raidDone do
+ -- [FIX GODMODE] Validasi realtime: player harus masih di raid map (50101-50120)
+ -- Jika sudah keluar ke basemap, stop serang boss
+ local _curMap = GetCurrentMapId()
+ if _curMap and (_curMap < 50101 or _curMap > 50120) then
+  RaidStatusUpdate("[!] Player keluar raid map - stop attack boss", Color3.fromRGB(255,140,0))
+  break
+ end
  if not boss.model or not boss.model.Parent then break end
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
  if hum and hum.Health <= 0 then break end
@@ -8733,7 +9259,7 @@ local function ResolveEntry()
  local _lastChance = nil
  pcall(function()
  for _, obj in ipairs(workspace:GetDescendants()) do
- if obj:IsA("Model") and IsBoss(obj.Name) then
+ if obj:IsA("Model") and IsBossWithHint(obj.Name) then
  local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
  local hrp = obj:FindFirstChild("HumanoidRootPart")
  local hum = obj:FindFirstChildOfClass("Humanoid")
@@ -8744,19 +9270,16 @@ local function ResolveEntry()
  end
  end)
  if _lastChance and RAID.running and not RAID._raidDone then
- -- Dapat dari last chance scan
+ -- Dapat dari last chance scan, set boss dan lanjut ke serangan
  boss = _lastChance
  RaidStatusUpdate("[!] Boss found (last chance): " .. boss.model.Name, Color3.fromRGB(255,200,50))
- -- lanjut ke serangan via goto workaround: set boss dan re-enter attack block
- -- karena Lua tidak punya goto, kita re-trigger logika serangan inline
- goto BOSS_ATTACK
  end
- if RAID.running then
+ -- Jika masih tidak ada boss setelah last chance, keluar
+ if not boss and RAID.running then
  RaidStatusUpdate("[FLa] Boss not found (30s) - Go Out...", Color3.fromRGB(255,150,50))
  task.wait(3)
  end
  end -- if boss
- ::BOSS_ATTACK::
  elseif RAID.running and not RAID._raidDone then
  -- Auto Kill Boss OFF - tunggu event ChallengeRaidsSuccess max 5 menit
  local _wt = 0
@@ -9748,29 +10271,6 @@ do
  end
  end)
 
- --  ASCENSION MODE TOGGLE 
- local ascRow=Frame(raidInner,C.SURFACE,UDim2.new(1,0,0,44))
- ascRow.LayoutOrder=18; Corner(ascRow,10); Stroke(ascRow,C.BORD,1.5,0.3)
- local ascL=Label(ascRow,"Ascension Mode",13,C.TXT,Enum.Font.GothamBold)
- ascL.Size=UDim2.new(1,-68,0,20); ascL.Position=UDim2.new(0,14,0.5,-10)
- local ascSubL=Label(ascRow,"Normal / Ascension",10,C.TXT3,Enum.Font.Gotham)
- ascSubL.Size=UDim2.new(1,-68,0,14); ascSubL.Position=UDim2.new(0,14,0.5,12)
- local ascPill=Btn(ascRow,C.PILL_OFF,UDim2.new(0,52,0,30))
- ascPill.AnchorPoint=Vector2.new(1,0.5); ascPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascPill,13)
- local ascKnob=Frame(ascPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
- ascKnob.AnchorPoint=Vector2.new(0,0.5); ascKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascKnob,10)
- local function SetAscToggle(on)
- RAID.ascensionMode=on
- TweenService:Create(ascPill,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
- TweenService:Create(ascKnob,TweenInfo.new(0.16),{
- Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
- BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
- }):Play()
- ascSubL.Text=on and "Hanya Ascension" or "Hanya Normal"
- ascSubL.TextColor3=on and C.ACC2 or C.TXT3
- end
- ascPill.MouseButton1Click:Connect(function() SetAscToggle(not RAID.ascensionMode) end)
-
  --  APPLY PICK MODE LOCK 
  -- Lock/unlock field berdasarkan Pick Mode
  -- Tampilkan gembok pada field yang terkunci
@@ -9902,8 +10402,7 @@ do
    pcall(function() gradeDDLbl.Text = " Target: ["..RAID.updownTargetGrade.."]"; gradeDDLbl.TextColor3 = C.ACC2 end)
   end
   RAID.autoKillBoss = killBoss
-  RAID.ascensionMode = ascMode
-  if SetAscToggle then pcall(SetAscToggle, ascMode) end
+  RAID.ascensionMode = ascMode -- [DEPRECATED] agar config lama tidak error
   TweenService:Create(bPill, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundColor3=killBoss and C.PILL_ON or C.PILL_OFF}):Play()
   TweenService:Create(bKnob, TweenInfo.new(0.16), {
    Position=killBoss and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
@@ -9923,8 +10422,716 @@ do
   end
  end
 
-end
+end -- end Auto Raid do block
 
+
+-- ============================================================
+-- PANEL : AUTOMATION - Auto Ascension [v46 NEW]
+-- ============================================================
+do
+ local p = Panels["autoraid"] -- reuse panel yg sudah dibuat oleh Auto Raid (JANGAN NewPanel lagi!)
+
+ -- ACCORDION HEADER
+ local ascOpen = false
+ local ascHeader = Btn(p, C.SURFACE, UDim2.new(1,0,0,42))
+ ascHeader.LayoutOrder = 3 -- setelah Auto Raid (LayoutOrder 1=header, 2=body)
+ Corner(ascHeader, 10)
+ -- Border warna emas/kuning untuk beda dari Auto Raid
+ New("UIStroke",{Parent=ascHeader, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.35})
+ local ascArr = Label(ascHeader, ">", 13, Color3.fromRGB(220,180,50), Enum.Font.GothamBold)
+ ascArr.Size = UDim2.new(0,22,1,0); ascArr.Position = UDim2.new(0,10,0,0)
+ local ascHeaderLbl = Label(ascHeader, "Auto RAID Ascension", 14, C.TXT, Enum.Font.GothamBold)
+ ascHeaderLbl.Size = UDim2.new(1,-50,1,0); ascHeaderLbl.Position = UDim2.new(0,34,0,0)
+
+ local ascBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
+ ascBody.LayoutOrder = 4
+ ascBody.ClipsDescendants = true
+ Corner(ascBody, 10)
+ New("UIStroke",{Parent=ascBody, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.25})
+ ascBody.Visible = false
+
+ local ascInner = Frame(ascBody, C.BLACK, UDim2.new(1,-16,0,0))
+ ascInner.BackgroundTransparency = 1; ascInner.Position = UDim2.new(0,8,0,8)
+ local ascLayout = New("UIListLayout",{Parent=ascInner, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
+
+ local function ResizeAscBody()
+  task.spawn(function()
+   task.wait(0)
+   ascLayout:ApplyLayout()
+   local h = ascLayout.AbsoluteContentSize.Y + 16
+   ascInner.Size = UDim2.new(1,0,0,h)
+   ascBody.Size = UDim2.new(1,0,0,h+16)
+  end)
+ end
+
+ ascHeader.MouseButton1Click:Connect(function()
+  ascOpen = not ascOpen; ascBody.Visible = ascOpen
+  ascArr.Text = ascOpen and "v" or ">"
+  if ascOpen then task.defer(ResizeAscBody) end
+ end)
+
+ -- ROW 1: STATUS
+ local aStatusCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,38))
+ aStatusCard.LayoutOrder = 1; Corner(aStatusCard,10); Stroke(aStatusCard,C.BORD,1.5,0.3); Padding(aStatusCard,6,6,10,10)
+ local _ascDot = Frame(aStatusCard, Color3.fromRGB(100,100,100), UDim2.new(0,9,0,9))
+ _ascDot.AnchorPoint = Vector2.new(0,0.5); _ascDot.Position = UDim2.new(0,0,0.5,0); Corner(_ascDot,5)
+ ASC.dot = _ascDot
+ local _ascStKeyL = Label(aStatusCard,"Status",11,C.TXT3,Enum.Font.GothamBold)
+ _ascStKeyL.Size = UDim2.new(0,54,1,0); _ascStKeyL.Position = UDim2.new(0,16,0,0)
+ local _ascStatusLbl = Label(aStatusCard,"Disabled",11,Color3.fromRGB(160,148,135),Enum.Font.GothamBold)
+ _ascStatusLbl.Size = UDim2.new(1,-76,1,0); _ascStatusLbl.Position = UDim2.new(0,70,0,0)
+ _ascStatusLbl.TextXAlignment = Enum.TextXAlignment.Right
+ _ascStatusLbl.TextTruncate = Enum.TextTruncate.AtEnd
+ ASC.statusLbl = _ascStatusLbl
+
+ -- ROW 2: COMPLETED
+ local aCompCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,38))
+ aCompCard.LayoutOrder = 2; Corner(aCompCard,10); Stroke(aCompCard,C.BORD,1.5,0.3); Padding(aCompCard,6,6,10,10)
+ local _acKeyL = Label(aCompCard,"Ascension Completed",11,C.TXT3,Enum.Font.GothamBold)
+ _acKeyL.Size = UDim2.new(0.7,0,1,0)
+ local _ascSuksesLbl = Label(aCompCard,"0",11,Color3.fromRGB(220,180,50),Enum.Font.GothamBold)
+ _ascSuksesLbl.Size = UDim2.new(0.3,0,1,0); _ascSuksesLbl.Position = UDim2.new(0.7,0,0,0)
+ _ascSuksesLbl.TextXAlignment = Enum.TextXAlignment.Right
+ ASC.suksesLbl = _ascSuksesLbl
+
+ -- ROW 3: ENABLE TOGGLE
+ local aCtrlRow = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,44))
+ aCtrlRow.LayoutOrder = 3; Corner(aCtrlRow,10)
+ New("UIStroke",{Parent=aCtrlRow, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.2})
+ local aTogLbl = Label(aCtrlRow,"Enable Auto Ascension",13,C.TXT,Enum.Font.GothamBold)
+ aTogLbl.Size = UDim2.new(1,-68,0,20); aTogLbl.Position = UDim2.new(0,14,0.5,-10)
+ local aSubLbl = Label(aCtrlRow,"Hanya Ascension Tower",10,C.TXT3,Enum.Font.Gotham)
+ aSubLbl.Size = UDim2.new(1,-68,0,14); aSubLbl.Position = UDim2.new(0,14,0.5,10)
+ local aPill = Btn(aCtrlRow, C.PILL_OFF, UDim2.new(0,52,0,30))
+ aPill.AnchorPoint = Vector2.new(1,0.5); aPill.Position = UDim2.new(1,-12,0.5,0); Corner(aPill,13)
+ local aKnob = Frame(aPill, C.KNOB_OFF, UDim2.new(0,24,0,24))
+ aKnob.AnchorPoint = Vector2.new(0,0.5); aKnob.Position = UDim2.new(0,3,0.5,0); Corner(aKnob,10)
+
+ local function SetAscPill(on)
+  TweenService:Create(aPill,TweenInfo.new(0.16),{BackgroundColor3=on and Color3.fromRGB(180,140,20) or C.PILL_OFF}):Play()
+  TweenService:Create(aKnob,TweenInfo.new(0.16),{
+   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
+   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
+  }):Play()
+ end
+
+ aPill.MouseButton1Click:Connect(function()
+  _ascOn = not _ascOn
+  SetAscPill(_ascOn)
+  if _ascOn then
+   StartAscensionLoop()
+  else
+   StopAscension()
+   AscStatusUpdate("Disabled", Color3.fromRGB(160,148,135))
+   if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
+  end
+ end)
+
+ -- ============================================================
+ -- ROW 4: PREFERRED RANK (always visible, mirip Auto Raid)
+ -- ============================================================
+ local GRADE_COLORS_ASC = {
+  ["E"]=Color3.fromRGB(150,150,150),["D"]=Color3.fromRGB(100,200,100),
+  ["C"]=Color3.fromRGB(80,200,120), ["B"]=Color3.fromRGB(100,140,255),
+  ["A"]=Color3.fromRGB(180,100,255),["S"]=Color3.fromRGB(255,180,50),
+  ["SS"]=Color3.fromRGB(255,220,0), ["G"]=Color3.fromRGB(255,60,60),
+  ["N"]=Color3.fromRGB(255,100,200),["M"]=Color3.fromRGB(255,0,0),
+  ["M+"]=Color3.fromRGB(255,50,50), ["M++"]=Color3.fromRGB(255,100,100),
+  ["XM"]=Color3.fromRGB(180,0,0),   ["ULT"]=Color3.fromRGB(255,255,255),
+ }
+ local GRADE_VALUE_ASC = GRADE_RANK or {}
+
+ local ascRankHdr = Label(ascInner,"PREFERRED RANK",10,C.TXT3,Enum.Font.GothamBold)
+ ascRankHdr.LayoutOrder = 4; ascRankHdr.Size = UDim2.new(1,0,0,14)
+ local ascRankCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
+ ascRankCard.LayoutOrder = 5; Corner(ascRankCard,10); Stroke(ascRankCard,C.BORD,1.5,0.3); Padding(ascRankCard,6,6,10,10)
+ local ascRankRow = Frame(ascRankCard,C.BLACK,UDim2.new(1,0,1,0)); ascRankRow.BackgroundTransparency=1
+ local ascRankKeyL = Label(ascRankRow,"Select Rank",11,C.TXT2,Enum.Font.GothamBold)
+ ascRankKeyL.Size = UDim2.new(0,72,1,0)
+ local ascRankDDBtn = Btn(ascRankRow,C.BG3,UDim2.new(1,-82,1,0))
+ ascRankDDBtn.Position = UDim2.new(0,80,0,0); Corner(ascRankDDBtn,6); Stroke(ascRankDDBtn,C.BORD,1.5,0.25)
+ local ascRankDDVal = Label(ascRankDDBtn," -- SELECT RANK --",11,C.TXT3,Enum.Font.GothamBold)
+ ascRankDDVal.Size = UDim2.new(1,-20,1,0); ascRankDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local ascRankArr = Label(ascRankDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascRankArr.Size = UDim2.new(0,18,1,0); ascRankArr.Position = UDim2.new(1,-20,0,0)
+
+ local function RefreshAscRankLabel()
+  local ns={}
+  for _,g in ipairs(GRADE_LIST or {}) do
+   if ASC.runeGrades[g] then table.insert(ns,"["..g.."]") end
+  end
+  if #ns==0 then ascRankDDVal.Text=" -- SELECT RANK --"; ascRankDDVal.TextColor3=C.TXT3
+  else ascRankDDVal.Text=" "..table.concat(ns," "); ascRankDDVal.TextColor3=Color3.fromRGB(200,120,255) end
+ end
+ RefreshAscRankLabel()
+
+ ascRankDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local IH=30
+  local gl = GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
+  local SFH=math.min(#gl*(IH+4)+44,280)
+  local ab=ascRankDDBtn.AbsolutePosition; local sz=ascRankDDBtn.AbsoluteSize
+  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(ab.Y+SFH+44 > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
+  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
+  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
+  local sf=Instance.new("ScrollingFrame",popup)
+  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
+  local sfp=Instance.new("UIPadding",sf)
+  sfp.PaddingTop=UDim.new(0,4); sfp.PaddingBottom=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
+  local sfLayout=Instance.new("UIListLayout",sf)
+  sfLayout.SortOrder=Enum.SortOrder.LayoutOrder; sfLayout.Padding=UDim.new(0,4)
+  local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
+  rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
+  Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
+  local rl=Instance.new("TextLabel",rb); rl.Size=UDim2.new(1,-8,1,0); rl.Position=UDim2.new(0,8,0,0)
+  rl.BackgroundTransparency=1; rl.Text="x Reset ALL"; rl.TextSize=10
+  rl.Font=Enum.Font.GothamBold; rl.TextColor3=C.RED; rl.TextXAlignment=Enum.TextXAlignment.Left; rl.ZIndex=9999
+  rb.MouseButton1Click:Connect(function()
+   for _,g in ipairs(gl) do ASC.runeGrades[g]=nil end
+   CloseActiveDD(); RefreshAscRankLabel()
+  end)
+  for i,grade in ipairs(gl) do
+   local gc=grade; local col=GRADE_COLORS_ASC[grade] or C.ACC
+   local gv=GRADE_VALUE_ASC[grade] or "?"; local isSel=ASC.runeGrades[gc]==true
+   local item=Instance.new("TextButton",sf)
+   item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
+   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local ck=Instance.new("TextLabel",item); ck.Size=UDim2.new(0,20,1,0); ck.Position=UDim2.new(0,4,0,0)
+   ck.BackgroundTransparency=1; ck.Text=isSel and "v" or ""; ck.TextSize=11
+   ck.Font=Enum.Font.GothamBold; ck.TextColor3=col; ck.TextXAlignment=Enum.TextXAlignment.Center; ck.ZIndex=9999
+   local nl=Instance.new("TextLabel",item); nl.Size=UDim2.new(0,56,1,0); nl.Position=UDim2.new(0,26,0,0)
+   nl.BackgroundTransparency=1; nl.Text="Rank "..grade; nl.TextSize=11
+   nl.Font=Enum.Font.GothamBold; nl.TextColor3=isSel and Color3.fromRGB(255,255,255) or col
+   nl.TextXAlignment=Enum.TextXAlignment.Left; nl.ZIndex=9999
+   local vl=Instance.new("TextLabel",item); vl.Size=UDim2.new(1,-86,1,0); vl.Position=UDim2.new(0,84,0,0)
+   vl.BackgroundTransparency=1; vl.Text="Grade "..tostring(gv); vl.TextSize=9; vl.Font=Enum.Font.Gotham
+   vl.TextColor3=isSel and C.TXT2 or C.TXT3; vl.TextXAlignment=Enum.TextXAlignment.Left; vl.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    local ns=not ASC.runeGrades[gc]; ASC.runeGrades[gc]=ns and true or nil
+    item.BackgroundColor3=ns and C.SURFACE or C.DD_BG; item.BackgroundTransparency=ns and 0.18 or 0.42
+    ck.Text=ns and "v" or ""; nl.TextColor3=ns and Color3.fromRGB(255,255,255) or col
+    vl.TextColor3=ns and C.TXT2 or C.TXT3; RefreshAscRankLabel()
+    if _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- ============================================================
+ -- ROW 5-6: PREFERRED RUNE (Item) - always visible
+ -- ============================================================
+ local ascRuneHdr = Label(ascInner,"PREFERRED RUNE (Item)",10,C.TXT3,Enum.Font.GothamBold)
+ ascRuneHdr.LayoutOrder = 6; ascRuneHdr.Size = UDim2.new(1,0,0,14)
+ local ascRuneCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
+ ascRuneCard.LayoutOrder = 7; Corner(ascRuneCard,10); Stroke(ascRuneCard,C.BORD,1.5,0.3); Padding(ascRuneCard,6,6,10,10)
+ local ascRuneRow = Frame(ascRuneCard,C.BLACK,UDim2.new(1,0,1,0)); ascRuneRow.BackgroundTransparency=1
+ local ascRuneKeyL = Label(ascRuneRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
+ ascRuneKeyL.Size = UDim2.new(0,72,1,0)
+ local ascRuneDDBtn = Btn(ascRuneRow,C.BG3,UDim2.new(1,-82,1,0))
+ ascRuneDDBtn.Position = UDim2.new(0,80,0,0); Corner(ascRuneDDBtn,6); Stroke(ascRuneDDBtn,C.BORD,1.5,0.25)
+ local ascRuneDDVal = Label(ascRuneDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
+ ascRuneDDVal.Size = UDim2.new(1,-20,1,0); ascRuneDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local ascRuneArr = Label(ascRuneDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascRuneArr.Size = UDim2.new(0,18,1,0); ascRuneArr.Position = UDim2.new(1,-20,0,0)
+
+ local function AscSyncRuneState()
+  if ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then ASC.runeEnabled=true
+  else ASC.runeEnabled=false end
+ end
+ AscSyncRuneState()
+ if ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then
+  ascRuneDDVal.Text=" Map "..ASC.runeMapTarget.." - "..(MAP_NAMES and MAP_NAMES[ASC.runeMapTarget] or "")
+  ascRuneDDVal.TextColor3=C.ACC2
+ end
+
+ ascRuneDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local aP=ascRuneDDBtn.AbsolutePosition; local aS=ascRuneDDBtn.AbsoluteSize; local IH=28
+  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
+  local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(aP.Y+popH > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
+  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
+  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
+  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
+  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
+  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
+  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
+  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
+  local s0=(ASC.runeMapTarget==0)
+  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
+  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
+  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
+  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
+  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
+  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3; l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
+  i0.MouseButton1Click:Connect(function()
+   CloseActiveDD(); ASC.runeMapTarget=0; AscSyncRuneState()
+   ascRuneDDVal.Text=" -- NOT SELECTED --"; ascRuneDDVal.TextColor3=C.TXT3
+  end)
+  for mn=1,20 do
+   local ml=mn; local mnm=MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
+   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
+   local iS=(ASC.runeMapTarget==mn)
+   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
+   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
+   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
+   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
+   il.BackgroundTransparency=1; il.Text="Map "..mn.." - "..mnm; il.TextSize=10; il.Font=Enum.Font.GothamBold
+   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
+   it.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.runeMapTarget=ml; AscSyncRuneState()
+    ascRuneDDVal.Text=" Map "..ml.." - "..mnm; ascRuneDDVal.TextColor3=C.ACC2
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- ============================================================
+ -- ROW 8: UP/DOWN RANK
+ -- ============================================================
+ local ascUdHdr = Label(ascInner,"UP/DOWN RANK",10,C.TXT3,Enum.Font.GothamBold)
+ ascUdHdr.LayoutOrder = 8; ascUdHdr.Size = UDim2.new(1,0,0,14)
+
+ local ascUdCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,76))
+ ascUdCard.LayoutOrder = 9; Corner(ascUdCard,10); Stroke(ascUdCard,C.BORD,1.5,0.3)
+
+ local ascUdRowTop = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,38))
+ ascUdRowTop.BackgroundTransparency=1; ascUdRowTop.Position=UDim2.new(0,0,0,0)
+
+ local ascUdPill = Btn(ascUdRowTop,C.PILL_OFF,UDim2.new(0,52,0,30))
+ ascUdPill.AnchorPoint=Vector2.new(1,0.5); ascUdPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascUdPill,13)
+ local ascUdKnob = Frame(ascUdPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
+ ascUdKnob.AnchorPoint=Vector2.new(0,0.5); ascUdKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascUdKnob,10)
+ local ascUdLbl = Label(ascUdRowTop,"UP/DOWN Rank",14,C.TXT,Enum.Font.GothamBold)
+ ascUdLbl.Size=UDim2.new(1,-68,0,20); ascUdLbl.Position=UDim2.new(0,14,0.5,-10)
+
+ -- Dropdown Arah (UP/DOWN)
+ if not ASC.updownDir then ASC.updownDir="up" end
+ local ascUdRowBot = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,36))
+ ascUdRowBot.BackgroundTransparency=1; ascUdRowBot.Position=UDim2.new(0,0,0,38)
+ New("UIListLayout",{Parent=ascUdRowBot,FillDirection=Enum.FillDirection.Horizontal,
+  SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6),VerticalAlignment=Enum.VerticalAlignment.Center})
+ Instance.new("UIPadding",ascUdRowBot).PaddingLeft=UDim.new(0,10)
+
+ local ascDirDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(0,100,0,26))
+ ascDirDDBtn.LayoutOrder=1; Corner(ascDirDDBtn,6); Stroke(ascDirDDBtn,C.BORD,1.5,0.25)
+ local ascDirDDLbl = Label(ascDirDDBtn,ASC.updownDir=="up" and " UP (UP)" or " DOWN (DN)",11,C.ACC,Enum.Font.GothamBold)
+ ascDirDDLbl.Size=UDim2.new(1,0,1,0)
+
+ local ascGradeDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(1,-120,0,26))
+ ascGradeDDBtn.LayoutOrder=2; Corner(ascGradeDDBtn,6); Stroke(ascGradeDDBtn,C.BORD,1.5,0.25)
+ local ascGradeDDLbl = Label(ascGradeDDBtn,
+  ASC.updownTargetGrade and (" Target: ["..ASC.updownTargetGrade.."]") or " -- SELECT TARGET --",
+  11,ASC.updownTargetGrade and C.ACC2 or C.TXT3,Enum.Font.GothamBold)
+ ascGradeDDLbl.Size=UDim2.new(1,-20,1,0)
+ local ascGradeArr = Label(ascGradeDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascGradeArr.Size=UDim2.new(0,18,1,0); ascGradeArr.Position=UDim2.new(1,-20,0,0)
+
+ local function updateAscUpDownToggle()
+  local on=ASC.updownEnabled
+  TweenService:Create(ascUdPill,TweenInfo.new(0.16),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
+  TweenService:Create(ascUdKnob,TweenInfo.new(0.16),{
+   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
+   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
+  }):Play()
+ end
+ updateAscUpDownToggle()
+
+ ascUdPill.MouseButton1Click:Connect(function()
+  ASC.updownEnabled=not ASC.updownEnabled; updateAscUpDownToggle()
+ end)
+
+ -- Dropdown arah UP/DOWN
+ ascDirDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local dirOpts={
+   {label=" UP (UP)", dir="up", col=Color3.fromRGB(100,220,100)},
+   {label=" DOWN (DN)", dir="down", col=Color3.fromRGB(255,100,100)},
+  }
+  local aP=ascDirDDBtn.AbsolutePosition; local aS=ascDirDDBtn.AbsoluteSize; local IH=28
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+10,0,#dirOpts*(IH+2)+12)
+  popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.85)
+  local ll=Instance.new("UIListLayout",popup); ll.Padding=UDim.new(0,2); ll.SortOrder=Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",popup).PaddingTop=UDim.new(0,4)
+  for _,opt in ipairs(dirOpts) do
+   local d=opt.dir
+   local item=Instance.new("TextButton",popup); item.Size=UDim2.new(1,-8,0,IH)
+   local isSel=ASC.updownDir==d
+   item.BackgroundColor3=isSel and C.SURFACE or C.BG3; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local iL=Instance.new("TextLabel",item); iL.Size=UDim2.new(1,-8,1,0); iL.Position=UDim2.new(0,8,0,0)
+   iL.BackgroundTransparency=1; iL.Text=opt.label; iL.TextSize=11; iL.Font=Enum.Font.GothamBold
+   iL.TextColor3=opt.col; iL.TextXAlignment=Enum.TextXAlignment.Left; iL.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.updownDir=d; ascDirDDLbl.Text=opt.label; ascDirDDLbl.TextColor3=opt.col
+   end)
+  end
+  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- Dropdown target grade UP/DOWN
+ local ascClearRow = nil -- forward
+ ascGradeDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local gl=GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
+  local IH=28; local SFH=math.min(#gl*(IH+4)+44,260)
+  local ab=ascGradeDDBtn.AbsolutePosition; local sz=ascGradeDDBtn.AbsoluteSize
+  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(ab.Y+SFH+8 > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
+  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
+  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
+  local sf=Instance.new("ScrollingFrame",popup)
+  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
+  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
+  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
+  -- Clear button
+  local cRow=Instance.new("TextButton",sf); cRow.Size=UDim2.new(1,-8,0,IH); cRow.LayoutOrder=0
+  cRow.BackgroundColor3=not ASC.updownTargetGrade and C.SURFACE or C.DD_BG
+  cRow.BackgroundTransparency=not ASC.updownTargetGrade and 0.18 or 0.42
+  cRow.BorderSizePixel=0; cRow.Text=""; cRow.AutoButtonColor=false; cRow.ZIndex=9999
+  Instance.new("UICorner",cRow).CornerRadius=UDim.new(0,6)
+  local cLbl=Instance.new("TextLabel",cRow); cLbl.Size=UDim2.new(1,-8,1,0); cLbl.Position=UDim2.new(0,8,0,0)
+  cLbl.BackgroundTransparency=1; cLbl.Text="-- CLEAR --"; cLbl.TextSize=10
+  cLbl.Font=Enum.Font.GothamBold; cLbl.TextColor3=not ASC.updownTargetGrade and C.ACC2 or C.TXT3
+  cLbl.TextXAlignment=Enum.TextXAlignment.Left; cLbl.ZIndex=9999
+  cRow.MouseButton1Click:Connect(function()
+   ASC.updownTargetGrade=nil; CloseActiveDD()
+   ascGradeDDLbl.Text=" -- SELECT TARGET --"; ascGradeDDLbl.TextColor3=C.TXT3
+  end)
+  for i,g in ipairs(gl) do
+   local selGrade=g; local col=GRADE_COLORS_ASC[g] or C.ACC; local isSel=(ASC.updownTargetGrade==g)
+   local item=Instance.new("TextButton",sf); item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
+   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local il=Instance.new("TextLabel",item); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
+   il.BackgroundTransparency=1; il.Text=" ["..g.."] Rank "..g; il.TextSize=11; il.Font=Enum.Font.GothamBold
+   il.TextColor3=isSel and Color3.fromRGB(255,255,255) or col; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.updownTargetGrade=selGrade
+    ascGradeDDLbl.Text=" Target: ["..selGrade.."]"; ascGradeDDLbl.TextColor3=C.ACC2
+   end)
+  end
+  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- ============================================================
+ -- ROW 10: AUTO BOSS KILL TOGGLE
+ -- ============================================================
+ local ascBossRow = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,44))
+ ascBossRow.LayoutOrder=10; Corner(ascBossRow,10); Stroke(ascBossRow,C.BORD,1.5,0.3)
+ local ascBossL = Label(ascBossRow,"AUTO KILL BOSS",13,C.TXT,Enum.Font.GothamBold)
+ ascBossL.Size=UDim2.new(1,-68,0,20); ascBossL.Position=UDim2.new(0,14,0.5,-10)
+ local ascBossPill = Btn(ascBossRow,C.PILL_OFF,UDim2.new(0,52,0,30))
+ ascBossPill.AnchorPoint=Vector2.new(1,0.5); ascBossPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascBossPill,13)
+ local ascBossKnob = Frame(ascBossPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
+ ascBossKnob.AnchorPoint=Vector2.new(0,0.5); ascBossKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascBossKnob,10)
+ ascBossPill.MouseButton1Click:Connect(function()
+  ASC.autoKillBoss=not ASC.autoKillBoss; local on=ASC.autoKillBoss
+  TweenService:Create(ascBossPill,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
+  TweenService:Create(ascBossKnob,TweenInfo.new(0.16),{
+   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
+   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
+  }):Play()
+ end)
+
+ -- ============================================================
+ -- ROW 11: TELEPORT DELAY SLIDER (1-10s)
+ -- ============================================================
+ local ascTpCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,54))
+ ascTpCard.LayoutOrder=11; Corner(ascTpCard,10); Stroke(ascTpCard,C.BORD,1.5,0.3); Padding(ascTpCard,6,6,10,10)
+ New("UIListLayout",{Parent=ascTpCard,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,4)})
+ local ascTpTop = Frame(ascTpCard,C.BLACK,UDim2.new(1,0,0,18)); ascTpTop.BackgroundTransparency=1; ascTpTop.LayoutOrder=0
+ local _ascTpKeyL = Label(ascTpTop,"Teleport Delay",11,C.TXT2,Enum.Font.GothamBold); _ascTpKeyL.Size=UDim2.new(0.7,0,1,0)
+ local ascTpValLbl = Label(ascTpTop,tostring(ASC.bossDelay).."s",11,C.ACC2,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
+ ascTpValLbl.Size=UDim2.new(0.3,0,1,0); ascTpValLbl.Position=UDim2.new(0.7,0,0,0)
+ local ascTpBot = Frame(ascTpCard,C.BLACK,UDim2.new(1,0,0,22)); ascTpBot.BackgroundTransparency=1; ascTpBot.LayoutOrder=1
+ New("UIListLayout",{Parent=ascTpBot,SortOrder=Enum.SortOrder.LayoutOrder,
+  FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,4),VerticalAlignment=Enum.VerticalAlignment.Center})
+ local ascTpMinus = Btn(ascTpBot,C.BG3,UDim2.new(0,26,0,22))
+ ascTpMinus.LayoutOrder=0; Corner(ascTpMinus,6); Stroke(ascTpMinus,C.BORD,1.5,0.4)
+ Label(ascTpMinus,"-",14,C.TXT,Enum.Font.GothamBold,Enum.TextXAlignment.Center).Size=UDim2.new(1,0,1,0)
+ local ascTpTrackBtn = Btn(ascTpBot,C.BG3,UDim2.new(1,-60,0,22))
+ ascTpTrackBtn.LayoutOrder=1; Corner(ascTpTrackBtn,11); Stroke(ascTpTrackBtn,C.BORD,1.5,0.4)
+ local ascTpFill = Frame(ascTpTrackBtn,C.ACC,UDim2.new((ASC.bossDelay-1)/9,1,1,-2))
+ ascTpFill.Position=UDim2.new(0,0,0,1); Corner(ascTpFill,10)
+ local ascTpKnob = Frame(ascTpTrackBtn,C.KNOB_ON,UDim2.new(0,18,0,18))
+ ascTpKnob.AnchorPoint=Vector2.new(0.5,0.5); ascTpKnob.Position=UDim2.new((ASC.bossDelay-1)/9,0,0.5,0)
+ Corner(ascTpKnob,9); Stroke(ascTpKnob,C.ACC,1.5,0.6)
+ local ascTpPlus = Btn(ascTpBot,C.BG3,UDim2.new(0,26,0,22))
+ ascTpPlus.LayoutOrder=2; Corner(ascTpPlus,6); Stroke(ascTpPlus,C.BORD,1.5,0.4)
+ Label(ascTpPlus,"+",14,C.TXT,Enum.Font.GothamBold,Enum.TextXAlignment.Center).Size=UDim2.new(1,0,1,0)
+ local function UpdateAscTpSlider(val)
+  val=math.clamp(math.round(val),1,10)
+  ASC.bossDelay=val; ascTpValLbl.Text=val.."s"
+  ascTpFill.Size=UDim2.new((val-1)/9,1,1,-2); ascTpKnob.Position=UDim2.new((val-1)/9,0,0.5,0)
+ end
+ ascTpMinus.MouseButton1Click:Connect(function() UpdateAscTpSlider(ASC.bossDelay-1) end)
+ ascTpPlus.MouseButton1Click:Connect(function() UpdateAscTpSlider(ASC.bossDelay+1) end)
+ local _ascTpDrag=false
+ ascTpTrackBtn.InputBegan:Connect(function(inp)
+  if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+   _ascTpDrag=true
+   local tA=ascTpTrackBtn.AbsolutePosition; local tS=ascTpTrackBtn.AbsoluteSize
+   UpdateAscTpSlider(math.round(math.clamp((inp.Position.X-tA.X)/tS.X,0,1)*9)+1)
+  end
+ end)
+ ascTpTrackBtn.InputChanged:Connect(function(inp)
+  if not _ascTpDrag then return end
+  if inp.UserInputType~=Enum.UserInputType.MouseMovement and inp.UserInputType~=Enum.UserInputType.Touch then return end
+  local tA=ascTpTrackBtn.AbsolutePosition; local tS=ascTpTrackBtn.AbsoluteSize
+  UpdateAscTpSlider(math.round(math.clamp((inp.Position.X-tA.X)/tS.X,0,1)*9)+1)
+ end)
+ ascTpTrackBtn.InputEnded:Connect(function(inp)
+  if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+   _ascTpDrag=false
+  end
+ end)
+
+ -- ============================================================
+ -- ROW 12-13: PICK MODE (Easy / Hard / Manual)
+ -- ============================================================
+ local APM_OPTS  = {"Easy","Hard","Manual"}
+ local APM_KEYS  = {"easy","hard","manual"}
+ local APM_COLORS= {
+  Color3.fromRGB(80,220,80),   -- Easy: hijau
+  Color3.fromRGB(255,80,80),   -- Hard: merah
+  Color3.fromRGB(255,180,50),  -- Manual: kuning
+ }
+ local APM_DESC  = {
+  "Pilih Tower mapNum TERENDAH yang tersedia",
+  "Pilih Tower mapNum TERTINGGI yang tersedia",
+  "Filter grade + rune item (mirip Auto Raid)",
+ }
+ local curAPM = 1
+ ASC.pickMode = APM_KEYS[curAPM]
+
+ local apmHdr = Label(ascInner,"PICK MODE",10,C.TXT3,Enum.Font.GothamBold)
+ apmHdr.LayoutOrder = 12; apmHdr.Size = UDim2.new(1,0,0,14)
+ local apmCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,40))
+ apmCard.LayoutOrder = 13; Corner(apmCard,10); Stroke(apmCard,C.BORD,1.5,0.3); Padding(apmCard,6,6,10,10)
+ local _apmKeyL = Label(apmCard,"Pick Mode",11,C.TXT2,Enum.Font.GothamBold)
+ _apmKeyL.Size = UDim2.new(0,72,1,0)
+ local apmDDBtn = Btn(apmCard, C.BG3, UDim2.new(1,-82,0,28))
+ apmDDBtn.Position = UDim2.new(0,80,0.5,-14); Corner(apmDDBtn,6); Stroke(apmDDBtn,C.BORD,1.5,0.25)
+ local apmDDLbl = Label(apmDDBtn," "..APM_OPTS[curAPM],11,APM_COLORS[curAPM],Enum.Font.GothamBold)
+ apmDDLbl.Size = UDim2.new(1,-20,1,0)
+ local apmArr = Label(apmDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ apmArr.Size = UDim2.new(0,18,1,0); apmArr.Position = UDim2.new(1,-20,0,0)
+ local apmDescLbl = Label(ascInner, APM_DESC[curAPM], 10, C.TXT3, Enum.Font.GothamBold)
+ apmDescLbl.LayoutOrder = 14; apmDescLbl.Size = UDim2.new(1,0,0,14)
+
+ -- Manual-only cards (Grade filter + Rune Map) - tersembunyi kecuali manual
+ local _ascManualSection -- forward declare
+
+ apmDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local aP = apmDDBtn.AbsolutePosition; local aS = apmDDBtn.AbsoluteSize; local IH = 28
+  local popup = Instance.new("Frame")
+  popup.Parent = DDLayer; popup.BackgroundColor3 = C.DD_BG; popup.BorderSizePixel = 0
+  popup.Size = UDim2.new(0,aS.X+10,0,#APM_OPTS*(IH+2)+12)
+  popup.Position = UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
+  popup.ZIndex = 9999; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.85)
+  local ll = Instance.new("UIListLayout",popup)
+  ll.Padding = UDim.new(0,2); ll.SortOrder = Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",popup).PaddingTop = UDim.new(0,4)
+  for i, opt in ipairs(APM_OPTS) do
+   local item = Instance.new("TextButton",popup)
+   item.Size = UDim2.new(1,-8,0,IH); item.LayoutOrder = i
+   item.BackgroundColor3 = i==curAPM and C.SURFACE or C.BG3
+   item.BackgroundTransparency = i==curAPM and 0.18 or 0.42
+   item.BorderSizePixel = 0; item.Text = ""; item.AutoButtonColor = false; item.ZIndex = 9999
+   Instance.new("UICorner",item).CornerRadius = UDim.new(0,6)
+   local iL = Instance.new("TextLabel",item)
+   iL.Size = UDim2.new(1,-8,1,0); iL.Position = UDim2.new(0,8,0,0)
+   iL.BackgroundTransparency = 1; iL.Text = opt; iL.TextSize = 12
+   iL.Font = Enum.Font.Gotham; iL.TextColor3 = APM_COLORS[i]
+   iL.TextXAlignment = Enum.TextXAlignment.Left; iL.ZIndex = 9999
+   local ii = i
+   item.MouseButton1Click:Connect(function()
+    CloseActiveDD()
+    curAPM = ii; ASC.pickMode = APM_KEYS[ii]
+    apmDDLbl.Text = " "..APM_OPTS[ii]; apmDDLbl.TextColor3 = APM_COLORS[ii]
+    apmDescLbl.Text = APM_DESC[ii]
+    if _ascManualSection then _ascManualSection.Visible = (APM_KEYS[ii] == "manual") end
+    task.defer(ResizeAscBody)
+   end)
+  end
+  DDLayer.Visible = true
+  _activeDDClose = function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- MANUAL SECTION: Grade filter + Rune Map (tersembunyi kecuali manual)
+ _ascManualSection = Frame(ascInner, C.BLACK, UDim2.new(1,0,0,0))
+ _ascManualSection.BackgroundTransparency = 1; _ascManualSection.AutomaticSize = Enum.AutomaticSize.Y
+ _ascManualSection.LayoutOrder = 15; _ascManualSection.Visible = false
+ local _ascManLayout = New("UIListLayout",{Parent=_ascManualSection, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
+
+ -- Grade Filter (Manual)
+ local aGrHdr = Label(_ascManualSection,"FILTER GRADE",10,C.TXT3,Enum.Font.GothamBold)
+ aGrHdr.LayoutOrder = 1; aGrHdr.Size = UDim2.new(1,0,0,14)
+ local aGrCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
+ aGrCard.LayoutOrder = 2; Corner(aGrCard,10); Stroke(aGrCard,C.BORD,1.5,0.3); Padding(aGrCard,6,6,10,10)
+ local aGrRow = Frame(aGrCard,C.BLACK,UDim2.new(1,0,1,0)); aGrRow.BackgroundTransparency=1
+ local aGrKeyL = Label(aGrRow,"Grade",11,C.TXT2,Enum.Font.GothamBold)
+ aGrKeyL.Size = UDim2.new(0,72,1,0)
+ local aGrDDBtn = Btn(aGrRow,C.BG3,UDim2.new(1,-82,1,0))
+ aGrDDBtn.Position = UDim2.new(0,80,0,0); Corner(aGrDDBtn,6); Stroke(aGrDDBtn,C.BORD,1.5,0.25)
+ local aGrDDVal = Label(aGrDDBtn," -- ANY GRADE --",11,C.TXT3,Enum.Font.GothamBold)
+ aGrDDVal.Size = UDim2.new(1,-20,1,0); aGrDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local aGrArr = Label(aGrDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ aGrArr.Size = UDim2.new(0,18,1,0); aGrArr.Position = UDim2.new(1,-20,0,0)
+
+ local function RefreshAscGradeLabel()
+  local ns={}
+  for _,g in ipairs(GRADE_LIST or {}) do
+   if ASC.runeGrades[g] then table.insert(ns,"["..g.."]") end
+  end
+  if #ns==0 then aGrDDVal.Text=" -- ANY GRADE --"; aGrDDVal.TextColor3=C.TXT3
+  else aGrDDVal.Text=" "..table.concat(ns," "); aGrDDVal.TextColor3=Color3.fromRGB(200,120,255) end
+ end
+
+ aGrDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local IH=30
+  local gl = GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
+  local SFH=math.min(#gl*(IH+4)+44,260)
+  local ab=aGrDDBtn.AbsolutePosition; local sz=aGrDDBtn.AbsoluteSize
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
+  popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4)
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
+  local sf=Instance.new("ScrollingFrame",popup)
+  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
+  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
+  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
+  local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
+  rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
+  Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
+  local rl=Instance.new("TextLabel",rb); rl.Size=UDim2.new(1,-8,1,0); rl.Position=UDim2.new(0,8,0,0)
+  rl.BackgroundTransparency=1; rl.Text="x Reset ALL"; rl.TextSize=10
+  rl.Font=Enum.Font.GothamBold; rl.TextColor3=C.RED; rl.TextXAlignment=Enum.TextXAlignment.Left; rl.ZIndex=9999
+  rb.MouseButton1Click:Connect(function()
+   for _,g in ipairs(gl) do ASC.runeGrades[g]=nil end
+   CloseActiveDD(); RefreshAscGradeLabel()
+  end)
+  for i,grade in ipairs(gl) do
+   local gc=grade; local col=GRADE_COLORS_ASC[grade] or C.ACC; local isSel=ASC.runeGrades[gc]==true
+   local item=Instance.new("TextButton",sf)
+   item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
+   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local ck=Instance.new("TextLabel",item); ck.Size=UDim2.new(0,20,1,0); ck.Position=UDim2.new(0,4,0,0)
+   ck.BackgroundTransparency=1; ck.Text=isSel and "v" or ""; ck.TextSize=11
+   ck.Font=Enum.Font.GothamBold; ck.TextColor3=col; ck.TextXAlignment=Enum.TextXAlignment.Center; ck.ZIndex=9999
+   local nl=Instance.new("TextLabel",item); nl.Size=UDim2.new(1,-28,1,0); nl.Position=UDim2.new(0,26,0,0)
+   nl.BackgroundTransparency=1; nl.Text="Rank "..grade; nl.TextSize=11
+   nl.Font=Enum.Font.GothamBold; nl.TextColor3=isSel and Color3.fromRGB(255,255,255) or col
+   nl.TextXAlignment=Enum.TextXAlignment.Left; nl.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    local ns=not ASC.runeGrades[gc]; ASC.runeGrades[gc]=ns and true or nil
+    item.BackgroundColor3=ns and C.SURFACE or C.DD_BG; item.BackgroundTransparency=ns and 0.18 or 0.42
+    ck.Text=ns and "v" or ""; nl.TextColor3=ns and Color3.fromRGB(255,255,255) or col
+    RefreshAscGradeLabel()
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- Rune Map (Manual)
+ local aRnHdr = Label(_ascManualSection,"RUNE MAP (Manual)",10,C.TXT3,Enum.Font.GothamBold)
+ aRnHdr.LayoutOrder = 3; aRnHdr.Size = UDim2.new(1,0,0,14)
+ local aRnCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
+ aRnCard.LayoutOrder = 4; Corner(aRnCard,10); Stroke(aRnCard,C.BORD,1.5,0.3); Padding(aRnCard,6,6,10,10)
+ local aRnRow = Frame(aRnCard,C.BLACK,UDim2.new(1,0,1,0)); aRnRow.BackgroundTransparency=1
+ local aRnKeyL = Label(aRnRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
+ aRnKeyL.Size = UDim2.new(0,72,1,0)
+ local aRnDDBtn = Btn(aRnRow,C.BG3,UDim2.new(1,-82,1,0))
+ aRnDDBtn.Position = UDim2.new(0,80,0,0); Corner(aRnDDBtn,6); Stroke(aRnDDBtn,C.BORD,1.5,0.25)
+ local aRnDDVal = Label(aRnDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
+ aRnDDVal.Size = UDim2.new(1,-20,1,0); aRnDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local aRnArr = Label(aRnDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ aRnArr.Size = UDim2.new(0,18,1,0); aRnArr.Position = UDim2.new(1,-20,0,0)
+
+ aRnDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local aP=aRnDDBtn.AbsolutePosition; local aS=aRnDDBtn.AbsoluteSize; local IH=28
+  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
+  local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(aP.Y+popH > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
+  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
+  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
+  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
+  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
+  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
+  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
+  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
+  local s0=(ASC.runeMapTarget==0)
+  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
+  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
+  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
+  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
+  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
+  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3
+  l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
+  i0.MouseButton1Click:Connect(function()
+   CloseActiveDD(); ASC.runeMapTarget=0; ASC.runeEnabled=false
+   aRnDDVal.Text=" -- NOT SELECTED --"; aRnDDVal.TextColor3=C.TXT3
+  end)
+  for mn=1,20 do
+   local ml=mn; local mnm=MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
+   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
+   local iS=(ASC.runeMapTarget==mn)
+   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
+   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
+   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
+   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
+   il.BackgroundTransparency=1; il.Text="Map "..mn.." - "..mnm; il.TextSize=10; il.Font=Enum.Font.GothamBold
+   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
+   it.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.runeMapTarget=ml; ASC.runeEnabled=true
+    aRnDDVal.Text=" Map "..ml.." - "..mnm; aRnDDVal.TextColor3=C.ACC2
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ task.defer(ResizeAscBody)
+end -- end Auto Ascension do block
 
 
 -- ============================================================
@@ -10226,6 +11433,20 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     -- ============================================================
     while SIEGE.running and SIEGE.inMap do
         totalTime = totalTime + 0.08
+
+        -- [FIX GODMODE] Guard realtime: STOP jika player sudah kembali ke basemap (50001-50020)
+        -- Mencegah Siege terus menyerang musuh di portal basemap setelah keluar dari Siege map
+        do
+            local _ok, _wm = pcall(function()
+                return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+            end)
+            if _ok and type(_wm) == "number" then
+                if _wm >= 50001 and _wm <= 50020 then
+                    -- Player sudah di basemap, stop attack siege
+                    cleanup(); return "exited_clean"
+                end
+            end
+        end
 
         -- Server kirim countdown timer dan nama map di sana
         -- Cuma hide popup reward hasil boss saja setelah keluar
@@ -11873,9 +13094,9 @@ do
         end
     end)
 
-    -- ══════════════════════════════════════════════════════
+    -- ======================================================
     -- [SAVE CONFIG / RESET CONFIG] Auto Single Tower Map 2
-    -- ══════════════════════════════════════════════════════
+    -- ======================================================
     local ST2_CONFIG_FILE = "SIEGE_ST2_Config.json"
 
     local function ST2_SaveConfig()
@@ -11963,19 +13184,19 @@ end
 -- SCAN = ambil semua player dari Players service (global workspace)
 -- JOIN = LocalPlayerTeleport:FireServer({mapId=50301, hostId=UserId})
 -- Tidak ada cara mengetahui siapa yg ada di Tower Map 2 dari client,
--- jadi semua player di server ditampilkan → user pilih sendiri → JOIN.
+-- jadi semua player di server ditampilkan -> user pilih sendiri -> JOIN.
 -- ============================================================
 do
     local p = Panels["autoraid"]
     if p then
 
-    -- ── State ──────────────────────────────────────────────────────────────
+    -- -- State --------------------------------------------------------------
     local JTP_players    = {}   -- { {name=string, userId=number} } semua player di server
     local JTP_selIdx     = nil  -- index row yang dipilih
     local JTP_joining    = false
     local JTP_MAPID      = 50301
 
-    -- ── Header collapsible ────────────────────────────────────────────────
+    -- -- Header collapsible ------------------------------------------------
     local jtpOpen = false
 
     local jtpHeader = Btn(p, C.SURFACE, UDim2.new(1,0,0,42))
@@ -11985,7 +13206,7 @@ do
     local jtpArrow = Label(jtpHeader,">",13,Color3.fromRGB(80,200,120),Enum.Font.GothamBold)
     jtpArrow.Size = UDim2.new(0,22,1,0); jtpArrow.Position = UDim2.new(0,10,0,0)
 
-    local jtpHeaderLbl = Label(jtpHeader,"⚡ Join to Tower Player",14,C.TXT2,Enum.Font.GothamBold)
+    local jtpHeaderLbl = Label(jtpHeader,"JOIN TO TOWER MAP 2",14,C.TXT2,Enum.Font.GothamBold)
     jtpHeaderLbl.Size = UDim2.new(1,-50,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
 
     local jtpBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
@@ -12016,19 +13237,19 @@ do
         if jtpOpen then task.defer(ResizeJTPBody) end
     end)
 
-    -- ── Info card ─────────────────────────────────────────────────────────
+    -- -- Info card --------------------------------------------------------?
     local infoCard = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
     infoCard.LayoutOrder = 0; infoCard.AutomaticSize = Enum.AutomaticSize.Y; Corner(infoCard,10)
     New("UIPadding",{Parent=infoCard,
         PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),
         PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
     local infoLbl = Label(infoCard,
-        "SCAN = ambil semua player di server (global).\nPilih player yg kamu yakin ada di Tower Map 2,\nlalu tekan JOIN → masuk via hostId = UserId mereka.",
+        "SCAN = ambil semua player di server (global).\nPilih player yg kamu yakin ada di Tower Map 2,\nlalu tekan JOIN -> masuk via hostId = UserId mereka.",
         10, C.TXT3, Enum.Font.Gotham)
     infoLbl.Size = UDim2.new(1,0,0,0); infoLbl.AutomaticSize = Enum.AutomaticSize.Y
     infoLbl.TextWrapped = true; infoLbl.LineHeight = 1.3
 
-    -- ── Status bar ────────────────────────────────────────────────────────
+    -- -- Status bar --------------------------------------------------------
     local jtpStatCard = Frame(jtpInner, C.SURFACE, UDim2.new(1,0,0,28))
     jtpStatCard.LayoutOrder = 1; Corner(jtpStatCard,10)
     New("UIPadding",{Parent=jtpStatCard,PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
@@ -12040,15 +13261,15 @@ do
         pcall(function() jtpStatLbl.Text = msg; jtpStatLbl.TextColor3 = col or C.TXT3 end)
     end
 
-    -- ── SCAN button ───────────────────────────────────────────────────────
+    -- -- SCAN button ------------------------------------------------------?
     local scanBtn = Btn(jtpInner, Color3.fromRGB(25,65,45), UDim2.new(1,0,0,36))
     scanBtn.LayoutOrder = 2; Corner(scanBtn,10)
     Stroke(scanBtn, Color3.fromRGB(80,200,120), 1.5, 0.15)
-    local scanLbl = Label(scanBtn,"🔍  SCAN  Player (Global Server)",13,
+    local scanLbl = Label(scanBtn,"[SCAN]  SCAN  Player (Global Server)",13,
         Color3.fromRGB(100,230,150), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
     scanLbl.Size = UDim2.new(1,0,1,0)
 
-    -- ── Player list box ───────────────────────────────────────────────────
+    -- -- Player list box --------------------------------------------------?
     -- Scrollable frame agar list panjang tetap rapi
     local listOuter = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
     listOuter.LayoutOrder = 3; listOuter.AutomaticSize = Enum.AutomaticSize.Y
@@ -12058,7 +13279,7 @@ do
         PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4),
         PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)})
 
-    local listTitleLbl = Label(listOuter,"Pilih player → tap untuk select :",10,C.TXT3,Enum.Font.GothamBold)
+    local listTitleLbl = Label(listOuter,"Pilih player -> tap untuk select :",10,C.TXT3,Enum.Font.GothamBold)
     listTitleLbl.LayoutOrder = 0; listTitleLbl.Size = UDim2.new(1,0,0,20)
 
     local listInner = Frame(listOuter, C.BLACK, UDim2.new(1,0,0,0))
@@ -12069,22 +13290,22 @@ do
 
     local playerRows = {}  -- frame per row
 
-    -- ── JOIN button ───────────────────────────────────────────────────────
+    -- -- JOIN button ------------------------------------------------------?
     local joinBtn = Btn(jtpInner, Color3.fromRGB(15,35,110), UDim2.new(1,0,0,40))
     joinBtn.LayoutOrder = 4; Corner(joinBtn,10)
     Stroke(joinBtn, Color3.fromRGB(55,105,255), 2, 0.05)
-    local joinLbl = Label(joinBtn,"🚀  JOIN  ke Tower Map 2",15,
+    local joinLbl = Label(joinBtn,"[JOIN]  JOIN  ke Tower Map 2",15,
         Color3.fromRGB(148,195,255), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
     joinLbl.Size = UDim2.new(1,0,1,0)
 
-    -- ── Helper: hapus semua row lama ─────────────────────────────────────
+    -- -- Helper: hapus semua row lama ------------------------------------?
     local function ClearRows()
         for _, r in ipairs(playerRows) do pcall(function() r:Destroy() end) end
         playerRows = {}
         JTP_selIdx = nil
     end
 
-    -- ── Helper: render daftar player ─────────────────────────────────────
+    -- -- Helper: render daftar player ------------------------------------?
     local function RenderList()
         ClearRows()
         listOuter.Visible = (#JTP_players > 0)
@@ -12118,7 +13339,7 @@ do
                         and Color3.fromRGB(18,52,32)
                         or  C.SURFACE
                 end
-                JTPStat("✔ Dipilih: "..entry.name.." (hostId = "..entry.userId..")",
+                JTPStat("[v] Dipilih: "..entry.name.." (hostId = "..entry.userId..")",
                     Color3.fromRGB(100,230,150))
             end)
 
@@ -12127,13 +13348,13 @@ do
         task.defer(ResizeJTPBody)
     end
 
-    -- ── SCAN logic : Players:GetPlayers() global — tidak filter mapId ─────
+    -- -- SCAN logic : Players:GetPlayers() global ? tidak filter mapId ----?
     local _jtpBusy = false
     scanBtn.MouseButton1Click:Connect(function()
         if _jtpBusy then return end
         _jtpBusy = true
-        scanLbl.Text = "⏳  Scanning..."
-        JTPStat("🔄 Mengambil daftar player di server...", C.YEL)
+        scanLbl.Text = "[...]  Scanning..."
+        JTPStat("[~] Mengambil daftar player di server...", C.YEL)
         listOuter.Visible = false
         JTP_selIdx = nil
         ClearRows()
@@ -12152,37 +13373,37 @@ do
 
             JTP_players = found
             _jtpBusy = false
-            scanLbl.Text = "🔍  SCAN  Player (Global Server)"
+            scanLbl.Text = "[SCAN]  SCAN  Player (Global Server)"
 
             if #found == 0 then
-                JTPStat("⚠️ Tidak ada player lain di server ini.", C.YEL)
+                JTPStat("[!] Tidak ada player lain di server ini.", C.YEL)
                 listOuter.Visible = false
                 task.defer(ResizeJTPBody)
             else
-                JTPStat("✅ "..#found.." player ditemukan. Pilih → JOIN.", Color3.fromRGB(100,230,150))
+                JTPStat("[OK] "..#found.." player ditemukan. Pilih -> JOIN.", Color3.fromRGB(100,230,150))
                 RenderList()
             end
         end)
     end)
 
-    -- ── JOIN logic ────────────────────────────────────────────────────────
+    -- -- JOIN logic --------------------------------------------------------
     -- Remote: LocalPlayerTeleport:FireServer({mapId=50301, hostId=UserId})
     joinBtn.MouseButton1Click:Connect(function()
         if JTP_joining then return end
         if not JTP_selIdx then
-            JTPStat("⚠️ Belum ada player yang dipilih!", C.YEL)
+            JTPStat("[!] Belum ada player yang dipilih!", C.YEL)
             return
         end
         local entry = JTP_players[JTP_selIdx]
         if not entry then
-            JTPStat("⚠️ Data tidak valid, coba SCAN ulang.", C.YEL)
+            JTPStat("[!] Data tidak valid, coba SCAN ulang.", C.YEL)
             return
         end
 
         JTP_joining = true
-        joinLbl.Text = "⏳  JOINING..."
+        joinLbl.Text = "[...]  JOINING..."
         joinLbl.TextColor3 = C.YEL
-        JTPStat("🚀 Menuju room "..entry.name.." (hostId="..entry.userId..")...", C.YEL)
+        JTPStat("[JOIN] Menuju room "..entry.name.." (hostId="..entry.userId..")...", C.YEL)
 
         task.spawn(function()
             local ok, err = pcall(function()
@@ -12194,39 +13415,39 @@ do
 
                 if not reLocalTp then error("Remote LocalPlayerTeleport tidak ditemukan!") end
 
-                -- ══ Step 1: LocalPlayerTeleport (sesuai SimpleSpy capture) ══
+                -- == Step 1: LocalPlayerTeleport (sesuai SimpleSpy capture) ==
                 -- args[1] = { mapId = 50301, hostId = UserId_target }
                 reLocalTp:FireServer({mapId = JTP_MAPID, hostId = entry.userId})
                 task.wait(0.35)
 
-                -- ══ Step 2: StartLocalPlayerTeleport ══
+                -- == Step 2: StartLocalPlayerTeleport ==
                 if reStartTp then
                     reStartTp:FireServer({mapId = JTP_MAPID, hostId = entry.userId})
                 end
                 task.wait(0.4)
 
-                -- ══ Step 3: EquipHeroWithData ══
+                -- == Step 3: EquipHeroWithData ==
                 if reEquip then
                     pcall(function() reEquip:FireServer() end)
                 end
                 task.wait(0.3)
 
-                -- ══ Step 4: LocalPlayerTeleportSuccess ══
+                -- == Step 4: LocalPlayerTeleportSuccess ==
                 if reTpSucc then
                     pcall(function() reTpSucc:InvokeServer() end)
                 end
             end)
 
             JTP_joining = false
-            joinLbl.Text = "🚀  JOIN  ke Tower Map 2"
+            joinLbl.Text = "[JOIN]  JOIN  ke Tower Map 2"
             joinLbl.TextColor3 = Color3.fromRGB(148,195,255)
 
             if ok then
-                JTPStat("✅ Berhasil join room "..entry.name.."!", Color3.fromRGB(80,220,140))
-                SystemNotify("✅ Joined Tower: "..entry.name, 4)
+                JTPStat("[OK] Berhasil join room "..entry.name.."!", Color3.fromRGB(80,220,140))
+                SystemNotify("[OK] Joined Tower: "..entry.name, 4)
             else
-                JTPStat("❌ Gagal: "..(tostring(err):sub(1,60)), Color3.fromRGB(220,80,80))
-                SystemNotify("❌ Join Tower gagal!", 3)
+                JTPStat("[ERR] Gagal: "..(tostring(err):sub(1,60)), Color3.fromRGB(220,80,80))
+                SystemNotify("[ERR] Join Tower gagal!", 3)
             end
         end)
     end)
@@ -12543,10 +13764,10 @@ end
 do
  local p = NewPanel("settings")
 
- -- ══════════════════════════════════════════════════════════════
+ -- ==============================================================
  -- GLOBAL SAVE / RESET CONFIG  (mencakup seluruh UI)
  -- File: FLa_GlobalConfig.json
- -- ══════════════════════════════════════════════════════════════
+ -- ==============================================================
  local GLOBAL_CFG_FILE = "FLa_GlobalConfig.json"
 
  local function GlobalSaveConfig()
@@ -12713,9 +13934,9 @@ do
   local ok, content = pcall(function() return readfile(GLOBAL_CFG_FILE) end)
   if not ok or not content or content == "" then return end
 
-  -- ══════════════════════════════════════════════════════
+  -- ======================================================
   -- FASE 1: Parse semua data dulu
-  -- ══════════════════════════════════════════════════════
+  -- ======================================================
   local mainBlock     = content:match('"main":%s*(%b{})') or ""
   local farmBlock     = content:match('"farm":%s*(%b{})') or ""
   local atkBlock      = content:match('"attack":%s*(%b{})') or ""
@@ -12792,10 +14013,10 @@ do
    transpPct  = tonumber(themeBlock:match('"transparency":(%d+)')) or 43
   end
 
-  -- ══════════════════════════════════════════════════════
+  -- ======================================================
   -- FASE 2: Restore VISUAL langsung (tanpa delay)
   -- Semua pill/toggle langsung ON sesuai config
-  -- ══════════════════════════════════════════════════════
+  -- ======================================================
   -- Main toggles
   pcall(function() if _visAutoHide    then _visAutoHide(autoHide)     end end)
   pcall(function() if _visDisableAnim then _visDisableAnim(disAnim)   end end)
@@ -12870,9 +14091,9 @@ do
   _gemMaxLevelState = gemLv
   _swSelectAllState = swSelAll
 
-  -- ══════════════════════════════════════════════════════
+  -- ======================================================
   -- FASE 3: Jalankan LOGIC (dengan delay biar game siap)
-  -- ══════════════════════════════════════════════════════
+  -- ======================================================
   task.delay(2, function()
    -- Main logic
    pcall(function() if autoHide  and STATE then STATE.autoHideReward = true; DoAutoHideReward(true) end end)
