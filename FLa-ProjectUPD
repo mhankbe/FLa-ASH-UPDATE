@@ -1207,6 +1207,31 @@ _ascOn = false
 _ascWakeup = nil -- BindableEvent untuk wakeup loop
 _visAscension = nil -- visual pill toggle
 
+-- Mapping nama boss (lowercase) -> mapId dalam Ascension Tower
+-- Sumber: SimpleSPY confirmed. 50301=Baran, 50302=Baran+1, dst.
+ASC_BOSS_MAP = {
+ ["baran"]=50301,         ["baran+1"]=50302,
+ ["grendal"]=50303,       ["grendal+1"]=50304,
+ ["plague"]=50305,        ["plague+1"]=50306,
+ ["frostborne"]=50307,    ["frostborne+1"]=50308,
+ ["legia"]=50309,         ["legia+1"]=50310,
+ ["silas"]=50311,         ["silas+1"]=50312,
+ ["yogumunt"]=50313,      ["yogumunt+1"]=50314,
+ ["antares"]=50315,       ["antares+1"]=50316,
+ ["ashborn"]=50317,       ["ashborn+1"]=50318,
+ ["dominion"]=50319,      ["dominion+1"]=50320,
+ ["absolute"]=50321,      ["absolute+1"]=50322,
+ ["broly"]=50323,         ["broly+1"]=50324,
+ ["goku[super4]"]=50325,  ["goku[super4]+1"]=50326,
+}
+-- Resolve nama boss (dari chat) ke targetMapId Ascension Tower
+-- Fallback ke 50301 (Baran) jika tidak dikenal
+local function ResolveAscTargetMapId(bossName)
+ if not bossName then return 50301 end
+ local key = bossName:lower():gsub("%s+", "")
+ return ASC_BOSS_MAP[key] or 50301
+end
+
 -- Pre-deklarasi variabel expose antar-block (diisi saat masing-masing block UI terbentuk)
 _RAID_SaveConfig    = nil  -- diisi oleh Auto Raid do block
 _RAID_ResetConfig   = nil  -- diisi oleh Auto Raid do block
@@ -7170,8 +7195,13 @@ RebuildRaidList = function()
  local sorted = {}
  for _, e in pairs(RAID_LIVE) do
   local mn = e.mapId and (e.mapId - 50000) or 0
+  -- Auto-mark isAscension jika raidId >= 935001 (dari server, meskipun chat belum datang)
+  local ridAbs = e.raidId and (e.raidId < 0 and math.abs(e.raidId) or e.raidId) or 0
+  if ridAbs >= 935001 and not e.isAscension then
+   e.isAscension = true
+  end
   if e.isAscension then
-   -- Ascension entry (raidId negatif): selalu masuk tanpa filter mapNum
+   -- Ascension entry: selalu masuk tanpa filter mapNum
    table.insert(sorted, e)
   elseif e.mapId and mn >= 1 and mn <= 20 then
    -- Normal entry: filter mapNum 1-20
@@ -7508,12 +7538,22 @@ ConnectRaidListeners = function()
  -- [v271] Grade dari RAID_CONFIG_GRADE (formula matematika, cover semua seri)
  local grade = (RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[raidId]) or (_runeGradeCache and _runeGradeCache[mapNum]) or "?"
  local tempKey = -(mapId) -- key entry chat Ascension (negatif)
- -- Detect isAscension: HANYA dari entry negatif yang masih hidup di RAID_LIVE (bukan runeGradeCache).
- -- runeGradeCache negatif bersifat persisten lintas batch -> tidak aman sebagai sinyal isAscension.
+ -- Detect isAscension: 3 sumber (makin akurat, tidak rely on chat saja)
+ -- 1. raidId >= 935001 -> pasti Ascension Tower (confirmed SimpleSPY: 936501)
+ -- 2. Entry negatif dari chat parser masih hidup di RAID_LIVE
+ -- 3. Entry sebelumnya sudah di-mark Ascension (preserve)
  local _isAsc = false
  local _bnAsc = nil
- if RAID_LIVE[tempKey] and RAID_LIVE[tempKey].isAscension then
-  -- Entry temp Ascension dari chat parser masih ada -> ini adalah Ascension Tower
+ if raidId >= 935001 then
+  -- Sumber paling akurat: raidId range Ascension Tower
+  _isAsc = true
+  if RAID_LIVE[tempKey] and RAID_LIVE[tempKey].bossName then
+   _bnAsc = RAID_LIVE[tempKey].bossName
+  elseif RAID_LIVE[raidId] and RAID_LIVE[raidId].bossName then
+   _bnAsc = RAID_LIVE[raidId].bossName
+  end
+ elseif RAID_LIVE[tempKey] and RAID_LIVE[tempKey].isAscension then
+  -- Entry temp Ascension dari chat parser masih ada
   _isAsc = true; _bnAsc = RAID_LIVE[tempKey].bossName
  elseif RAID_LIVE[raidId] and RAID_LIVE[raidId].isAscension then
   -- Entry sudah ada sebelumnya dan sudah di-mark Ascension -> preserve
@@ -7566,9 +7606,11 @@ ConnectRaidListeners = function()
  if _RE_Enter then
  local conn = _RE_Enter.OnClientEvent:Connect(function(data)
  if type(data) ~= "table" then return end
- -- Abaikan event dari Tower map (50300+) - JTP dan ST2 pakai range ini
+ -- Abaikan event dari Tower map (50300+) KECUALI Ascension Tower (50301-50326)
+ -- JTP pakai 50301, ST2 pakai 50301, Ascension Tower pakai 50301-50326
+ -- Bedakan: jika ASC.inMap -> event ini milik Ascension Tower, bukan JTP/ST2
  local evMapId = data.mapId or data.fromMapId or 0
- if evMapId >= 50300 then return end
+ if evMapId >= 50300 and not ASC.inMap then return end
  -- Abaikan jika tidak ada slotIndex sama sekali (bukan raid event)
  if data.slotIndex == nil and data.fromMapId == nil and data.mapId == nil then return end
  if data.slotIndex then RAID.slotIndex = data.slotIndex end
@@ -7691,7 +7733,10 @@ end
 local function GetAscensionList()
  local list = {}
  for rid, ent in pairs(RAID_LIVE) do
-  if ent.isAscension == true then
+  -- isAscension == true ATAU raidId >= 935001 (range Ascension Tower dari server)
+  local ridAbs = rid < 0 and math.abs(rid) or rid
+  if ent.isAscension == true or ridAbs >= 935001 then
+   if not ent.isAscension then ent.isAscension = true end -- auto-mark
    -- Resolve raidId positif jika entry chat (negatif)
    local resolvedId = rid
    if rid < 0 then
@@ -7810,61 +7855,61 @@ function StartAscensionLoop()
      if not ASC.running then break end
     end
 
-    -- Blokir jika sudah di dalam map raid/tower/siege
+    -- Blokir jika sudah di dalam map raid normal / siege / dungeon (bukan Ascension Tower sendiri)
     local curWm = workspace:GetAttribute("MapId") or 0
-    if (curWm >= 50101 and curWm <= 50120) or (curWm >= 50201 and curWm <= 50205) or curWm >= 50300 then
+    if (curWm >= 50101 and curWm <= 50120) or (curWm >= 50201 and curWm <= 50205) or curWm == 50303 then
      AscStatusUpdate("[||] Sedang di dalam map lain...", Color3.fromRGB(255,140,0))
      task.wait(3); break
     end
 
     ASC.inMap = true
 
-    -- STEP: CreateRaidTeam + StartChallengeRaidMap
-    -- Ascension Tower pakai mapId normal (50000+mn) -> area = +100 (50100+mn)
-    local targetMapId = raidEntry.mapId + 100
+    -- Resolve targetMapId Ascension Tower dari nama boss (chat parser)
+    -- Confirmed via SimpleSPY: StartLocalPlayerTeleport({hostId=LP.UserId, mapId=50301-50326})
+    local targetMapId = ResolveAscTargetMapId(raidEntry.bossName)
+    AscStatusUpdate("Join: Tower "..mn.." -> mapId "..targetMapId.." (boss: "..(raidEntry.bossName or "?")..")", Color3.fromRGB(100,200,255))
+
+    -- STEP 1: CreateRaidTeam (sama seperti raid normal)
     if RE.CreateRaidTeam then
      pcall(function() RE.CreateRaidTeam:InvokeServer(raidEntry.id) end)
     end
-    task.wait(0.2)
+    task.wait(0.3)
     if not ASC.running then ASC.inMap = false; break end
 
-    -- [manual] Rune Map Override (opsional)
-    if pm == "manual" and ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then
-     local RUNE_IDS = {
-      [1]=10265,[2]=10266,[3]=10267,[4]=10268,[5]=10269,[6]=10314,[7]=10315,[8]=10316,
-      [9]=10357,[10]=10358,[11]=10359,[12]=10360,[13]=10361,[14]=10362,[15]=10363,[16]=10364,[17]=10365,[18]=10366,
-     }
-     local itemId = RUNE_IDS[ASC.runeMapTarget]
-     if itemId and RE.UseRaidItem then
-      pcall(function() RE.UseRaidItem:FireServer(itemId) end)
-      task.wait(0.2)
-      targetMapId = 50100 + ASC.runeMapTarget
-     end
-    end
-
+    -- STEP 2: StartChallengeRaidMap (TANPA argumen - confirmed SimpleSPY)
     local _cfail = false
     local _cfConn
     local _cfRe = Remotes:FindFirstChild("ChallengeRaidsFail")
     if _cfRe then _cfConn = _cfRe.OnClientEvent:Connect(function() _cfail = true end) end
 
     if RE.StartChallengeRaidMap then
-     pcall(function() RE.StartChallengeRaidMap:FireServer({mapId = targetMapId}) end)
+     pcall(function() RE.StartChallengeRaidMap:FireServer() end)
+    end
+    task.wait(0.3)
+    if not ASC.running then
+     if _cfConn then pcall(function() _cfConn:Disconnect() end) end
+     ASC.inMap = false; break
     end
 
-    -- Tunggu masuk map (max 10s)
-    local _serverMap = nil
+    -- STEP 3: StartLocalPlayerTeleport({hostId=LP.UserId, mapId=50301-50326})
+    -- Confirmed SimpleSPY: hostId = UserId player sendiri
+    if RE.StartLocalPlayerTeleport then
+     pcall(function() RE.StartLocalPlayerTeleport:FireServer({hostId=LP.UserId, mapId=targetMapId}) end)
+    end
+
+    -- Tunggu masuk map Ascension Tower (range 50301-50326)
     local _tpOk = false
     local _tpW  = 0
     while not _tpOk and _tpW < 15 and ASC.running and not _cfail do
      task.wait(0.3); _tpW = _tpW + 0.3
      pcall(function()
       local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId")
-      -- [FIX] Ascension Tower masuk ke range map yang sama dengan RAID normal (50101-50120)
-      -- Server tidak beda-bedakan mapId antara Normal Raid dan Ascension Tower
-      if wm and wm >= 50101 and wm <= 50120 then
-       _serverMap = wm; _tpOk = true
+      -- Ascension Tower mapId range: 50301-50326 (confirmed SimpleSPY)
+      if wm and wm >= 50301 and wm <= 50326 then
+       _tpOk = true
       end
      end)
+     -- Fallback: enemy sudah spawn berarti sudah masuk map
      if not _tpOk and #GetEnemies() > 0 then _tpOk = true end
     end
     if _cfConn then pcall(function() _cfConn:Disconnect() end) end
@@ -7883,43 +7928,39 @@ function StartAscensionLoop()
     AscStatusUpdate("[~] Dalam Tower "..mn.."...", Color3.fromRGB(100,200,255))
     task.wait(ASC.bossDelay or 3)
 
-    -- Cari boss dan serang (reuse logika dari Auto Raid)
+    -- Cari boss dan serang
+    -- GetRaidEnemies() sudah handle scan workspace - reuse untuk Ascension Tower juga
     if ASC.autoKillBoss then
      local _bDone = false
-     local function IsBossAsc()
-      local char = LP.Character
-      local hrp = char and char:FindFirstChild("HumanoidRootPart")
-      if not hrp then return false end
-      for _, obj in ipairs(workspace:GetDescendants()) do
-       if obj:IsA("Model") and obj:GetAttribute("IsBoss") then return true end
-       if obj.Name:lower():find("boss") and obj:IsA("Model") then return true end
-      end
-      return false
-     end
      local _bTimeout = 0
      while not _bDone and _bTimeout < 60 and ASC.running do
-      task.wait(1); _bTimeout = _bTimeout + 1
-      local enemies = GetEnemies()
+      task.wait(0.5); _bTimeout = _bTimeout + 0.5
+      -- Guard: pastikan masih di dalam Ascension Tower (50301-50326)
+      local _wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
+      if _wm < 50301 or _wm > 50326 then
+       -- Sudah keluar dari Tower - stop attack
+       _bDone = true; break
+      end
+      local enemies = GetRaidEnemies()
       if #enemies > 0 then
-       local tgt = enemies[1]
-       pcall(function()
-        if RE.Click then RE.Click:FireServer(tgt:GetAttribute("GUID") or "") end
-       end)
-       for _, hg in ipairs(HERO_GUIDS) do
-        pcall(function()
-         if RE.HeroUseSkill then RE.HeroUseSkill:FireServer({heroGuid=hg, targetGuid=tgt:GetAttribute("GUID") or ""}) end
-        end)
+       for _, tgt in ipairs(enemies) do
+        local g = tgt.guid
+        local ep = tgt.hrp and tgt.hrp.Position
+        if g and ep then
+         pcall(function() RaidFireDamage(g, ep) end)
+        end
        end
       else
        _bDone = true
       end
      end
     else
-     -- Tanpa autoKillBoss: tunggu map selesai sendiri
+     -- Tanpa autoKillBoss: tunggu map selesai sendiri (max 5 menit)
      local _doneW = 0
-     while ASC.running and _doneW < 90 do
+     while ASC.running and _doneW < 300 do
       task.wait(1); _doneW = _doneW + 1
       local wm = workspace:GetAttribute("MapId") or 0
+      -- Keluar jika sudah kembali ke basemap atau lobby
       if wm == 0 or (wm >= 50001 and wm <= 50020) then break end
      end
     end
@@ -8332,6 +8373,9 @@ local function ResolveEntry()
                     if not entry then return false end
                     -- Cek flag isAscension dari entry RAID_ID_LIST itu sendiri
                     if entry.isAscension == true then return false end
+                    -- Cek raidId range Ascension Tower (confirmed SimpleSPY: 936501+)
+                    -- Server pakai raidId >= 935001 untuk semua Ascension Tower event
+                    if entry.id and entry.id >= 935001 then return false end
                     -- Cek dari RAID_LIVE via id entry
                     local live = entry.id and RAID_LIVE[entry.id]
                     if live and live.isAscension == true then return false end
@@ -8630,8 +8674,8 @@ local function ResolveEntry()
  end
  
  local currentWm = workspace:GetAttribute("MapId") or 0
- -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Tower/Ascension Tower (50300+)
- if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or currentWm >= 50300 then
+ -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Ascension Tower (50301-50326)
+ if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or (currentWm >= 50301 and currentWm <= 50326) then
      task.wait(2)
      break
  end
@@ -10440,7 +10484,7 @@ do
  New("UIStroke",{Parent=ascHeader, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.35})
  local ascArr = Label(ascHeader, ">", 13, Color3.fromRGB(220,180,50), Enum.Font.GothamBold)
  ascArr.Size = UDim2.new(0,22,1,0); ascArr.Position = UDim2.new(0,10,0,0)
- local ascHeaderLbl = Label(ascHeader, "Auto Ascension", 14, C.TXT, Enum.Font.GothamBold)
+ local ascHeaderLbl = Label(ascHeader, "Auto RAID Ascension", 14, C.TXT, Enum.Font.GothamBold)
  ascHeaderLbl.Size = UDim2.new(1,-50,1,0); ascHeaderLbl.Position = UDim2.new(0,34,0,0)
 
  local ascBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
@@ -13206,7 +13250,7 @@ do
     local jtpArrow = Label(jtpHeader,">",13,Color3.fromRGB(80,200,120),Enum.Font.GothamBold)
     jtpArrow.Size = UDim2.new(0,22,1,0); jtpArrow.Position = UDim2.new(0,10,0,0)
 
-    local jtpHeaderLbl = Label(jtpHeader,"[!] Join to Tower Player",14,C.TXT2,Enum.Font.GothamBold)
+    local jtpHeaderLbl = Label(jtpHeader,"JOIN TO TOWER MAP 2",14,C.TXT2,Enum.Font.GothamBold)
     jtpHeaderLbl.Size = UDim2.new(1,-50,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
 
     local jtpBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
