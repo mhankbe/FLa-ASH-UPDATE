@@ -7296,7 +7296,7 @@ end
 -- Child RaidEnterX muncul di RE1001/RE1002 = raid Map X buka
 local function _onRaidChildAdded(child, slotName)
  local mapNum = _parseRaidEnterName(child.Name)
- if not mapNum or mapNum < 1 or mapNum > 19 then return end -- Map 1-19 valid, AT (20+) diblokir
+ if not mapNum or mapNum < 1 or mapNum > 20 then return end -- Map 1-20 valid
  local mapId = 50000 + mapNum
  -- Cek sudah ada entry raidId asli untuk map ini
  for _, ent in pairs(RAID_LIVE) do
