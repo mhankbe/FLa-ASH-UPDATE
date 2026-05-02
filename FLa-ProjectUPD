@@ -1297,13 +1297,28 @@ _setSpeedSlider = nil  -- Player: WalkSpeed slider setter
 _setGemLevelSlider = nil -- Main: Gem Level slider setter
 
 -- ============================================================
--- [v252] MODE DISPATCHER - Single source of truth
+-- [v51] MODE DISPATCHER - dari v49 (stabil) + fix _readMapId
 -- ============================================================
 MODE = {
- current = "idle", -- "idle"|"ma"|"raid"|"siege"|"dungeon"
- priority = { dungeon=4, siege=3, raid=2, ma=1, idle=0 },
+ current = "idle", -- "idle"|"ma"|"raid"|"siege"|"dungeon"|"asc"
+ priority = { dungeon=4, asc=3.5, siege=3, raid=2, ma=1, idle=0 },
  _prev = {}, -- stack: simpan mode yang diinterrupt, untuk resume
 }
+
+-- [FIX v51] Helper: baca MapId dari workspace.Maps
+-- Format nama object: "Map1", "Map2", ... -> mapId = 50001, 50002, ...
+local function _readMapId()
+ local ok, result = pcall(function()
+  local mapsFolder = workspace:FindFirstChild("Maps")
+  if not mapsFolder then return 0 end
+  local child = mapsFolder:FindFirstChildOfClass("Model")
+  if not child then return 0 end
+  local num = tonumber(child.Name:match("^Map(%d+)$"))
+  if num then return 50000 + num end
+  return 0
+ end)
+ return (ok and type(result) == "number") and result or 0
+end
 
 function MODE:_p(name)
  return self.priority[name] or 0
@@ -1316,8 +1331,8 @@ end
 -- Request: boleh masuk kalau slot kosong ATAU priority lebih tinggi
 function MODE:Request(name)
  if self.current == "idle" or self:IsHigherPriority(name) then
- self.current = name
- return true
+  self.current = name
+  return true
  end
  return false
 end
@@ -1325,7 +1340,14 @@ end
 -- Release: hanya release kalau kamu yang pegang
 function MODE:Release(name)
  if self.current == name then
- self.current = "idle"
+  self.current = "idle"
+ end
+end
+
+-- ForceRelease: lepas paksa (untuk emergency / stop script)
+function MODE:ForceRelease(name)
+ if self.current == name or name == nil then
+  self.current = "idle"
  end
 end
 
@@ -1340,10 +1362,42 @@ function MODE:WaitAndRequest(name, timeout)
  local t = 0
  local limit = timeout or 30
  while not self:Request(name) and t < limit do
- task.wait(0.5); t = t + 0.5
+  task.wait(0.5); t = t + 0.5
  end
  return self.current == name
 end
+
+-- IsHeld: cek apakah fitur tertentu yang sedang pegang lock
+function MODE:IsHeld(name)
+ return self.current == name
+end
+
+-- IsIdle: cek apakah slot kosong
+function MODE:IsIdle()
+ return self.current == "idle"
+end
+
+-- _inLobby: cek posisi player via workspace.Maps (dipakai oleh guard attack loop)
+function MODE:_inLobby()
+ local wm = _readMapId()
+ if type(wm) == "number" and wm >= 50001 and wm <= 50020 then
+  return true
+ end
+ -- Fallback: jika Maps tidak terbaca dan tidak sedang inMap -> anggap lobby
+ if wm == 0 then
+  local raidInMap = RAID and RAID.inMap
+  local siegeInMap = SIEGE and SIEGE.inMap
+  if not raidInMap and not siegeInMap then return true end
+ end
+ return false
+end
+
+-- _enqueue/_dequeue: stub agar tidak crash jika dipanggil dari kode lama
+function MODE:_enqueue(name) end
+function MODE:_dequeue(name) end
+-- _locked stub: kompatibilitas kode lama yang cek MODE._locked
+MODE._locked = false
+MODE._queue  = {}
 
 --  Alias getter (baca-saja) 
 -- ============================================================
@@ -1853,7 +1907,7 @@ function AttackLoop_Mass(onStatus)
   -- Blok Siege (50201+), Raid (50101+), Tower (50300+), dan map lain di luar range
   do
    local ok, wm = pcall(function()
-    return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+    return _readMapId()
    end)
    if ok and type(wm) == "number" then
     if wm < 50001 or wm > 50020 then
@@ -2325,7 +2379,7 @@ function WaitSiegeDone()
         if not SIEGE or not SIEGE.running then
             _siegeInterrupt = false
             if MODE.current == "siege" then MODE.current = "idle" end
-            MODE:Release("siege")
+            MODE:ForceRelease("siege") -- [v50] force release
             if SIEGE then SIEGE.inMap = false end
             break
         end
@@ -2335,14 +2389,14 @@ function WaitSiegeDone()
         if not inSiege and not (SIEGE and SIEGE.inMap) then
             _siegeInterrupt = false
             if MODE.current == "siege" then MODE.current = "idle" end
-            MODE:Release("siege")
+            MODE:ForceRelease("siege") -- [v50] force release
             break
         end
         -- Timeout 30 detik: paksa release
         if waited >= 10 then
             _siegeInterrupt = false
             if MODE.current == "siege" then MODE.current = "idle" end
-            MODE:Release("siege")
+            MODE:ForceRelease("siege") -- [v50] force release
             if SIEGE then SIEGE.inMap = false end
             break
         end
@@ -7660,7 +7714,7 @@ end)
 --  Helpers 
 function StopRaid()
  _raidInterrupt = false
- MODE:Release("raid") -- [v252]
+ MODE:ForceRelease("raid") -- [v50] stop paksa saat StopRaid dipanggil
  RAID.running = false
  RAID.inMap = false
  if RAID.thread then
@@ -7768,11 +7822,19 @@ local function GetAscensionList()
     if resolvedId < 0 then resolvedId = math.abs(resolvedId) end
    end
    local mn = (ent.mapId or 50000) - 50000
+   -- [GODMODE FIX] Resolve grade dengan fallback ke GetBestGrade/cache (sama persis Auto Raid)
+   local resolvedGrade = ent.grade
+   if not resolvedGrade or resolvedGrade == "?" then
+    resolvedGrade = GetBestGrade and GetBestGrade(mn, true) or nil
+   end
+   if not resolvedGrade or resolvedGrade == "?" then
+    resolvedGrade = _runeGradeCache and (_runeGradeCache[-mn] or _runeGradeCache[mn]) or "?"
+   end
+   resolvedGrade = resolvedGrade or "?"
    -- [manual] filter grade jika pickMode manual & ada grade dipilih
    local gradeOk = true
    if ASC.pickMode == "manual" and next(ASC.runeGrades) then
-    local g = ent.grade or "?"
-    gradeOk = ASC.runeGrades[g] == true
+    gradeOk = ASC.runeGrades[resolvedGrade] == true
    end
    if gradeOk then
     table.insert(list, {
@@ -7780,7 +7842,7 @@ local function GetAscensionList()
      rawId   = rid,
      mapId   = ent.mapId,
      mapNum  = mn,
-     grade   = ent.grade or "?",
+     grade   = resolvedGrade,
      bossName= ent.bossName,
      isAscension = true,
     })
@@ -7809,9 +7871,16 @@ function StartAscensionLoop()
   local pm = ASC.pickMode or "easy"
   local hasPick = (pm == "byrank" or pm == "manual") and next(ASC.runeGrades) ~= nil
 
-  -- Helper: ambil grade entry
+  -- Helper: ambil grade entry - fallback ke GetBestGrade/cache (sama persis Auto Raid)
   local function _getGrade(r)
-   return r.grade or "?"
+   local g = r.grade
+   if not g or g == "?" then
+    g = GetBestGrade and GetBestGrade(r.mapNum, true) or nil
+   end
+   if not g or g == "?" then
+    g = _runeGradeCache and (_runeGradeCache[-(r.mapNum)] or _runeGradeCache[r.mapNum]) or "?"
+   end
+   return g or "?"
   end
 
   -- Helper sort highest rank
@@ -7942,16 +8011,29 @@ function StartAscensionLoop()
   while ASC.running do
    repeat
 
-    -- [v48] Cek semua interrupt (sama seperti RAID)
-    if MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt) then
-     ASC.inMap = false
-     AscStatusUpdate("[||] Dungeon aktif - menunggu...", Color3.fromRGB(255,140,0))
-     while (MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt)) and ASC.running do task.wait(0.5) end
-     if not ASC.running then break end
-     AscStatusUpdate("> Dungeon selesai - lanjut Ascension...", C.ACC3)
+    -- [v50] MUTEX: Minta lock dari MODE dispatcher.
+    -- ASC TIDAK akan masuk jika fitur lain sedang aktif di dalam map.
+    -- ASC akan antri dan menunggu sampai player kembali ke Map Lobby (50001-50020)
+    -- dan slot bebas (MODE.current == "idle").
+    if not MODE:IsHeld("asc") then
+     AscStatusUpdate("[Q] Menunggu giliran masuk...", Color3.fromRGB(255,200,60))
+     local _tw = 0
+     while ASC.running do
+      if MODE:Request("asc") then break end
+      if MODE.current ~= "idle" then
+       AscStatusUpdate(("[Q] Menunggu %s selesai..."):format(MODE.current), Color3.fromRGB(255,160,60))
+      else
+       AscStatusUpdate("[Q] Menunggu slot bebas...", Color3.fromRGB(255,200,60))
+      end
+      task.wait(0.5); _tw = _tw + 0.5
+     end
+     if not ASC.running then MODE:Release("asc"); break end
+     if not MODE:IsHeld("asc") then break end
+     AscStatusUpdate("> Giliran ASC! Siap masuk...", C.ACC3)
      task.wait(0.1)
     end
 
+    -- ST2 (Single Tower) tetap dihormat sebagai interrupt internal ASC sendiri
     if ST2 and (ST2.running or ST2.inMap) then
      ASC.inMap = false
      AscStatusUpdate("[||] Tower aktif - Ascension pause...", Color3.fromRGB(255,140,0))
@@ -7961,20 +8043,20 @@ function StartAscensionLoop()
      task.wait(0.1)
     end
 
-    if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
-     ASC.inMap = false
-     AscStatusUpdate("[||] Siege aktif - Ascension pause...", Color3.fromRGB(255,140,0))
-     while ((SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt) and ASC.running do task.wait(0.5) end
+    -- [v50] Guard tambahan: pastikan player di lobby sebelum masuk
+    local curWm = _readMapId()
+    if not (curWm >= 50001 and curWm <= 50020) then
+     AscStatusUpdate("[||] Menunggu player di Lobby (MapId 50001-50020)...", Color3.fromRGB(255,140,0))
+     local _wLobby = 0
+     while ASC.running and _wLobby < 60 do
+      task.wait(0.5); _wLobby = _wLobby + 0.5
+      curWm = _readMapId()
+      if curWm >= 50001 and curWm <= 50020 then break end
+     end
      if not ASC.running then break end
-     AscStatusUpdate("> Siege selesai - lanjut Ascension...", C.ACC3)
-     task.wait(0.1)
-    end
-
-    -- Blokir jika di dalam map RAID Normal atau Siege (bukan Ascension Tower sendiri)
-    local curWm = workspace:GetAttribute("MapId") or 0
-    if (curWm >= 50101 and curWm <= 50120) or (curWm >= 50201 and curWm <= 50205) or curWm == 50303 then
-     AscStatusUpdate("[||] Sedang di dalam map lain - tunggu...", Color3.fromRGB(255,140,0))
-     task.wait(3); break
+     if not (curWm >= 50001 and curWm <= 50020) then
+      MODE:ForceRelease("asc"); break
+     end
     end
 
     -- [v48] Resolve entry berdasarkan Pick Mode
@@ -8033,6 +8115,20 @@ function StartAscensionLoop()
     local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
     AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
 
+    -- [FIX v51] Simpan baseMapId SEBELUM masuk Tower
+    -- Harus dari range lobby (50001-50020), bukan Tower (50301+)
+    local _ascBaseMapId
+    do
+     local _raw = _readMapId()
+     if type(_raw) == "number" and _raw >= 50001 and _raw <= 50020 then
+      _ascBaseMapId = _raw
+     elseif type(MR) == "table" and type(MR.lastMapId) == "number" and MR.lastMapId >= 50001 and MR.lastMapId <= 50020 then
+      _ascBaseMapId = MR.lastMapId
+     else
+      _ascBaseMapId = 50001
+     end
+    end
+
     ASC.inMap = true
 
     -- Resolve targetMapId Ascension Tower dari nama boss (chat parser)
@@ -8046,16 +8142,18 @@ function StartAscensionLoop()
     task.wait(0.3)
     if not ASC.running then ASC.inMap = false; break end
 
-    -- STEP 2: StartChallengeRaidMap (TANPA argumen - confirmed SimpleSPY)
+    -- STEP 2: StartChallengeRaidMap dengan mapId Ascension Tower
+    -- [v52 FIX BUG 1] Harus kirim {mapId=targetMapId}, bukan tanpa argumen!
+    -- Tanpa mapId server tidak tahu map mana yang dituju -> player langsung di-kick keluar
     local _cfail = false
     local _cfConn
     local _cfRe = Remotes:FindFirstChild("ChallengeRaidsFail")
     if _cfRe then _cfConn = _cfRe.OnClientEvent:Connect(function() _cfail = true end) end
 
     if RE.StartChallengeRaidMap then
-     pcall(function() RE.StartChallengeRaidMap:FireServer() end)
+     pcall(function() RE.StartChallengeRaidMap:FireServer({mapId = targetMapId}) end)
     end
-    task.wait(0.3)
+    task.wait(0.5) -- [v52 FIX] Tambah jeda 0.5s (dari 0.3s) agar server proses mapId dulu
     if not ASC.running then
      if _cfConn then pcall(function() _cfConn:Disconnect() end) end
      ASC.inMap = false; break
@@ -8065,6 +8163,14 @@ function StartAscensionLoop()
     if RE.StartLocalPlayerTeleport then
      pcall(function() RE.StartLocalPlayerTeleport:FireServer({hostId=LP.UserId, mapId=targetMapId}) end)
     end
+    task.wait(0.3)
+
+    -- [v52 FIX BUG 2] LocalPlayerTeleportSuccess WAJIB dikirim setelah StartLocalPlayerTeleport
+    -- Tanpa ini server menganggap TP gagal dan langsung mengembalikan player ke posisi sebelumnya
+    if RE.LocalTpSuccess then
+     task.spawn(function() pcall(function() RE.LocalTpSuccess:InvokeServer() end) end)
+    end
+    task.wait(0.3)
 
     -- Tunggu masuk map Ascension Tower (range 50301-50326)
     local _tpOk = false
@@ -8072,10 +8178,16 @@ function StartAscensionLoop()
     while not _tpOk and _tpW < 15 and ASC.running and not _cfail do
      task.wait(0.3); _tpW = _tpW + 0.3
      pcall(function()
-      local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId")
+      local wm = _readMapId()
       if wm and wm >= 50301 and wm <= 50326 then _tpOk = true end
      end)
      if not _tpOk and #GetRaidEnemies() > 0 then _tpOk = true end
+     -- [v52 FIX] Jika belum masuk setelah 4 detik, retry kirim LocalTpSuccess
+     if not _tpOk and _tpW > 0 and math.floor(_tpW * 10) % 40 == 0 then
+      if RE.LocalTpSuccess then
+       task.spawn(function() pcall(function() RE.LocalTpSuccess:InvokeServer() end) end)
+      end
+     end
     end
     if _cfConn then pcall(function() _cfConn:Disconnect() end) end
 
@@ -8088,30 +8200,30 @@ function StartAscensionLoop()
      task.wait(2); break
     end
 
-    -- STEP 4: Dalam map - equip hero
+    -- ================================================================
+    -- [v52 FIX] FLOW BARU: Masuk → Delay 2s → Cari Boss → TP ke Boss
+    --                      → Serang sampai mati → Claim Reward → TP keluar
+    -- ================================================================
+
+    -- STEP 4: Equip hero dulu (background, tidak blocking)
     if #HERO_GUIDS > 0 then
      task.spawn(function()
-      task.wait(0.5)
+      task.wait(0.3)
       if RE.EquipHeroWithData then
        for _, hGuid in ipairs(HERO_GUIDS) do
-        pcall(function()
-         RE.EquipHeroWithData:FireServer({ heroGuid = hGuid, userId = MY_USER_ID })
-        end)
+        pcall(function() RE.EquipHeroWithData:FireServer({ heroGuid = hGuid, userId = MY_USER_ID }) end)
         task.wait(0.1)
        end
-      end
-      if RE.HeroStand then
-       local char = LP.Character
-       local hrp = char and char:FindFirstChild("HumanoidRootPart")
-       local spawnPos = (hrp and hrp.Position) or Vector3.new(0,0,0)
-       pcall(function() RE.HeroStand:FireServer({ userId=MY_USER_ID, standPos=spawnPos }) end)
       end
      end)
     end
 
-    AscStatusUpdate("[~] Dalam Tower "..mn.." - loading...", Color3.fromRGB(100,200,255))
+    -- [v52 FIX 1] Delay 2 detik setelah masuk map (stabilize + boss spawn)
+    AscStatusUpdate("[~] Dalam Tower "..mn.." - stabilize 2s...", Color3.fromRGB(100,200,255))
+    task.wait(2)
+    if not ASC.running then ASC.inMap = false; break end
 
-    -- [v48] SUCCESS/FAIL event listener (sama seperti RAID)
+    -- SUCCESS/FAIL event listener
     local _ascDone = false
     local _ascSuccess = false
     local connAS, connAF
@@ -8120,9 +8232,8 @@ function StartAscensionLoop()
     if _reAS then connAS = _reAS.OnClientEvent:Connect(function() _ascDone = true; _ascSuccess = true end) end
     if _reAF then connAF = _reAF.OnClientEvent:Connect(function() _ascDone = true end) end
 
-    -- [v48] AUTO BOSS KILL - sama persis dengan AUTO RAID
     if ASC.autoKillBoss then
-     -- BOSS_KEYS untuk Ascension Tower (semua boss AT + boss normal)
+     -- BOSS_KEYS untuk Ascension Tower
      local BOSS_KEYS_ASC = {
       "goblin king","giant arachnid","buryura","igris",
       "leader of the polar","arch lich","kargalgan","baran",
@@ -8133,79 +8244,46 @@ function StartAscensionLoop()
       "legendary super saiyan","broly",
       "goku[super4]","goku super4","goku super 4",
      }
-     local function IsBossAsc(name)
-      local n = name:lower()
-      for _, k in ipairs(BOSS_KEYS_ASC) do if n:find(k,1,true) then return true end end
-      return false
-     end
-     -- Prioritaskan nama boss dari entry jika ada
      local _ascHintName = raidEntry.bossName and raidEntry.bossName:lower() or nil
      local function IsBossAscWithHint(name)
       local n = name:lower()
       if _ascHintName and n:find(_ascHintName,1,true) then return true end
-      return IsBossAsc(name)
+      for _, k in ipairs(BOSS_KEYS_ASC) do if n:find(k,1,true) then return true end end
+      return false
      end
 
-     -- Early boss detection selama loading
-     local _earlyBoss = nil
-     local _loadWait = 0
-     while _loadWait < 8 and ASC.running and not _ascDone do
-      task.wait(0.5); _loadWait = _loadWait + 0.5
-      if _loadWait >= 1 and not _earlyBoss then
-       for _, e in ipairs(GetRaidEnemies()) do
-        if IsBossAscWithHint(e.model.Name) then _earlyBoss = e; break end
-       end
-      end
-      if _earlyBoss then
-       local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
-       if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then break end
-       if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then _earlyBoss = nil end
-      end
-     end
+     -- [v52 FIX 1] Cari boss langsung setelah delay 2s (bukan 8s loading + 30s scan)
+     -- Scan cepat dulu, lalu fallback scan workspace descendants jika belum ketemu
+     local boss = nil
+     AscStatusUpdate("[?] Find Boss...", Color3.fromRGB(160,148,135))
 
-     -- [v48] Event-based boss detection (sama dengan RAID)
-     local boss = (_earlyBoss and IsBossAscWithHint(_earlyBoss.model.Name)) and _earlyBoss or nil
-     local _bossEventConns = {}
-     local function _tryAddBoss(obj)
-      if boss or not obj:IsA("Model") then return end
-      if IsBossAscWithHint(obj.Name) then
-       local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
-       local hrp = obj:FindFirstChild("HumanoidRootPart")
-       local hum = obj:FindFirstChildOfClass("Humanoid")
-       if g and hrp and hum and hum.Health > 0 then
-        boss = {guid=g, hrp=hrp, model=obj}
-       end
-      end
-     end
-     for _, fname in ipairs({"Bosses","Boss","RaidBoss","Enemys","Enemy","Enemies","RaidEnemys","Monsters"}) do
-      local folder = workspace:FindFirstChild(fname)
-      if folder then
-       table.insert(_bossEventConns, folder.ChildAdded:Connect(_tryAddBoss))
-      end
-     end
-     table.insert(_bossEventConns, workspace.ChildAdded:Connect(function(obj)
-      if obj:IsA("Folder") or obj:IsA("Model") then
-       _tryAddBoss(obj)
-       pcall(function()
-        table.insert(_bossEventConns, obj.ChildAdded:Connect(_tryAddBoss))
-        for _, child in ipairs(obj:GetChildren()) do _tryAddBoss(child) end
-       end)
-      end
-     end))
-
-     -- Cari boss (max 30s, sama dengan RAID)
-     local waitBoss = 0
-     while ASC.running and not boss and waitBoss < 30 and not _ascDone do
+     -- Scan pertama dari GetRaidEnemies (max 10s)
+     local _findWait = 0
+     while ASC.running and not boss and _findWait < 10 and not _ascDone do
       for _, e in ipairs(GetRaidEnemies()) do
        if IsBossAscWithHint(e.model.Name) then boss = e; break end
       end
       if not boss then
-       AscStatusUpdate("Find Boss... ("..math.floor(waitBoss).."s/30s)", Color3.fromRGB(160,148,135))
-       task.wait(0.3); waitBoss = waitBoss + 0.3
+       AscStatusUpdate("Find Boss... ("..math.floor(_findWait).."s/10s)", Color3.fromRGB(160,148,135))
+       task.wait(0.3); _findWait = _findWait + 0.3
       end
      end
-     for _, c in ipairs(_bossEventConns) do pcall(function() c:Disconnect() end) end
-     _bossEventConns = {}
+
+     -- Fallback: scan workspace:GetDescendants() jika belum ketemu
+     if not boss and ASC.running and not _ascDone then
+      pcall(function()
+       for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and IsBossAscWithHint(obj.Name) then
+         local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
+         local hrp = obj:FindFirstChild("HumanoidRootPart")
+         local hum = obj:FindFirstChildOfClass("Humanoid")
+         if g and hrp and hum and hum.Health > 0 then
+          boss = {guid=g, hrp=hrp, model=obj}; break
+         end
+        end
+       end
+      end)
+     end
 
      -- Helper bossPos yang aman
      local function GetSafeAscBossPos()
@@ -8219,42 +8297,24 @@ function StartAscensionLoop()
      if boss and ASC.running and not _ascDone then
       local bossGuid = boss.guid
       local bossPos = GetSafeAscBossPos()
-      if not bossPos then
-       local _waitPos = 0
-       while not bossPos and _waitPos < 3 and ASC.running and not _ascDone do
-        task.wait(0.3); _waitPos = _waitPos + 0.3
-        bossPos = GetSafeAscBossPos()
-       end
-      end
-
-      -- [v48] Countdown bossDelay user-controlled (sama dengan RAID)
-      local _bd = math.max(1, math.min(10, ASC.bossDelay or 3))
-      for _ci = _bd, 1, -1 do
-       if not ASC.running or _ascDone then break end
-       AscStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ".._ci.."s...", Color3.fromRGB(255,160,60))
-       task.wait(1)
-      end
-
-      -- Refresh bossPos setelah countdown
-      bossPos = GetSafeAscBossPos()
-      local _refreshWait = 0
-      while not bossPos and _refreshWait < 3 and ASC.running and not _ascDone do
-       task.wait(0.3); _refreshWait = _refreshWait + 0.3
+      -- Tunggu posisi boss valid max 3s
+      local _wpWait = 0
+      while not bossPos and _wpWait < 3 and ASC.running and not _ascDone do
+       task.wait(0.3); _wpWait = _wpWait + 0.3
        bossPos = GetSafeAscBossPos()
       end
 
       if ASC.running and not _ascDone and bossPos then
-       AscStatusUpdate("[K] Boss: "..boss.model.Name.." - Attack!", Color3.fromRGB(255,80,80))
+       AscStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ke Boss!", Color3.fromRGB(255,160,60))
 
-       -- 1) TP Player ke boss
+       -- [v52 FIX 1] TP Player ke boss
        pcall(function()
         local char = LP.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local safePos = GetSafeAscBossPos()
         if hrp and safePos then hrp.CFrame = CFrame.new(safePos + Vector3.new(3,0,0)) end
        end)
-
-       -- 2) TP semua hero client-side ke boss
+       -- TP semua hero ke boss
        pcall(function()
         local safePos2 = GetSafeAscBossPos()
         if not safePos2 then return end
@@ -8262,14 +8322,11 @@ function StartAscensionLoop()
         if heroFolder then
          for _, hModel in ipairs(heroFolder:GetChildren()) do
           local hHrp = hModel:FindFirstChild("HumanoidRootPart")
-          if hHrp then
-           hHrp.CFrame = CFrame.new(safePos2 + Vector3.new(math.random(-2,2),0,math.random(-2,2)))
-          end
+          if hHrp then hHrp.CFrame = CFrame.new(safePos2 + Vector3.new(math.random(-2,2),0,math.random(-2,2))) end
          end
         end
        end)
-
-       -- 3) Fire hero remotes
+       -- Fire hero remotes
        pcall(function()
         local safePos3 = GetSafeAscBossPos()
         if safePos3 then FireHeroRemotes(bossGuid, safePos3) end
@@ -8278,44 +8335,21 @@ function StartAscensionLoop()
         local safePos3b = GetSafeAscBossPos()
         if safePos3b then
          for _, hGuid in ipairs(HERO_GUIDS) do
-          pcall(function()
-           RE.HeroStand:FireServer({ heroGuid=hGuid, userId=MY_USER_ID, standPos=safePos3b+Vector3.new(1,0,1) })
-          end)
+          pcall(function() RE.HeroStand:FireServer({ heroGuid=hGuid, userId=MY_USER_ID, standPos=safePos3b+Vector3.new(1,0,1) }) end)
          end
         end
        end
-
-       -- 4) UnEquip -> EquipBest
+       -- UnEquip -> EquipBest
        task.wait(0.3)
        if RE.UnEquipHero then pcall(function() RE.UnEquipHero:FireServer() end) end
        task.wait(0.3)
        if RE.EquipBestHero then pcall(function() RE.EquipBestHero:FireServer() end) end
        task.wait(0.3)
 
-       -- 5) TP ulang hero setelah re-equip
-       pcall(function()
-        local safePos5 = GetSafeAscBossPos()
-        if not safePos5 then return end
-        local heroFolder = workspace:FindFirstChild("Heros")
-        if heroFolder then
-         for _, hModel in ipairs(heroFolder:GetChildren()) do
-          local hHrp = hModel:FindFirstChild("HumanoidRootPart")
-          if hHrp then
-           hHrp.CFrame = CFrame.new(safePos5 + Vector3.new(math.random(-2,2),0,math.random(-2,2)))
-          end
-         end
-        end
-       end)
-       pcall(function()
-        local safePos5b = GetSafeAscBossPos()
-        if safePos5b then FireHeroRemotes(bossGuid, safePos5b) end
-       end)
-
-       -- 6) Background thread: TP player+hero terus ke boss tiap 0.5s
+       -- Background thread: TP player+hero terus ke boss tiap 0.5s selama attack
        local _tpTh = task.spawn(function()
         while ASC.running and not _ascDone do
-         -- [v48] Stop TP jika sudah keluar Ascension Tower
-         local _tpMap = GetCurrentMapId()
+         local _tpMap = _readMapId() -- [GODMODE FIX v53] GetCurrentMapId belum defined di sini, pakai _readMapId
          if _tpMap and (_tpMap < 50301 or _tpMap > 50326) then break end
          pcall(function()
           local pos = GetSafeAscBossPos()
@@ -8327,17 +8361,13 @@ function StartAscensionLoop()
           if heroFolder then
            for _, hModel in ipairs(heroFolder:GetChildren()) do
             local hHrp = hModel:FindFirstChild("HumanoidRootPart")
-            if hHrp then
-             hHrp.CFrame = CFrame.new(pos + Vector3.new(math.random(-2,2),0,math.random(-2,2)))
-            end
+            if hHrp then hHrp.CFrame = CFrame.new(pos + Vector3.new(math.random(-2,2),0,math.random(-2,2))) end
            end
           end
           FireHeroRemotes(bossGuid, pos)
           if RE.HeroStand then
            for _, hGuid in ipairs(HERO_GUIDS) do
-            pcall(function()
-             RE.HeroStand:FireServer({ heroGuid=hGuid, userId=MY_USER_ID, standPos=pos+Vector3.new(1,0,1) })
-            end)
+            pcall(function() RE.HeroStand:FireServer({ heroGuid=hGuid, userId=MY_USER_ID, standPos=pos+Vector3.new(1,0,1) }) end)
            end
           end
          end)
@@ -8345,11 +8375,10 @@ function StartAscensionLoop()
         end
        end)
 
-       -- 7) Serang boss (sama dengan RAID: 0.08s per attack)
+       -- [v52 FIX 1] Serang boss sampai mati (0.08s per attack)
        AscStatusUpdate("[FLa] Attack: "..boss.model.Name, Color3.fromRGB(255,80,80))
        while ASC.running and not _ascDone do
-        -- [v48] Validasi: player harus masih di Ascension Tower
-        local _curMap = GetCurrentMapId()
+        local _curMap = _readMapId() -- [GODMODE FIX v53] GetCurrentMapId belum defined di sini, pakai _readMapId
         if _curMap and (_curMap < 50301 or _curMap > 50326) then
          AscStatusUpdate("[!] Player keluar Tower - stop attack", Color3.fromRGB(255,140,0))
          break
@@ -8369,24 +8398,9 @@ function StartAscensionLoop()
        AscStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
       end -- if bossPos
      else
-      -- Boss tidak ditemukan setelah 30s - last chance scan
-      if not boss then
-       pcall(function()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-         if obj:IsA("Model") and IsBossAscWithHint(obj.Name) then
-          local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
-          local hrp = obj:FindFirstChild("HumanoidRootPart")
-          local hum = obj:FindFirstChildOfClass("Humanoid")
-          if g and hrp and hum and hum.Health > 0 then
-           boss = {guid=g, hrp=hrp, model=obj}; break
-          end
-         end
-        end
-       end)
-      end
       if not boss and ASC.running then
-       AscStatusUpdate("[FLa] Boss not found (30s) - Go Out...", Color3.fromRGB(255,150,50))
-       task.wait(3)
+       AscStatusUpdate("[FLa] Boss not found - Go Out...", Color3.fromRGB(255,150,50))
+       task.wait(2)
       end
      end
     else
@@ -8394,8 +8408,7 @@ function StartAscensionLoop()
      local _wt = 0
      while ASC.running and not _ascDone and _wt < 300 do
       task.wait(1); _wt = _wt + 1
-      -- Guard keluar Tower
-      local wm = workspace:GetAttribute("MapId") or 0
+      local wm = _readMapId()
       if wm == 0 or (wm >= 50001 and wm <= 50028) then break end
      end
     end
@@ -8410,49 +8423,89 @@ function StartAscensionLoop()
     end
     if not ASC.running then break end
 
-    -- Wait reward
+    -- [v52 FIX 2] Claim reward chest ke server (GainRaidsRewards) + collect item
     if _ascSuccess then
-     AscStatusUpdate("[..] Wait 1s (Get reward)...", Color3.fromRGB(100,255,150))
-     task.wait(1)
+     AscStatusUpdate("[..] Claim Reward...", Color3.fromRGB(100,255,150))
+     task.wait(0.5)
+     -- GainRaidsRewards: konfirmasi reward ke server (WAJIB, tanpa ini reward tidak masuk)
+     if RE.GainRaidsRewards then
+      pcall(function() RE.GainRaidsRewards:InvokeServer(1) end)
+     end
+     task.wait(0.5)
+     -- Collect item yang jatuh di map
+     task.spawn(function() pcall(RaidCollectAll) end)
+     task.wait(0.5)
     end
     if not ASC.running then break end
 
-    -- STEP 5: Collect + Exit Tower
-    task.spawn(function() pcall(RaidCollectAll) end)
-    AscStatusUpdate("[FLa] Go Out Tower...", Color3.fromRGB(100,200,255))
-
+    -- STEP 5: Bersihkan entry + Exit Tower
     RAID_LIVE[raidEntry.rawId] = nil
     if raidEntry.rawId ~= raidEntry.id then RAID_LIVE[raidEntry.id] = nil end
     if RebuildRaidList then pcall(RebuildRaidList) end
 
-    -- Keluar dari Ascension Tower (kembali ke basemap Map 1)
+    AscStatusUpdate(("[<] Go Out Tower -> Map %d..."):format(_ascBaseMapId - 50000), Color3.fromRGB(100,200,255))
     local _exitRe = Remotes:FindFirstChild("QuitRaidsMap")
+
+    -- Helper TP keluar sesuai range map + LocalPlayerTeleportSuccess konfirmasi ke server
+    local function _fireTpAsc(mapId)
+     local m = mapId - 50000
+     if m >= 1 and m <= 4 then
+      pcall(function() RE.StartTp:FireServer({ mapId = mapId }) end)
+     else
+      pcall(function() RE.LocalTp:FireServer({ mapId = mapId }) end)
+     end
+     task.wait(0.3)
+     -- [v52 FIX 3] LocalPlayerTeleportSuccess WAJIB setelah setiap TP keluar
+     -- Tanpa ini server tidak konfirmasi player keluar → bisa di-kick balik
+     if RE.LocalTpSuccess then
+      task.spawn(function() pcall(function() RE.LocalTpSuccess:InvokeServer() end) end)
+     end
+    end
+
+    local function _inAscArea()
+     local wm = _readMapId()
+     if wm == 0 then return true end
+     return (wm >= 50301 and wm <= 50326)
+    end
+
+    -- Fire exit pertama: QuitRaidsMap + TP
     if _exitRe then
-     pcall(function()
-      _exitRe:FireServer({ currentSlotIndex = 2, toMapId = 50001 })
-     end)
+     pcall(function() _exitRe:FireServer({ currentSlotIndex = 2, toMapId = _ascBaseMapId }) end)
     end
     task.wait(0.3)
-    pcall(function() RE.LocalTp:FireServer({ mapId = 50001 }) end)
-    -- Retry exit jika masih di Ascension Tower
+    _fireTpAsc(_ascBaseMapId)
+
+    -- Retry max 5x jika masih di Tower
     local _exitTry = 0
-    local function _inAscArea()
-     local ok, wm = pcall(function()
-      return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
-     end)
-     return (ok and wm >= 50301 and wm <= 50326)
-    end
     while _inAscArea() and _exitTry < 5 and ASC.running do
      _exitTry = _exitTry + 1
      task.wait(1)
-     if _exitRe then pcall(function() _exitRe:FireServer({ currentSlotIndex=2, toMapId=50001 }) end) end
+     if _exitRe then pcall(function() _exitRe:FireServer({ currentSlotIndex=2, toMapId=_ascBaseMapId }) end) end
      task.wait(0.2)
-     pcall(function() RE.LocalTp:FireServer({ mapId=50001 }) end)
+     _fireTpAsc(_ascBaseMapId)
     end
 
     ASC.inMap = false
 
-    -- [v48] STEP 6: Cooldown 14s (sama persis dengan RAID, scan tetap jalan)
+    -- Tunggu konfirmasi player benar-benar di lobby (max 30 detik)
+    AscStatusUpdate("[<] Menunggu konfirmasi kembali ke Lobby...", Color3.fromRGB(100,200,255))
+    do
+     local _lobWait = 0
+     while ASC.running and _lobWait < 30 do
+      local _wm3 = _readMapId()
+      if _wm3 >= 50001 and _wm3 <= 50020 then break end
+      if _lobWait > 0 and _lobWait % 5 == 0 then
+       if _exitRe then pcall(function() _exitRe:FireServer({ currentSlotIndex=2, toMapId=_ascBaseMapId }) end) end
+       task.wait(0.2)
+       _fireTpAsc(_ascBaseMapId)
+      end
+      task.wait(0.5); _lobWait = _lobWait + 0.5
+     end
+    end
+    -- Lepas lock MODE - fitur lain boleh masuk sekarang
+    MODE:Release("asc")
+
+    -- [v50] STEP 6: Cooldown 14s (sama persis dengan RAID, scan tetap jalan)
     for cd = 14, 1, -1 do
      if not ASC.running then break end
      AscStatusUpdate("[..] Cooldown "..cd.."s...", Color3.fromRGB(160,148,135))
@@ -8460,31 +8513,22 @@ function StartAscensionLoop()
      task.wait(1)
     end
 
-    -- [v48] STEP 7: Standby loop setelah cooldown (sama dengan RAID)
+    -- [v50] STEP 7: Standby loop setelah cooldown - tunggu ada Tower tersedia
+    -- Tidak ada cek isBusy manual; MODE dispatcher yang mengatur giliran saat akan masuk lagi
     if ASC.running then
-     AscStatusUpdate("[>>] Waiting & Cooldown...", Color3.fromRGB(100,255,150))
+     AscStatusUpdate("[>>] Cooldown selesai - Waiting Ascension Tower...", Color3.fromRGB(100,255,150))
      if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
      local _fw = 0
      while ASC.running do
-      -- Cek busy (Siege / Dungeon)
-      local isBusy = false
-      if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or (DUNGEON and DUNGEON.inMap) then isBusy = true end
-      local _wm2 = workspace:GetAttribute("MapId") or 0
-      if (_wm2 >= 50201 and _wm2 <= 50204) or _wm2 == 50303 then isBusy = true end
-
-      if isBusy then
-       AscStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255,100,100))
+      local nextEntry = ResolveAscEntry()
+      if nextEntry then break end
+      if #GetAscensionList() > 0 then
+       AscStatusUpdate("[FLa] Waiting grade filter... (".._fw.."s)", Color3.fromRGB(200,255,150))
       else
-       local nextEntry = ResolveAscEntry()
-       if nextEntry then break end
-       if #GetAscensionList() > 0 then
-        AscStatusUpdate("[FLa] Waiting grade filter... (".._fw.."s)", Color3.fromRGB(200,255,150))
+       if RAID.running then
+        AscStatusUpdate("[Standby] Fallback ke Auto Raid (".._fw.."s)", Color3.fromRGB(140,100,200))
        else
-        if RAID.running then
-         AscStatusUpdate("[Standby] Fallback ke Auto Raid (".._fw.."s)", Color3.fromRGB(140,100,200))
-        else
-         AscStatusUpdate("[FLa] Waiting Ascension Tower... (".._fw.."s)", Color3.fromRGB(160,120,60))
-        end
+        AscStatusUpdate("[FLa] Waiting Ascension Tower... (".._fw.."s)", Color3.fromRGB(160,120,60))
        end
       end
       -- Wakeup cepat
@@ -8506,9 +8550,13 @@ function StartAscensionLoop()
   end -- while ASC.running
 
   ASC.running = false
-  ASC.inMap   = false
+  ASC.inMap   = false -- [GODMODE FIX v53] WAJIB reset inMap saat stop agar RAID tidak stuck
   _ascOn      = false
   ASC._rrIdx  = 0
+  -- [v50] Pastikan lock MODE dilepas saat ASC stop
+  if MODE:IsHeld("asc") then MODE:ForceRelease("asc") end
+  -- [GODMODE FIX v53] Wakeup RAID loop yang mungkin sedang menunggu ASC selesai
+  if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
   AscStatusUpdate("Auto Ascension STOP", Color3.fromRGB(160,148,135))
   if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
  end)
@@ -8568,12 +8616,11 @@ function RaidCollectAll()
  end
 end
 
--- [FIX GODMODE] Helper: baca mapId player saat ini secara realtime
+-- [FIX GODMODE v51] Helper: baca mapId player saat ini secara realtime
+-- Menggunakan workspace.Maps folder (nama: "Map1", "Map2", dst)
 local function GetCurrentMapId()
- local ok, wm = pcall(function()
-  return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
- end)
- return (ok and type(wm) == "number") and wm or nil
+ local wm = _readMapId()
+ return (type(wm) == "number" and wm > 0) and wm or nil
 end
 
 -- [FIX GODMODE] Helper: player posisi realtime
@@ -8824,17 +8871,24 @@ function StartRaidLoop()
  while RAID.running do
  repeat
 
- -- [v252] Cek semua interrupt via MODE dispatcher
- -- Dungeon (priority tertinggi) -> ST2/Tower -> Siege -> baru Raid boleh jalan
- if MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt) then
- RAID.inMap = false
- RaidStatusUpdate("[||] Dungeon aktif - menunggu...", Color3.fromRGB(255,140,0))
- while (MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt)) and RAID.running do
- task.wait(0.5)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Dungeon selesai - lanjut raid...", C.ACC3)
- task.wait(0.1)
+ -- [v50] MUTEX: Minta lock dari MODE dispatcher.
+ -- RAID tidak akan masuk jika fitur lain (dungeon/asc/siege) sedang aktif di dalam map.
+ -- RAID akan antri dan menunggu player kembali ke Lobby (50001-50020) dan slot bebas.
+ if not MODE:IsHeld("raid") then
+  RaidStatusUpdate("[Q] Menunggu giliran masuk...", Color3.fromRGB(255,200,60))
+  while RAID.running do
+   if MODE:Request("raid") then break end
+   if MODE.current ~= "idle" then
+    RaidStatusUpdate(("[Q] Menunggu %s selesai..."):format(MODE.current), Color3.fromRGB(255,160,60))
+   else
+    RaidStatusUpdate("[Q] Menunggu slot bebas...", Color3.fromRGB(255,200,60))
+   end
+   task.wait(0.5)
+  end
+  if not RAID.running then MODE:Release("raid"); break end
+  if not MODE:IsHeld("raid") then break end
+  RaidStatusUpdate("> Giliran RAID! Siap masuk...", C.ACC3)
+  task.wait(0.1)
  end
 
  -- [FIX] Cek ST2 (Single/Ascension Tower) - pause Auto Raid selama Tower berjalan
@@ -8849,52 +8903,9 @@ function StartRaidLoop()
  task.wait(0.1)
  end
 
- -- [FIX v46] Cek Ascension Mode sedang di dalam map - pause Auto Raid
- if ASC.inMap then
- RAID.inMap = false
- RaidStatusUpdate("[||] Ascension Tower aktif - Auto Raid pause...", Color3.fromRGB(180,100,255))
- while ASC.inMap and RAID.running do
-  task.wait(0.5)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Ascension selesai - lanjut raid...", C.ACC3)
- task.wait(0.1)
- end
-
- -- [FIX v46] Fallback logic: jika Ascension Mode aktif DAN ada Ascension Tower tersedia,
- -- Auto Raid mengalah dan menunggu Ascension Mode selesai menangani Tower.
- -- Auto Raid hanya jalan jika: Ascension Mode OFF, atau Ascension Mode ON tapi tidak ada Tower.
- if ASC.running and #GetAscensionList() > 0 then
- RAID.inMap = false
- RaidStatusUpdate("[||] Ascension Tower tersedia - menunggu Ascension Mode...", Color3.fromRGB(180,100,255))
- while ASC.running and #GetAscensionList() > 0 and RAID.running do
-  task.wait(1)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Tidak ada Ascension Tower - Auto Raid ambil alih...", C.ACC3)
- task.wait(0.1)
- end
- -- [BUG FIX v49] Double-check: setelah keluar dari wait loop ASC, pastikan ASC.inMap benar-benar false
- -- Ada window race: GetAscensionList kosong tapi ASC sudah set inMap=true (proses join Tower baru mulai)
- if ASC.inMap then
-  RAID.inMap = false
-  RaidStatusUpdate("[||] Ascension sedang join Tower - tunggu...", Color3.fromRGB(180,100,255))
-  while ASC.inMap and RAID.running do task.wait(0.3) end
-  if not RAID.running then break end
-  task.wait(0.2)
- end
-
- -- [FIX] Cek Siege - pause Auto Raid selama player di dalam Siege map
- if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
- RAID.inMap = false
- RaidStatusUpdate("[||] Siege aktif - Auto Raid pause...", Color3.fromRGB(255,140,0))
- while ((SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt) and RAID.running do
- task.wait(0.5)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Siege selesai - lanjut raid...", C.ACC3)
- task.wait(0.1)
- end
+ -- [v50] Semua interrupt (Dungeon, ASC, Siege) sudah ditangani oleh MODE dispatcher queue.
+ -- RAID hanya bisa masuk setelah player di lobby DAN MODE.current == "idle".
+ -- Tidak perlu cek manual ASC/Siege/Dungeon di sini lagi.
 
         -- Prioritas: Rune Map + Pick Rank > Rune Map saja > Pick Rank > Difficulty
  -- Selalu baca RAID.runeEnabled / runeGrades / runeMapTarget live
@@ -9206,7 +9217,7 @@ local function ResolveEntry()
      break
  end
  
- local currentWm = workspace:GetAttribute("MapId") or 0
+ local currentWm = _readMapId()
  -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Ascension Tower (50301-50326)
  if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or (currentWm >= 50301 and currentWm <= 50326) then
      if currentWm >= 50301 and currentWm <= 50326 then
@@ -9216,8 +9227,9 @@ local function ResolveEntry()
      break
  end
  -- [BUG FIX v49] Blokir juga jika ASC.inMap = true (sedang proses join Tower)
- -- Ini mencegah RAID masuk bersamaan saat ASC belum selesai teleport ke Tower
- if ASC.inMap then
+ -- [GODMODE FIX v53] Hanya block jika ASC.running juga true (toggle ON)
+ -- Jika toggle ASC dimatikan, RAID tidak boleh stuck karena sisa ASC.inMap=true
+ if ASC.running and ASC.inMap then
      RaidStatusUpdate("[!] Ascension Tower sedang aktif - Auto Raid skip", Color3.fromRGB(180,100,255))
      task.wait(2)
      break
@@ -9416,7 +9428,7 @@ local function ResolveEntry()
  while not _tpOk and _tpWait < 15 and RAID.running do
   task.wait(0.3); _tpWait = _tpWait + 0.3
   pcall(function()
-   local wMapId = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+   local wMapId = _readMapId()
    if wMapId then
     if RAID.serverMapId and wMapId == RAID.serverMapId then
      _mapIdOk = true
@@ -9436,7 +9448,7 @@ local function ResolveEntry()
 
  if not _tpOk and RAID.running then
  RAID_LIVE[RAID.raidId] = nil; RebuildRaidList()
- _raidInterrupt = false; RAID.inMap = false; MODE:Release("raid"); RAID.fromMapId = nil; MODE:Release("raid")
+ _raidInterrupt = false; RAID.inMap = false; RAID.fromMapId = nil; MODE:Release("raid")
  task.wait(1); break
  end
 
@@ -9820,6 +9832,7 @@ local function ResolveEntry()
  -- 7) SERANG BOSS - langsung tanpa jeda
  RaidStatusUpdate("[FLa] Attack: " .. boss.model.Name, Color3.fromRGB(255,80,80))
  local _outOfMapCount = 0 -- [BUG FIX v49] debounce counter agar tidak false-break karena lag spike
+ local _bossKilled = false -- [GODMODE FIX v53] flag: boss benar-benar mati (bukan player keluar manual)
  while RAID.running and not RAID._raidDone do
  -- [FIX GODMODE] Validasi realtime: player harus masih di raid map (50101-50120)
  -- Jika sudah keluar ke basemap, stop serang boss
@@ -9828,15 +9841,23 @@ local function ResolveEntry()
  if _curMap and (_curMap < 50101 or _curMap > 50120) then
   _outOfMapCount = _outOfMapCount + 1
   if _outOfMapCount >= 3 then
-   RaidStatusUpdate("[!] Player keluar raid map - stop attack boss", Color3.fromRGB(255,140,0))
+   -- [GODMODE FIX v53] Player keluar MANUAL - jangan anggap sukses, reset state
+   RaidStatusUpdate("[!] Player keluar raid manual - reset state", Color3.fromRGB(255,140,0))
+   _bossKilled = false
    break
   end
  else
   _outOfMapCount = 0
  end
- if not boss.model or not boss.model.Parent then break end
+ if not boss.model or not boss.model.Parent then
+  _bossKilled = true -- model hilang = boss mati oleh server
+  break
+ end
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
- if hum and hum.Health <= 0 then break end
+ if hum and hum.Health <= 0 then
+  _bossKilled = true -- HP 0 = boss mati
+  break
+ end
  local p = GetSafeBossPos()
  if not p then task.wait(0.08); continue end
  task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
@@ -9844,9 +9865,33 @@ local function ResolveEntry()
  end
 
  pcall(function() task.cancel(_tpTh) end)
- _raidSuccess = true
- RAID._raidDone = true
- RaidStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
+ -- [GODMODE FIX v53] Hanya sukses jika boss benar-benar mati, bukan keluar manual
+ if _bossKilled then
+  _raidSuccess = true
+  RAID._raidDone = true
+  RaidStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
+ else
+  -- Player keluar manual: langsung reset semua state & cooldown, lanjut iterasi loop
+  RAID._raidDone = true
+  _raidSuccess = false
+  if connS then pcall(function() connS:Disconnect() end) end
+  if connF then pcall(function() connF:Disconnect() end) end
+  RAID.inMap = false
+  RAID.fromMapId = nil
+  _raidInterrupt = false
+  MODE:ForceRelease("raid")
+  for cd = 14, 1, -1 do
+   if not RAID.running then break end
+   RaidStatusUpdate("[..] Keluar Manual - Cooldown " .. cd .. "s...", Color3.fromRGB(255,140,0))
+   if RAID.dot then RAID.dot.BackgroundColor3 = Color3.fromRGB(255,200,60) end
+   task.wait(1)
+  end
+  if RAID.running then
+   RaidStatusUpdate("[>>] Siap cari raid baru...", Color3.fromRGB(100,255,150))
+   if RAID.dot then RAID.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
+  end
+  break -- kembali ke while RAID.running (loop utama iterasi baru)
+ end
  end -- if RAID.running after delay
  else
  -- [GODMODE FIX] Boss tidak ditemukan setelah 30s - coba sekali lagi scan penuh workspace sebelum menyerah
@@ -9926,7 +9971,7 @@ local function ResolveEntry()
  local function _inRaidArea()
  local ok = false
  pcall(function()
- local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+ local wm = _readMapId()
  if wm then
  ok = (wm >= 50101 and wm <= 50118)
  end
@@ -9967,7 +10012,7 @@ local function ResolveEntry()
  -- STEP 6: Resume MA -> cooldown
  -- 
  _raidInterrupt = false
- MODE:Release("raid") -- [FIX v257] MA HARUS resume saat player di luar raid
+ MODE:ForceRelease("raid") -- [v50] emergency: player sudah di luar raid
  -- [FIX v256] Cooldown 12s: server butuh ~12s sebelum bisa masuk Raid lagi
  -- TAPI: selama cooldown, tetap scan workspace agar RAID_LIVE siap
  -- Saat cooldown habis, langsung masuk tanpa delay tambahan
@@ -9998,18 +10043,21 @@ local function ResolveEntry()
             if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or (DUNGEON and DUNGEON.inMap) then
                 isBusy = true
             end
-            local mapId = workspace:GetAttribute("MapId") or 0
+            local mapId = _readMapId()
             if (mapId >= 50201 and mapId <= 50204) or mapId == 50303 then
                 isBusy = true
             end
             -- [BUG FIX v49] Cek ASC.inMap: jika Ascension sedang di dalam Tower, RAID harus pause
-            if ASC.inMap then isBusy = true end
+            -- [GODMODE FIX v53] Guard WAJIB gabungkan ASC.running + ASC.inMap
+            -- Jika toggle ASC dimatikan (ASC.running=false), RAID bebas jalan meski ASC.inMap masih true sisa state
+            if ASC.running and ASC.inMap then isBusy = true end
             -- [BUG FIX v49] Juga cek: jika player secara fisik masih di area Ascension Tower (50301-50326)
-            if mapId >= 50301 and mapId <= 50326 then isBusy = true end
+            -- [GODMODE FIX v53] Hanya block jika ASC masih running (toggle ON)
+            if ASC.running and mapId >= 50301 and mapId <= 50326 then isBusy = true end
 
             if isBusy then
                 -- Jika ada Siege/Dungeon/Ascension aktif, diam saja dan JANGAN panggil ResolveEntry
-                if ASC.inMap or (mapId >= 50301 and mapId <= 50326) then
+                if (ASC.running and ASC.inMap) or (ASC.running and mapId >= 50301 and mapId <= 50326) then
                     RaidStatusUpdate("[!] PAUSE: Ascension Tower aktif - menunggu...", Color3.fromRGB(180, 100, 255))
                 else
                     RaidStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255, 100, 100))
@@ -10046,7 +10094,7 @@ local function ResolveEntry()
  RAID.running = false
  RAID.inMap = false
  _raidOn = false
- MODE:Release("raid") -- [v257] pastikan MA bisa resume
+ MODE:ForceRelease("raid") -- [v50] pastikan MA bisa resume
  RaidStatusUpdate("[FLa] Auto Raid STOP", Color3.fromRGB(160,148,135))
  if RAID.dot then RAID.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
  end)
@@ -11593,11 +11641,140 @@ do
  _ascManualSection.LayoutOrder = 15; _ascManualSection.Visible = false
  local _ascManLayout = New("UIListLayout",{Parent=_ascManualSection, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
 
+ -- [GODMODE] ASC Boss Map data (shared dengan Preferred Maps & Preferred Rune)
+ local ASC_BOSS_MAPS_UI = {
+  {id=50301,mn=1,name="Baran"},        {id=50302,mn=2,name="Baran+1"},
+  {id=50303,mn=3,name="Grendal"},      {id=50304,mn=4,name="Grendal+1"},
+  {id=50305,mn=5,name="Plague"},       {id=50306,mn=6,name="Plague+1"},
+  {id=50307,mn=7,name="Frostborne"},   {id=50308,mn=8,name="Frostborne+1"},
+  {id=50309,mn=9,name="Legia"},        {id=50310,mn=10,name="Legia+1"},
+  {id=50311,mn=11,name="Silas"},       {id=50312,mn=12,name="Silas+1"},
+  {id=50313,mn=13,name="Yogumunt"},    {id=50314,mn=14,name="Yogumunt+1"},
+  {id=50315,mn=15,name="Antares"},     {id=50316,mn=16,name="Antares+1"},
+  {id=50317,mn=17,name="Ashborn"},     {id=50318,mn=18,name="Ashborn+1"},
+  {id=50319,mn=19,name="Dominion"},    {id=50320,mn=20,name="Dominion+1"},
+  {id=50321,mn=21,name="Absolute"},    {id=50322,mn=22,name="Absolute+1"},
+  {id=50323,mn=23,name="Broly"},       {id=50324,mn=24,name="Broly+1"},
+  {id=50325,mn=25,name="Goku Super 4"},{id=50326,mn=26,name="Goku Super 4+1"},
+ }
+
+ -- [GODMODE] PREFERRED MAPS (Manual) - Ascension Tower (mirip Auto Raid preferMaps)
+ -- Default: semua 26 tower terpilih
+ if not next(ASC.preferMaps) then
+  for _, e in ipairs(ASC_BOSS_MAPS_UI) do ASC.preferMaps[e.mn] = true end
+ end
+
+ local aPmHdr = Label(_ascManualSection,"PREFERRED MAPS",10,C.TXT3,Enum.Font.GothamBold)
+ aPmHdr.LayoutOrder = 0; aPmHdr.Size = UDim2.new(1,0,0,14)
+ local aPmCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
+ aPmCard.LayoutOrder = 1; Corner(aPmCard,10); Stroke(aPmCard,C.BORD,1.5,0.3); Padding(aPmCard,6,6,10,10)
+ local aPmRow = Frame(aPmCard,C.BLACK,UDim2.new(1,0,1,0)); aPmRow.BackgroundTransparency=1
+ local aPmKeyL = Label(aPmRow,"Select Tower",11,C.TXT2,Enum.Font.GothamBold)
+ aPmKeyL.Size = UDim2.new(0,80,1,0)
+ local aPmDDBtn = Btn(aPmRow,C.BG3,UDim2.new(1,-90,1,0))
+ aPmDDBtn.Position = UDim2.new(0,88,0,0); Corner(aPmDDBtn,6); Stroke(aPmDDBtn,Color3.fromRGB(100,180,255),1.5,0.25)
+ local aPmDDLbl = Label(aPmDDBtn," -- SELECT TOWER --",11,C.TXT3,Enum.Font.GothamBold)
+ aPmDDLbl.Size = UDim2.new(1,-20,1,0); aPmDDLbl.TextTruncate = Enum.TextTruncate.AtEnd
+ local aPmArr = Label(aPmDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ aPmArr.Size = UDim2.new(0,18,1,0); aPmArr.Position = UDim2.new(1,-20,0,0)
+
+ local function UpdateAscPmLabel()
+  local n=0; for _ in pairs(ASC.preferMaps) do n=n+1 end
+  if n==0 then
+   aPmDDLbl.Text=" -- SELECT TOWER --"; aPmDDLbl.TextColor3=C.TXT3
+  else
+   local ns={}
+   for mn in pairs(ASC.preferMaps) do table.insert(ns,mn) end
+   table.sort(ns)
+   local strs={}; for _,mn in ipairs(ns) do table.insert(strs,"T"..mn) end
+   aPmDDLbl.Text=" "..table.concat(strs,", "); aPmDDLbl.TextColor3=Color3.fromRGB(100,180,255)
+  end
+ end
+ UpdateAscPmLabel()
+
+ aPmDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local aP=aPmDDBtn.AbsolutePosition; local aS=aPmDDBtn.AbsoluteSize; local IH=26
+  local totalBoss = #ASC_BOSS_MAPS_UI
+  local scrollH = math.min(totalBoss*(IH+2)+8, 220)
+  local HDR = 32
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+20,0,HDR+scrollH)
+  popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
+  popup.ZIndex=9999; popup.ClipsDescendants=true
+  Corner(popup,10); Stroke(popup,Color3.fromRGB(100,180,255),1,0.2)
+  local hdr=Frame(popup,C.BG3,UDim2.new(1,0,0,HDR)); hdr.ZIndex=9999
+  local cntL=Label(hdr,"0/26 Selected",10.5,Color3.fromRGB(100,180,255),Enum.Font.GothamBold)
+  cntL.Size=UDim2.new(0.6,0,1,0); cntL.Position=UDim2.new(0,8,0,0); cntL.ZIndex=9999
+  local clrB=Btn(hdr,Color3.fromRGB(120,30,30),UDim2.new(0,48,0,20))
+  clrB.Position=UDim2.new(1,-54,0.5,-10); Corner(clrB,5); clrB.ZIndex=9999
+  local clrL=Label(clrB,"Clear",10,Color3.fromRGB(255,255,255),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+  clrL.Size=UDim2.new(1,0,1,0); clrL.ZIndex=9999
+  local sf=Instance.new("ScrollingFrame"); sf.Parent=popup
+  sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+  sf.Position=UDim2.new(0,0,0,HDR); sf.Size=UDim2.new(1,0,0,scrollH)
+  sf.CanvasSize=UDim2.new(0,0,0,totalBoss*(IH+2)+8)
+  sf.ScrollBarThickness=5; sf.ScrollBarImageColor3=Color3.fromRGB(100,180,255)
+  sf.ZIndex=9999
+  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder
+  local sfp=Instance.new("UIPadding",sf)
+  sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,6)
+  local rr={}
+  local function UpdCnt()
+   local n=0; for _ in pairs(ASC.preferMaps) do n=n+1 end
+   cntL.Text=n.."/26 Selected"
+  end
+  for idx, entry in ipairs(ASC_BOSS_MAPS_UI) do
+   local emn=entry.mn; local enm=entry.name; local eid=entry.id
+   local it=Instance.new("TextButton",sf)
+   it.Size=UDim2.new(1,-4,0,IH); it.LayoutOrder=idx
+   it.BackgroundColor3=ASC.preferMaps[emn] and C.BORD or C.BG3
+   it.BackgroundTransparency=0.25; it.BorderSizePixel=0
+   it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
+   Instance.new("UICorner",it).CornerRadius=UDim.new(0,5)
+   local tk=Instance.new("TextLabel",it)
+   tk.Size=UDim2.new(0,18,1,0); tk.BackgroundTransparency=1
+   tk.Text=ASC.preferMaps[emn] and "[v]" or ""; tk.TextSize=13
+   tk.Font=Enum.Font.GothamBold; tk.TextColor3=Color3.fromRGB(100,180,255); tk.ZIndex=9999
+   local il=Instance.new("TextLabel",it)
+   il.Size=UDim2.new(1,-24,1,0); il.Position=UDim2.new(0,20,0,0)
+   il.BackgroundTransparency=1
+   il.Text=" Tower "..emn.." - "..enm.." ("..eid..")"
+   il.TextSize=11; il.Font=Enum.Font.GothamBold
+   il.TextColor3=ASC.preferMaps[emn] and Color3.fromRGB(100,180,255) or C.TXT
+   il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999
+   il.TextTruncate=Enum.TextTruncate.AtEnd
+   rr[emn]={btn=it,tick=tk,lbl=il}
+   it.MouseButton1Click:Connect(function()
+    if ASC.preferMaps[emn] then ASC.preferMaps[emn]=nil else ASC.preferMaps[emn]=true end
+    rr[emn].tick.Text=ASC.preferMaps[emn] and "[v]" or ""
+    rr[emn].btn.BackgroundColor3=ASC.preferMaps[emn] and C.BORD or C.BG3
+    rr[emn].lbl.TextColor3=ASC.preferMaps[emn] and Color3.fromRGB(100,180,255) or C.TXT
+    UpdCnt(); UpdateAscPmLabel()
+   end)
+  end
+  UpdCnt()
+  clrB.MouseButton1Click:Connect(function()
+   for _, e in ipairs(ASC_BOSS_MAPS_UI) do
+    local mn=e.mn; ASC.preferMaps[mn]=nil
+    if rr[mn] then
+     rr[mn].tick.Text=""
+     rr[mn].btn.BackgroundColor3=C.BG3
+     rr[mn].lbl.TextColor3=C.TXT
+    end
+   end
+   UpdCnt(); UpdateAscPmLabel()
+  end)
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
  -- Grade Filter (Manual)
  local aGrHdr = Label(_ascManualSection,"FILTER GRADE",10,C.TXT3,Enum.Font.GothamBold)
- aGrHdr.LayoutOrder = 1; aGrHdr.Size = UDim2.new(1,0,0,14)
+ aGrHdr.LayoutOrder = 2; aGrHdr.Size = UDim2.new(1,0,0,14)
  local aGrCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
- aGrCard.LayoutOrder = 2; Corner(aGrCard,10); Stroke(aGrCard,C.BORD,1.5,0.3); Padding(aGrCard,6,6,10,10)
+ aGrCard.LayoutOrder = 3; Corner(aGrCard,10); Stroke(aGrCard,C.BORD,1.5,0.3); Padding(aGrCard,6,6,10,10)
  local aGrRow = Frame(aGrCard,C.BLACK,UDim2.new(1,0,1,0)); aGrRow.BackgroundTransparency=1
  local aGrKeyL = Label(aGrRow,"Grade",11,C.TXT2,Enum.Font.GothamBold)
  aGrKeyL.Size = UDim2.new(0,72,1,0)
@@ -11668,69 +11845,7 @@ do
   _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
  end)
 
- -- Rune Map (Manual)
- local aRnHdr = Label(_ascManualSection,"RUNE MAP (Manual)",10,C.TXT3,Enum.Font.GothamBold)
- aRnHdr.LayoutOrder = 3; aRnHdr.Size = UDim2.new(1,0,0,14)
- local aRnCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
- aRnCard.LayoutOrder = 4; Corner(aRnCard,10); Stroke(aRnCard,C.BORD,1.5,0.3); Padding(aRnCard,6,6,10,10)
- local aRnRow = Frame(aRnCard,C.BLACK,UDim2.new(1,0,1,0)); aRnRow.BackgroundTransparency=1
- local aRnKeyL = Label(aRnRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
- aRnKeyL.Size = UDim2.new(0,72,1,0)
- local aRnDDBtn = Btn(aRnRow,C.BG3,UDim2.new(1,-82,1,0))
- aRnDDBtn.Position = UDim2.new(0,80,0,0); Corner(aRnDDBtn,6); Stroke(aRnDDBtn,C.BORD,1.5,0.25)
- local aRnDDVal = Label(aRnDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
- aRnDDVal.Size = UDim2.new(1,-20,1,0); aRnDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local aRnArr = Label(aRnDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- aRnArr.Size = UDim2.new(0,18,1,0); aRnArr.Position = UDim2.new(1,-20,0,0)
-
- aRnDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local aP=aRnDDBtn.AbsolutePosition; local aS=aRnDDBtn.AbsoluteSize; local IH=28
-  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
-  local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(aP.Y+popH > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
-  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
-  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
-  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
-  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
-  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
-  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
-  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
-  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
-  local s0=(ASC.runeMapTarget==0)
-  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
-  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
-  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
-  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
-  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
-  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3
-  l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
-  i0.MouseButton1Click:Connect(function()
-   CloseActiveDD(); ASC.runeMapTarget=0; ASC.runeEnabled=false
-   aRnDDVal.Text=" -- NOT SELECTED --"; aRnDDVal.TextColor3=C.TXT3
-  end)
-  for mn=1,20 do
-   local ml=mn; local mnm=MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
-   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
-   local iS=(ASC.runeMapTarget==mn)
-   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
-   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
-   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
-   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
-   il.BackgroundTransparency=1; il.Text="Map "..mn.." - "..mnm; il.TextSize=10; il.Font=Enum.Font.GothamBold
-   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
-   it.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.runeMapTarget=ml; ASC.runeEnabled=true
-    aRnDDVal.Text=" Map "..ml.." - "..mnm; aRnDDVal.TextColor3=C.ACC2
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
+ -- [GODMODE] Preferred Rune already built above using ASC_BOSS_MAPS_UI
 
  task.defer(ResizeAscBody)
 end -- end Auto Ascension do block
@@ -11802,7 +11917,7 @@ StopSiege = function()
  SIEGE.running = false
  SIEGE.inMap = false
  _siegeInterrupt = false
- MODE:Release("siege")
+ MODE:ForceRelease("siege") -- [v50] force release
  -- [FIX] Hard reset MODE jika masih stuck di siege
  if MODE.current == "siege" then MODE.current = "idle" end
  if SIEGE.thread then
@@ -11840,7 +11955,7 @@ local _siegeWakeup = nil
 
 local function IsInSiegeMap()
     local ok, wm = pcall(function()
-        return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+        return _readMapId()
     end)
     if ok and type(wm) == "number" then
         if wm >= 50201 and wm <= 50205 then return true, wm end
@@ -11948,7 +12063,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     local _confirmedInSiege = false
     local function isBackAtBase()
         local ok, wm = pcall(function()
-            return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+            return _readMapId()
         end)
         if ok and type(wm) == "number" then
             -- Track: player sudah masuk siege map?
@@ -11984,7 +12099,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
         if _deathConn then _deathConn:Disconnect(); _deathConn = nil end
         SIEGE.inMap     = false
         _siegeInterrupt = false
-        MODE:Release("siege")
+        MODE:ForceRelease("siege") -- [v50] force release
     end
 
     -- ============================================================
@@ -11994,7 +12109,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     while wt < 10 and SIEGE.running and SIEGE.inMap do
         -- Track konfirmasi masuk siege
         pcall(function()
-            local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+            local wm = _readMapId()
             if type(wm) == "number" and wm >= 50201 and wm <= 50205 then _confirmedInSiege = true end
         end)
         local enemies = GetSiegeEnemies()
@@ -12040,7 +12155,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
         -- Mencegah Siege terus menyerang musuh di portal basemap setelah keluar dari Siege map
         do
             local _ok, _wm = pcall(function()
-                return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+                return _readMapId()
             end)
             if _ok and type(_wm) == "number" then
                 if _wm >= 50001 and _wm <= 50020 then
@@ -12220,7 +12335,7 @@ StartSiegeLoop = function()
             end
 
             _siegeInterrupt = true
-            if not MODE:WaitAndRequest("siege", 15) then
+            if not MODE:WaitAndRequest("siege", 90) then -- [v50] timeout lebih lama karena tunggu lobby
                 _siegeInterrupt = false
                 task.wait(2); break
             end
@@ -12231,16 +12346,17 @@ StartSiegeLoop = function()
                     pcall(function() RE.LocalTp:FireServer({mapId = baseMapId}) end)
                     
                     -- [FIX v39] Timeout diperbesar: 1s -> 5s (Map 7/10/13 butuh lebih lama load)
+                    -- [FIX v51] Pakai _readMapId() agar baca dari workspace.Maps
                     local tpWait = 0
                     while tpWait < 5 and SIEGE.running do
                         task.wait(0.5); tpWait = tpWait + 0.5
-                        local curMap = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+                        local curMap = _readMapId()
                         if curMap == baseMapId then break end
                     end
-                    local curMapNow = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+                    local curMapNow = _readMapId()
                     if curMapNow == baseMapId then
                         SiegeStatus(("[OK] TP %d sukses, stabilize..."):format(baseMapId), Color3.fromRGB(80,220,80))
-                        task.wait(0.5) -- beri waktu server register posisi player di map
+                        task.wait(0.5)
                     else
                         SiegeStatus(("[!] TP %d belum confirm (%s), lanjut..."):format(baseMapId, tostring(curMapNow)), Color3.fromRGB(255,140,0))
                     end
@@ -12290,7 +12406,7 @@ StartSiegeLoop = function()
             do
                 local _RE0 = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
                 if not (_RE0 and _RE0:FindFirstChild("EnterCityRaidMap")) then
-                    _siegeInterrupt = false; MODE:Release("siege")
+                    _siegeInterrupt = false; MODE:ForceRelease("siege") -- [v50] force release
                     SiegeStatus("[!] EnterCityRaidMap Not Found - retry 5s...", Color3.fromRGB(255,100,60))
                     task.wait(5); break
                 end
@@ -12302,39 +12418,27 @@ StartSiegeLoop = function()
             if not SIEGE.running then _siegeInterrupt = false; MODE:Release("siege"); break end
 
             -- Tunggu konfirmasi masuk siege, retry fire tiap 4 detik jika belum masuk (max 15s total)
-            -- [FIX] Cek masuk siege DULU di awal setiap iterasi sebelum timer retry
-            -- Mencegah _fireSiegeEntry() dipanggil ulang saat player sudah di dalam siege
             SiegeStatus("[FLa] Waiting Enter Siege...", Color3.fromRGB(180,120,255))
             local _entered = false
             local _entWait = 0
-            local _sinceLastFire = 0 -- [FIX] mulai dari 0, jeda penuh 4s sebelum retry pertama
+            local _sinceLastFire = 2.5 -- sudah fire di atas, beri jeda 4s sebelum retry pertama
             while not _entered and _entWait < 15 and SIEGE.running do
                 task.wait(0.5); _entWait = _entWait + 0.5; _sinceLastFire = _sinceLastFire + 0.5
-                -- [FIX] Cek masuk DULU setiap iterasi - jangan retry jika sudah masuk
+                -- Cek 1: MapId sudah di range Siege (50201-50205)
                 local inSiege, _ = IsInSiegeMap()
                 if inSiege then _entered = true; break end
+                -- Cek 2: Musuh Siege sudah spawn
                 if #GetSiegeEnemies() > 0 then _entered = true; break end
-                -- Retry fire HANYA jika belum masuk DAN timer sudah habis
-                -- [FIX] Double guard: pastikan benar-benar belum masuk sebelum fire ulang
+                -- Retry fire jika sudah 4 detik sejak fire terakhir dan belum masuk
                 if _sinceLastFire >= 4.0 then
-                    local _stillOut, _ = IsInSiegeMap()
-                    if _stillOut then
-                        -- Ternyata sudah masuk di cek ulang - jangan fire
-                        _entered = true; break
-                    end
-                    if #GetSiegeEnemies() > 0 then _entered = true; break end
                     SiegeStatus("[~] Retry Enter "..d.name.."...", Color3.fromRGB(255,200,60))
                     _sinceLastFire = 0
                     if not _fireSiegeEntry() then break end
-                    -- [FIX] Cek langsung setelah fire selesai (fire butuh ~2.5s, player mungkin sudah masuk)
-                    local inSiegeAfterFire, _ = IsInSiegeMap()
-                    if inSiegeAfterFire then _entered = true; break end
-                    if #GetSiegeEnemies() > 0 then _entered = true; break end
                 end
             end
 
             if not _entered then
-                _siegeInterrupt = false; MODE:Release("siege")
+                _siegeInterrupt = false; MODE:ForceRelease("siege") -- [v50] force release
                 SiegeStatus("[!] Failure Enter - retry 3s...", Color3.fromRGB(255,100,60))
                 task.wait(3); break
             end
@@ -12355,7 +12459,7 @@ StartSiegeLoop = function()
 
             SIEGE.inMap = false
             _siegeInterrupt = false
-            MODE:Release("siege")
+            MODE:ForceRelease("siege") -- [v50] force release
 
             task.wait(0.3)
             SIEGE.live[d.cityRaidId] = nil
@@ -12363,7 +12467,7 @@ StartSiegeLoop = function()
             SIEGE.count[targetMap] = (SIEGE.count[targetMap] or 0) + 1
             SiegeCounterUpdate()
             _siegeInterrupt = false
-            MODE:Release("siege")
+            MODE:ForceRelease("siege") -- [v50] force release
             SiegeStatus("[OK] "..d.name.." SUCCES! Waiting Next Siege...", Color3.fromRGB(100,255,150))
             if SIEGE.dot then SIEGE.dot.BackgroundColor3 = Color3.fromRGB(255,200,60) end
             task.wait(2)
@@ -12371,7 +12475,7 @@ StartSiegeLoop = function()
         end 
 
         _siegeInterrupt = false
-        MODE:Release("siege")
+        MODE:ForceRelease("siege") -- [v50] force release
         SIEGE.running = false
         SIEGE.inMap = false
         SiegeStatus("[.] Idle", Color3.fromRGB(100,100,100))
@@ -12626,25 +12730,17 @@ DungeonStatus = function(msg, color)
 end
 
 local function IsInDungeonMap()
- local ok, wm = pcall(function()
- return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
- end)
- if ok and type(wm) == "number" then
- if wm == DUNGEON_MAP_ID then return true, wm end
- end
- -- Fallback: cek folder Map di workspace
- local ok2, hasMap = pcall(function()
- local mf = workspace:FindFirstChild("Map")
- return mf and mf:FindFirstChild("MessageBoard") ~= nil
- end)
- if ok2 and hasMap then return true, nil end
- -- [FIX v38] Fallback tambahan: cek ada enemy di workspace.Enemys
- local ok3, enemies = pcall(function()
- return #workspace:FindFirstChild("Enemys"):GetChildren() > 3
- end)
- if ok3 and enemies then return true, nil end
- if DUNGEON and DUNGEON.inMap then return true, nil end
- return false, nil
+    -- [v52 FIX] Sumber kebenaran utama: MapId harus == 50303
+    -- Hapus fallback cek Enemys > 3 yang false-positive di map lain (bug utama attack di map lain)
+    local ok, wm = pcall(function() return _readMapId() end)
+    if ok and type(wm) == "number" then
+        if wm == DUNGEON_MAP_ID then return true, wm end
+        -- MapId jelas bukan dungeon -> langsung false
+        if wm ~= 0 then return false, wm end
+    end
+    -- Fallback hanya saat mapId == 0 (transisi map): cek flag DUNGEON.inMap
+    if DUNGEON and DUNGEON.inMap then return true, nil end
+    return false, nil
 end
 
 -- Listener ChangeTowerState dari server
@@ -12709,7 +12805,7 @@ StopDungeon = function()
  DUNGEON.interrupt = false
  _siegeInterrupt = false -- [v252] sync flag lama
  _raidInterrupt = false -- [v252] sync flag lama
- MODE:Release("dungeon") -- [v252]
+ MODE:ForceRelease("dungeon") -- [v50] stop paksa
  if DUNGEON.thread then
  pcall(function() task.cancel(DUNGEON.thread) end)
  DUNGEON.thread = nil
@@ -12859,18 +12955,57 @@ local function DungeonTpOut()
 end
 
 -- Masuk dungeon
+-- [v52 FIX] Flow sesuai SimpleSPY:
+-- 1. TP ke Map 5 dulu (jika belum di sana)
+-- 2. LocalPlayerTeleport:FireServer({mapId=50303})
+-- 3. StartLocalPlayerTeleport:FireServer({mapId=50303})
+-- 4. EquipHeroWithData:FireServer()
+-- 5. LocalPlayerTeleportSuccess:InvokeServer()
 local function DungeonTpIn()
- local startTpRe = Remotes:FindFirstChild("StartLocalPlayerTeleport")
- if startTpRe then
- pcall(function() startTpRe:FireServer({mapId = DUNGEON_MAP_ID}) end)
- end
- task.wait(0.3)
- local ltpSucc = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
- if ltpSucc then
- task.spawn(function()
- pcall(function() ltpSucc:InvokeServer() end)
- end)
- end
+    -- STEP 1: Pastikan player di Map 5 dulu sebelum masuk dungeon
+    local curMap = _readMapId()
+    if curMap ~= DUNGEON_LOBBY_ID then
+        DungeonStatus("[TP] Menuju Map 5 dulu...", Color3.fromRGB(255,200,60))
+        local _localTp = Remotes:FindFirstChild("LocalPlayerTeleport")
+        if _localTp then
+            pcall(function() _localTp:FireServer({mapId = DUNGEON_LOBBY_ID}) end)
+        end
+        -- Tunggu konfirmasi di Map 5 max 8 detik
+        local _wLobby = 0
+        while _readMapId() ~= DUNGEON_LOBBY_ID and _wLobby < 8 and DUNGEON.running do
+            task.wait(0.3); _wLobby = _wLobby + 0.3
+        end
+        task.wait(0.3)
+    end
+
+    -- STEP 2: LocalPlayerTeleport ke dungeon (50303)
+    local _localTp2 = Remotes:FindFirstChild("LocalPlayerTeleport")
+    if _localTp2 then
+        pcall(function() _localTp2:FireServer({mapId = DUNGEON_MAP_ID}) end)
+    end
+    task.wait(0.3)
+
+    -- STEP 3: StartLocalPlayerTeleport ke dungeon (50303)
+    local _startTp = Remotes:FindFirstChild("StartLocalPlayerTeleport")
+    if _startTp then
+        pcall(function() _startTp:FireServer({mapId = DUNGEON_MAP_ID}) end)
+    end
+    task.wait(0.5)
+
+    -- STEP 4: EquipHeroWithData (konfirmasi hero ke server)
+    local _eqRe = Remotes:FindFirstChild("EquipHeroWithData")
+    if _eqRe then
+        pcall(function() _eqRe:FireServer() end)
+    end
+    task.wait(0.3)
+
+    -- STEP 5: LocalPlayerTeleportSuccess (konfirmasi TP ke server)
+    local _ltpSucc = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
+    if _ltpSucc then
+        task.spawn(function()
+            pcall(function() _ltpSucc:InvokeServer() end)
+        end)
+    end
 end
 
 StartDungeonLoop = function()
@@ -12946,52 +13081,76 @@ StartDungeonLoop = function()
  end
 
  -- 
- -- STEP 3: PRIORITAS - Interrupt MA + Raid + Siege
- -- [v252] Dungeon priority max -> ForceSet override semua
+ -- STEP 3: PRIORITAS - Minta lock via MODE dispatcher (dungeon priority = 4, tertinggi)
+ -- [v50] Dungeon TIDAK lagi override paksa; ia masuk antrian priority tertinggi.
+ -- Karena priority = 4 (tertinggi), Dungeon selalu di depan antrian.
+ -- MODE:_locked akan prevent entry jika fitur lain sedang di dalam map.
  -- 
- MODE:ForceSet("dungeon") -- override apapun yang sedang jalan
+ if not MODE:IsHeld("dungeon") then
+  DungeonStatus("[Q] Menunggu slot bebas...", Color3.fromRGB(255,160,60))
+  local _dWait = 0
+  while DUNGEON.running do
+   if MODE:Request("dungeon") then break end
+   if MODE.current ~= "idle" then
+    DungeonStatus(("[Q] Menunggu %s selesai..."):format(MODE.current), Color3.fromRGB(255,160,60))
+   else
+    DungeonStatus("[Q] Menunggu slot bebas...", Color3.fromRGB(255,200,60))
+   end
+   task.wait(0.5); _dWait = _dWait + 0.5
+  end
+  if not DUNGEON.running then MODE:Release("dungeon"); break end
+  if not MODE:IsHeld("dungeon") then break end
+  DungeonStatus("> Giliran Dungeon! Masuk...", Color3.fromRGB(180,120,255))
+  task.wait(0.1)
+ end
  DUNGEON.interrupt = true -- sync flag lama
- _siegeInterrupt = true
- _raidInterrupt = true
 
- -- Tunggu sebentar agar MA/Raid/Siege pause (mereka cek MODE.current)
+ -- Tunggu sebentar stabilize
  task.wait(0.5)
  if not DUNGEON.running then
- DUNGEON.interrupt = false; _siegeInterrupt = false; _raidInterrupt = false
- MODE:Release("dungeon")
+ DUNGEON.interrupt = false
+ MODE:ForceRelease("dungeon")
  break
  end
 
- -- 
- -- STEP 4: Cek apakah sudah di dalam dungeon
- -- 
+ --
+ -- STEP 4: TP ke Map 5 dulu, lalu masuk dungeon
+ -- [v52 FIX] Gunakan DungeonTpIn yang sudah diperbaiki
+ --
  local alreadyIn, _ = IsInDungeonMap()
  if not alreadyIn then
- DungeonStatus("[>>] ENTER dungeon...", Color3.fromRGB(180,120,255))
- if DUNGEON.dot then DUNGEON.dot.BackgroundColor3 = Color3.fromRGB(180,120,255) end
+    DungeonStatus("[>>] ENTER dungeon (Map5 -> 50303)...", Color3.fromRGB(180,120,255))
+    if DUNGEON.dot then DUNGEON.dot.BackgroundColor3 = Color3.fromRGB(180,120,255) end
 
- DungeonTpIn()
+    DungeonTpIn()
 
- -- Tunggu konfirmasi masuk max 15 detik
- local _entered = false
- local _entWait = 0
- while not _entered and _entWait < 15 and DUNGEON.running do
- task.wait(0.3); _entWait = _entWait + 0.3
- local inD, _ = IsInDungeonMap()
- if inD then _entered = true; break end
- -- Fallback: cek ada enemy di workspace.Enemys
- if #GetSiegeEnemies() > 0 then _entered = true; break end
- end
+    -- Tunggu konfirmasi masuk max 15 detik (cek MapId == 50303 saja)
+    local _entered = false
+    local _entWait = 0
+    while not _entered and _entWait < 15 and DUNGEON.running do
+        task.wait(0.3); _entWait = _entWait + 0.3
+        local inD, _ = IsInDungeonMap()
+        if inD then _entered = true; break end
+        -- Retry fire remote tiap 5 detik jika belum masuk
+        if not _entered and _entWait > 0 and math.floor(_entWait * 10) % 50 == 0 then
+            DungeonStatus("[~] Retry masuk dungeon...", Color3.fromRGB(255,200,60))
+            local _stp = Remotes:FindFirstChild("StartLocalPlayerTeleport")
+            if _stp then pcall(function() _stp:FireServer({mapId = DUNGEON_MAP_ID}) end) end
+            task.wait(0.3)
+            local _eq = Remotes:FindFirstChild("EquipHeroWithData")
+            if _eq then pcall(function() _eq:FireServer() end) end
+        end
+    end
 
- if not _entered then
- DungeonStatus("[!] Failure Enter - Waiting Next DUNGEON", Color3.fromRGB(255,100,60))
- DUNGEON.towerState = 1
- DUNGEON.interrupt = false
- _siegeInterrupt = false
- _raidInterrupt = false
- MODE:Release("dungeon") -- [v252]
- task.wait(3); break
- end
+    if not _entered then
+        DungeonStatus("[!] Failure Enter - Waiting Next DUNGEON", Color3.fromRGB(255,100,60))
+        DUNGEON.towerState = 1
+        DUNGEON.interrupt = false
+        _siegeInterrupt = false
+        _raidInterrupt = false
+        MODE:Release("dungeon")
+        task.wait(3); break
+    end
  else
  end
 
@@ -13192,7 +13351,7 @@ local function ST2Status(msg, color)
 end
 
 -- [v283] ST2: track mapId aktual via EnterRaidsUpdateInfo (sama seperti RAID system)
--- workspace:GetAttribute("MapId") tidak reliable - game update via remote event ini
+-- _readMapId() tidak reliable - game update via remote event ini
 local _st2CurrentMapId = nil  -- diisi oleh listener di bawah
 
 -- Pasang listener EnterRaidsUpdateInfo untuk ST2 (standalone, tidak ganggu RAID)
@@ -13212,7 +13371,7 @@ end)
 local function ST2IsInMap()
     -- Sumber 1: cek workspace MapId via attribute (berbagai nama)
     local ok, wm = pcall(function()
-        return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+        return _readMapId()
     end)
     if ok and type(wm) == "number" and wm > 50000 and wm ~= 50001 and wm ~= 50002 then
         return true
