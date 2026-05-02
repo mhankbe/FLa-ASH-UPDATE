@@ -2189,6 +2189,11 @@ function WaitRaidDone()
             end
         end
 
+        -- [BUG FIX v49] 4. Auto Ascension Tower - pause MA saat sedang di dalam Tower
+        if ASC and ASC.inMap then
+            return true, "Auto Ascension"
+        end
+
         return false, nil
     end
 
@@ -7609,20 +7614,28 @@ ConnectRaidListeners = function()
  if _RE_Enter then
  local conn = _RE_Enter.OnClientEvent:Connect(function(data)
  if type(data) ~= "table" then return end
- -- Abaikan event dari Tower map (50300+) KECUALI Ascension Tower (50301-50326)
- -- JTP pakai 50301, ST2 pakai 50301, Ascension Tower pakai 50301-50326
- -- Bedakan: jika ASC.inMap -> event ini milik Ascension Tower, bukan JTP/ST2
- local evMapId = data.mapId or data.fromMapId or 0
- if evMapId >= 50300 and not ASC.inMap then return end
  -- Abaikan jika tidak ada slotIndex sama sekali (bukan raid event)
  if data.slotIndex == nil and data.fromMapId == nil and data.mapId == nil then return end
+ local evMapId = data.mapId or data.fromMapId or 0
+ -- [BUG FIX v49] Pisahkan handler Ascension vs RAID Normal secara tegas:
+ -- Event dari map 50300+ HANYA boleh diproses jika ASC sedang aktif (ASC.running atau ASC.inMap)
+ -- Event dari map 50101-50120 HANYA boleh masuk ke RAID jika ASC.inMap == false
+ -- Ini mencegah serverMapId RAID tercemar oleh event Ascension Tower dan sebaliknya
+ if evMapId >= 50300 then
+  -- Ini adalah event Ascension Tower / JTP / ST2 - jangan tulis ke RAID state
+  return
+ end
+ -- Dari sini: event adalah RAID normal (mapId 50101-50120 atau 0)
+ -- Guard: jika ASC sedang di dalam map, event ini bisa jadi spurious dari sisi server
+ -- Tulis ke RAID state HANYA jika RAID.running dan ASC.inMap = false
+ if ASC.inMap then return end
  if data.slotIndex then RAID.slotIndex = data.slotIndex end
  if data.fromMapId then RAID.fromMapId = data.fromMapId end
  if data.mapId then
- local mid = data.mapId
- if mid >= 50101 and mid <= 50120 then
- RAID.serverMapId = mid
- end
+  local mid = data.mapId
+  if mid >= 50101 and mid <= 50120 then
+   RAID.serverMapId = mid
+  end
  end
  end)
  table.insert(_WH.raidConns, conn)
@@ -8004,6 +8017,17 @@ function StartAscensionLoop()
     end
     if not ASC.running then break end
     if not raidEntry then break end
+
+    -- [BUG FIX v49] Tambah guard: jika RAID.inMap masih true, tunggu dulu sebelum ASC masuk
+    -- Ini mencegah tabrakan di mana ASC teleport ke Tower sementara RAID masih di dalam map raid
+    if RAID.inMap then
+     AscStatusUpdate("[||] Menunggu Auto Raid selesai dulu...", Color3.fromRGB(255,140,0))
+     local _waitRaidDone = 0
+     while RAID.inMap and ASC.running and _waitRaidDone < 30 do
+      task.wait(0.5); _waitRaidDone = _waitRaidDone + 0.5
+     end
+     if not ASC.running then break end
+    end
 
     local mn = raidEntry.mapNum
     local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
@@ -8850,6 +8874,15 @@ function StartRaidLoop()
  RaidStatusUpdate("> Tidak ada Ascension Tower - Auto Raid ambil alih...", C.ACC3)
  task.wait(0.1)
  end
+ -- [BUG FIX v49] Double-check: setelah keluar dari wait loop ASC, pastikan ASC.inMap benar-benar false
+ -- Ada window race: GetAscensionList kosong tapi ASC sudah set inMap=true (proses join Tower baru mulai)
+ if ASC.inMap then
+  RAID.inMap = false
+  RaidStatusUpdate("[||] Ascension sedang join Tower - tunggu...", Color3.fromRGB(180,100,255))
+  while ASC.inMap and RAID.running do task.wait(0.3) end
+  if not RAID.running then break end
+  task.wait(0.2)
+ end
 
  -- [FIX] Cek Siege - pause Auto Raid selama player di dalam Siege map
  if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
@@ -9176,6 +9209,16 @@ local function ResolveEntry()
  local currentWm = workspace:GetAttribute("MapId") or 0
  -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Ascension Tower (50301-50326)
  if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or (currentWm >= 50301 and currentWm <= 50326) then
+     if currentWm >= 50301 and currentWm <= 50326 then
+      RaidStatusUpdate("[!] Di dalam Ascension Tower - Auto Raid skip iterasi ini", Color3.fromRGB(180,100,255))
+     end
+     task.wait(2)
+     break
+ end
+ -- [BUG FIX v49] Blokir juga jika ASC.inMap = true (sedang proses join Tower)
+ -- Ini mencegah RAID masuk bersamaan saat ASC belum selesai teleport ke Tower
+ if ASC.inMap then
+     RaidStatusUpdate("[!] Ascension Tower sedang aktif - Auto Raid skip", Color3.fromRGB(180,100,255))
      task.wait(2)
      break
  end
@@ -9776,13 +9819,20 @@ local function ResolveEntry()
 
  -- 7) SERANG BOSS - langsung tanpa jeda
  RaidStatusUpdate("[FLa] Attack: " .. boss.model.Name, Color3.fromRGB(255,80,80))
+ local _outOfMapCount = 0 -- [BUG FIX v49] debounce counter agar tidak false-break karena lag spike
  while RAID.running and not RAID._raidDone do
  -- [FIX GODMODE] Validasi realtime: player harus masih di raid map (50101-50120)
  -- Jika sudah keluar ke basemap, stop serang boss
+ -- [BUG FIX v49] Debounce: harus 3x frame berturut-turut baru break (anti false-positive lag spike)
  local _curMap = GetCurrentMapId()
  if _curMap and (_curMap < 50101 or _curMap > 50120) then
-  RaidStatusUpdate("[!] Player keluar raid map - stop attack boss", Color3.fromRGB(255,140,0))
-  break
+  _outOfMapCount = _outOfMapCount + 1
+  if _outOfMapCount >= 3 then
+   RaidStatusUpdate("[!] Player keluar raid map - stop attack boss", Color3.fromRGB(255,140,0))
+   break
+  end
+ else
+  _outOfMapCount = 0
  end
  if not boss.model or not boss.model.Parent then break end
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
@@ -9952,10 +10002,18 @@ local function ResolveEntry()
             if (mapId >= 50201 and mapId <= 50204) or mapId == 50303 then
                 isBusy = true
             end
+            -- [BUG FIX v49] Cek ASC.inMap: jika Ascension sedang di dalam Tower, RAID harus pause
+            if ASC.inMap then isBusy = true end
+            -- [BUG FIX v49] Juga cek: jika player secara fisik masih di area Ascension Tower (50301-50326)
+            if mapId >= 50301 and mapId <= 50326 then isBusy = true end
 
             if isBusy then
-                -- Jika ada Siege/Dungeon aktif, diam saja dan JANGAN panggil ResolveEntry
-                RaidStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255, 100, 100))
+                -- Jika ada Siege/Dungeon/Ascension aktif, diam saja dan JANGAN panggil ResolveEntry
+                if ASC.inMap or (mapId >= 50301 and mapId <= 50326) then
+                    RaidStatusUpdate("[!] PAUSE: Ascension Tower aktif - menunggu...", Color3.fromRGB(180, 100, 255))
+                else
+                    RaidStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255, 100, 100))
+                end
             else
                 -- Jika aman, baru boleh cari Raid
                 -- Cek IsRaidLiveInGame DULU sebelum ResolveEntry
