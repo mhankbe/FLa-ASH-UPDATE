@@ -1316,13 +1316,36 @@ MODE = {
  priority = { dungeon=4, asc=3.5, siege=3, raid=2, ma=1, idle=0 },
 }
 
+-- [FIX v51] Helper: baca MapId dari workspace.Maps
+-- Format nama object: "Map1", "Map2", ... -> mapId = 50001, 50002, ...
+local function _readMapId()
+ local ok, result = pcall(function()
+  local mapsFolder = workspace:FindFirstChild("Maps")
+  if not mapsFolder then return 0 end
+  local child = mapsFolder:FindFirstChildOfClass("Model")
+  if not child then return 0 end
+  local num = tonumber(child.Name:match("^Map(%d+)$"))
+  if num then return 50000 + num end
+  return 0
+ end)
+ return (ok and type(result) == "number") and result or 0
+end
+
 -- Helper: apakah player saat ini di Map Lobby (50001-50020)?
 function MODE:_inLobby()
- local ok, wm = pcall(function()
-  return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
- end)
- if not ok then return false end
- return type(wm) == "number" and wm >= 50001 and wm <= 50020
+ local wm = _readMapId()
+ if type(wm) == "number" and wm >= 50001 and wm <= 50020 then
+  return true
+ end
+ -- Fallback: jika Maps folder kosong/tidak terbaca dan tidak sedang inMap
+ if wm == 0 then
+  local raidInMap = RAID and RAID.inMap
+  local siegeInMap = SIEGE and SIEGE.inMap
+  if not raidInMap and not siegeInMap then
+   return true
+  end
+ end
+ return false
 end
 
 function MODE:_p(name)
@@ -8724,12 +8747,11 @@ function RaidCollectAll()
  end
 end
 
--- [FIX GODMODE] Helper: baca mapId player saat ini secara realtime
+-- [FIX GODMODE v51] Helper: baca mapId player saat ini secara realtime
+-- Menggunakan workspace.Maps folder (nama: "Map1", "Map2", dst)
 local function GetCurrentMapId()
- local ok, wm = pcall(function()
-  return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
- end)
- return (ok and type(wm) == "number") and wm or nil
+ local wm = _readMapId()
+ return (type(wm) == "number" and wm > 0) and wm or nil
 end
 
 -- [FIX GODMODE] Helper: player posisi realtime
