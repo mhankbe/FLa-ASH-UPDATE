@@ -7242,21 +7242,21 @@ ParseRaidEntry = function(k, info)
  -- Gunakan raidId > 0 sebagai penjaga: entry ini adalah raid NORMAL, jangan warisi isAscension
  local _prevAsc = false
  local _prevBossName = nil
- -- Hanya cek Ascension cache jika mapNum < 20 (Map 20 tidak punya Ascension Tower versi berbeda)
- -- Atau lebih tepatnya: hanya preserve jika raidId dari server positif DAN bukan Map 20
- if mapNum < 20 then
-  local _ascCacheKey = -(mapId) -- key negatif = entry chat Ascension
-  if RAID_LIVE[_ascCacheKey] and RAID_LIVE[_ascCacheKey].isAscension then
-   _prevAsc = true
-   _prevBossName = RAID_LIVE[_ascCacheKey].bossName
-   RAID_LIVE[_ascCacheKey] = nil -- hapus entry temp chat
-  elseif _runeGradeCache and _runeGradeCache[-mapNum] then
-   -- Ada grade cache negatif = pernah terdeteksi sebagai Ascension dari chat
-   _prevAsc = true
-  end
+ -- Cek Ascension cache dari chat parser (key negatif di RAID_LIVE atau _runeGradeCache)
+ -- Berlaku untuk semua mapNum 1-20, termasuk Map 20
+ -- Prioritas: entry chat negatif yang sudah ada di RAID_LIVE > cache grade negatif
+ local _ascCacheKey = -(mapId) -- key negatif = entry chat Ascension
+ if RAID_LIVE[_ascCacheKey] and RAID_LIVE[_ascCacheKey].isAscension then
+  _prevAsc = true
+  _prevBossName = RAID_LIVE[_ascCacheKey].bossName
+  RAID_LIVE[_ascCacheKey] = nil -- hapus entry temp chat, ganti dengan raidId asli server
+ elseif _runeGradeCache and _runeGradeCache[-mapNum] then
+  -- Ada grade cache negatif = pernah terdeteksi sebagai Ascension dari chat notif
+  _prevAsc = true
  end
- -- [FIX Map 20] Pastikan entry normal (raidId positif) tidak pernah di-mark isAscension
- if raidId > 0 then _prevAsc = false end
+ -- CATATAN: tidak ada paksa _prevAsc=false untuk raidId positif.
+ -- Server kirim raidId positif untuk SEMUA raid (normal maupun Ascension).
+ -- Yang menentukan apakah Ascension adalah flag dari chat parser, bukan sign raidId.
  RAID_LIVE[raidId] = {
  raidId = raidId,
  mapId = mapId,
@@ -7522,21 +7522,25 @@ ConnectRaidListeners = function()
  label = _lbl,
  }
  -- Kalau ada entry temp dari chat (negatif), replace dengan raidId asli dari server
+ -- Sekaligus tulis langsung entryData (sudah mengandung isAscension yang benar)
  if RAID_LIVE[tempKey] then
- RAID_LIVE[raidId] = entryData
- RAID_LIVE[tempKey] = nil
+  -- Entry Ascension dari chat: hapus temp, simpan dengan raidId asli server
+  RAID_LIVE[raidId] = entryData
+  RAID_LIVE[tempKey] = nil
  elseif not RAID_LIVE[raidId] then
- -- Entry baru: ParseRaidEntry sudah di-fix untuk preserve isAscension
- ParseRaidEntry(k, info)
+  -- Entry baru dari server: tulis langsung entryData (sudah detect isAscension via cache)
+  RAID_LIVE[raidId] = entryData
  else
- -- Sudah ada, update grade + preserve isAscension yang sudah true
- RAID_LIVE[raidId].grade = grade
- RAID_LIVE[raidId].rank = rank
- RAID_LIVE[raidId].label = _lbl
- if _isAsc then
-  RAID_LIVE[raidId].isAscension = true
-  if _bnAsc then RAID_LIVE[raidId].bossName = _bnAsc end
- end
+  -- Sudah ada entry: update grade/rank/label, preserve isAscension yang sudah true
+  RAID_LIVE[raidId].grade = grade
+  RAID_LIVE[raidId].rank = rank
+  RAID_LIVE[raidId].label = _lbl
+  -- Jika sekarang terdeteksi Ascension (dari chat cache), set flag
+  if _isAsc then
+   RAID_LIVE[raidId].isAscension = true
+   if _bnAsc then RAID_LIVE[raidId].bossName = _bnAsc end
+  end
+  -- isAscension yang sudah true sebelumnya tidak pernah di-reset ke false di sini
  end
  until true
  end
@@ -7612,7 +7616,12 @@ function StopRaid()
  _defaultRRIdx = 0 -- reset RR saat RAID habis
  RAID_ID_LIST = {}
  if _runeGradeCache then
- for k in pairs(_runeGradeCache) do _runeGradeCache[k] = nil end
+  -- [FIX] Hanya hapus key positif (cache RAID normal).
+  -- Key negatif = cache grade Ascension Tower dari chat parser, milik Ascension Mode.
+  -- Jangan dihapus saat StopRaid, supaya Ascension Mode masih bisa detect isAscension.
+  for k in pairs(_runeGradeCache) do
+   if k > 0 then _runeGradeCache[k] = nil end
+  end
  end
  if RebuildRaidList then pcall(RebuildRaidList) end
  -- [FIX] JANGAN reset setting user (difficulty/rune/grades/preferMaps) di sini!
@@ -7680,12 +7689,15 @@ local function GetAscensionList()
    -- Resolve raidId positif jika entry chat (negatif)
    local resolvedId = rid
    if rid < 0 then
-    -- cari positif dari RAID_LIVE yg sama mapId & isAscension
+    -- Cari raidId positif dari RAID_LIVE yang sama mapId & isAscension
     for rid2, ent2 in pairs(RAID_LIVE) do
      if rid2 > 0 and ent2.isAscension and ent2.mapId == ent.mapId then
       resolvedId = rid2; break
      end
     end
+    -- Jika masih negatif, berarti raidId dari server belum datang
+    -- Gunakan nilai absolut sebagai ID sementara supaya CreateRaidTeam bisa dicoba
+    -- (server akan reject jika ID tidak valid, dan loop akan retry)
     if resolvedId < 0 then resolvedId = math.abs(resolvedId) end
    end
    local mn = (ent.mapId or 50000) - 50000
@@ -7728,7 +7740,12 @@ function StartAscensionLoop()
     -- Tunggu ada Ascension Tower di RAID_LIVE
     local ascList = GetAscensionList()
     if #ascList == 0 then
-     AscStatusUpdate("Menunggu Ascension Tower...", Color3.fromRGB(140,140,60))
+     -- Jika Auto Raid aktif → dia yang fallback, Ascension cukup standby
+     if RAID.running then
+      AscStatusUpdate("[Standby] Auto Raid fallback - tunggu Ascension Tower...", Color3.fromRGB(140,100,200))
+     else
+      AscStatusUpdate("Menunggu Ascension Tower...", Color3.fromRGB(140,140,60))
+     end
      -- Tunggu max 30s, bisa di-wakeup oleh chat parser
      local _woken = false
      local _wConn
@@ -7832,10 +7849,12 @@ function StartAscensionLoop()
     local _serverMap = nil
     local _tpOk = false
     local _tpW  = 0
-    while not _tpOk and _tpW < 10 and ASC.running and not _cfail do
+    while not _tpOk and _tpW < 15 and ASC.running and not _cfail do
      task.wait(0.3); _tpW = _tpW + 0.3
      pcall(function()
       local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId")
+      -- [FIX] Ascension Tower masuk ke range map yang sama dengan RAID normal (50101-50120)
+      -- Server tidak beda-bedakan mapId antara Normal Raid dan Ascension Tower
       if wm and wm >= 50101 and wm <= 50120 then
        _serverMap = wm; _tpOk = true
       end
@@ -8256,6 +8275,32 @@ function StartRaidLoop()
  end
  if not RAID.running then break end
  RaidStatusUpdate("> Tower selesai - lanjut raid...", C.ACC3)
+ task.wait(0.1)
+ end
+
+ -- [FIX v46] Cek Ascension Mode sedang di dalam map - pause Auto Raid
+ if ASC.inMap then
+ RAID.inMap = false
+ RaidStatusUpdate("[||] Ascension Tower aktif - Auto Raid pause...", Color3.fromRGB(180,100,255))
+ while ASC.inMap and RAID.running do
+  task.wait(0.5)
+ end
+ if not RAID.running then break end
+ RaidStatusUpdate("> Ascension selesai - lanjut raid...", C.ACC3)
+ task.wait(0.1)
+ end
+
+ -- [FIX v46] Fallback logic: jika Ascension Mode aktif DAN ada Ascension Tower tersedia,
+ -- Auto Raid mengalah dan menunggu Ascension Mode selesai menangani Tower.
+ -- Auto Raid hanya jalan jika: Ascension Mode OFF, atau Ascension Mode ON tapi tidak ada Tower.
+ if ASC.running and #GetAscensionList() > 0 then
+ RAID.inMap = false
+ RaidStatusUpdate("[||] Ascension Tower tersedia - menunggu Ascension Mode...", Color3.fromRGB(180,100,255))
+ while ASC.running and #GetAscensionList() > 0 and RAID.running do
+  task.wait(1)
+ end
+ if not RAID.running then break end
+ RaidStatusUpdate("> Tidak ada Ascension Tower - Auto Raid ambil alih...", C.ACC3)
  task.wait(0.1)
  end
 
