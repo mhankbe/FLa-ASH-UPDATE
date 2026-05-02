@@ -2252,9 +2252,20 @@ function WaitRaidDone()
         return false, nil
     end
 
+    -- [v55 FIX] Auto-clear _raidInterrupt jika RAID tidak running (flag membekas)
+    if _raidInterrupt and not (RAID and RAID.running) then
+        _raidInterrupt = false
+    end
+
     local pause, reason = shouldPause()
     while pause and MA.running do
         t = t + 0.5
+        -- [v55 FIX] Auto-clear stale _raidInterrupt di dalam loop
+        if _raidInterrupt and not (RAID and RAID.running) then
+            _raidInterrupt = false
+            pause, reason = shouldPause()
+            if not pause then break end
+        end
         -- [FIX] Timeout 60 detik (Dungeon butuh waktu lama, kita naikkan batas timeout)
         if t >= 120 then 
             if MODE.current ~= "idle" and MODE.current ~= "ma" then
@@ -8270,22 +8281,13 @@ function StartAscensionLoop()
     task.wait(2)
     if not ASC.running then ASC.inMap = false; break end
 
-    -- SUCCESS/FAIL event listener
+    -- [v55 FIX] Listener dipasang SETELAH masuk map + flush 2 frame
+    -- Tidak ada listener sebelum ini - mencegah event pending dari RAID normal
+    -- menyebabkan _ascDone=true sebelum attack dimulai
     local _ascDone = false
     local _ascSuccess = false
     local connAS, connAF
-    local _reAS = Remotes:FindFirstChild("ChallengeRaidsSuccess")
-    local _reAF = Remotes:FindFirstChild("ChallengeRaidsFail")
-    if _reAS then connAS = _reAS.OnClientEvent:Connect(function() _ascDone = true; _ascSuccess = true end) end
-    if _reAF then connAF = _reAF.OnClientEvent:Connect(function() _ascDone = true end) end
-
-    -- [v54 FIX] Reset event listener SETELAH konfirmasi masuk map
-    -- ChallengeRaidsSuccess/Fail bisa sudah pending dari RAID normal yg jalan bersamaan
-    -- Jika tidak di-reset, _ascDone=true sebelum attack -> langsung lompat ke CLAIM REWARD
-    if connAS then pcall(function() connAS:Disconnect() end); connAS = nil end
-    if connAF then pcall(function() connAF:Disconnect() end); connAF = nil end
-    _ascDone = false; _ascSuccess = false
-    task.wait(0.1) -- flush pending events (1 frame)
+    task.wait(0.2) -- flush 2 frame: buang semua pending event sebelum listen
     local _reAS2 = Remotes:FindFirstChild("ChallengeRaidsSuccess")
     local _reAF2 = Remotes:FindFirstChild("ChallengeRaidsFail")
     if _reAS2 then connAS = _reAS2.OnClientEvent:Connect(function() _ascDone = true; _ascSuccess = true end) end
@@ -8365,6 +8367,15 @@ function StartAscensionLoop()
 
       if ASC.running and not _ascDone and bossPos then
        AscStatusUpdate("[K] Boss: "..boss.model.Name.." - TP ke Boss!", Color3.fromRGB(255,160,60))
+
+       -- [v55 FIX] Pakai ASC.bossDelay (slider UI) sebelum TP ke boss
+       local _ascBd = math.max(1, math.min(10, ASC.bossDelay or 3))
+       AscStatusUpdate("[K] Boss: "..boss.model.Name.." - Delay "..tostring(_ascBd).."s...", Color3.fromRGB(255,160,60))
+       task.wait(_ascBd)
+       if not ASC.running or _ascDone then
+        pcall(function() task.cancel(_tpTh or coroutine.running()) end)
+        goto asc_boss_done
+       end
 
        -- [v52 FIX 1] TP Player ke boss
        pcall(function()
@@ -8456,6 +8467,7 @@ function StartAscensionLoop()
        _ascDone = true
        AscStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
       end -- if bossPos
+      ::asc_boss_done::
      else
       if not boss and ASC.running then
        AscStatusUpdate("[FLa] Boss not found - Go Out...", Color3.fromRGB(255,150,50))
@@ -9233,25 +9245,23 @@ local function ResolveEntry()
   if not RAID.running then break end
  end
  -- [INDEPENDEN] tidak pause saat siege di waiting loop
- -- [v54 FIX] Jika ASC.running dan ada Ascension Tower tersedia -> RAID Normal ngalah dulu
- if ASC and ASC.running then
-  local _ascAvail = GetAscensionList and #GetAscensionList() > 0
-  if _ascAvail then
-   RaidStatusUpdate("[||] Ascension Tower tersedia - RAID Normal menunggu ASC selesai...", Color3.fromRGB(180,100,255))
-   if MODE:IsHeld("raid") then MODE:Release("raid") end
-   while RAID.running and ASC.running do
-    local _stillAsc = GetAscensionList and #GetAscensionList() > 0
-    if not _stillAsc then break end
-    if not (ASC.inMap or MODE:IsHeld("asc")) then break end
-    task.wait(0.5)
-   end
-   if not RAID.running then break end
-   while RAID.running do
-    if MODE:Request("raid") then break end
-    task.wait(0.5)
-   end
-   if not RAID.running then break end
+ -- [v55 FIX] Priority gate: RAID Normal ngalah jika ASC ON dan sedang aktif (inMap/hold lock)
+ -- Hanya block saat ASC benar-benar sedang MASUK tower, bukan saat menunggu
+ if ASC and ASC.running and (ASC.inMap or MODE:IsHeld("asc")) then
+  RaidStatusUpdate("[||] Ascension Tower aktif - RAID Normal menunggu...", Color3.fromRGB(180,100,255))
+  if MODE:IsHeld("raid") then MODE:Release("raid") end
+  while RAID.running do
+   -- Berhenti jika: ASC OFF, atau ASC tidak lagi di dalam tower dan tidak hold lock
+   if not ASC.running then break end
+   if not ASC.inMap and not MODE:IsHeld("asc") then break end
+   task.wait(0.5)
   end
+  if not RAID.running then break end
+  while RAID.running do
+   if MODE:Request("raid") then break end
+   task.wait(0.5)
+  end
+  if not RAID.running then break end
  end
  -- [FIX v256] Agresif: manual scan workspace tiap cycle
  ForceRescanRaidEnter()
