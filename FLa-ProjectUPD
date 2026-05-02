@@ -8247,7 +8247,10 @@ function StartAscensionLoop()
       end
      end
     end
-    if _cfConn then pcall(function() _cfConn:Disconnect() end) end
+    -- [v56 BUG FIX 1] WAJIB disconnect _cfConn di sini (baik sukses maupun gagal)
+    -- Sebelumnya hanya disconnect jika gagal → listener _cfConn masih aktif bersamaan connAF
+    -- Dua listener ChallengeRaidsFail aktif = _ascDone bisa true sebelum boss diserang
+    if _cfConn then pcall(function() _cfConn:Disconnect() end); _cfConn = nil end
 
     if not _tpOk or _cfail then
      RAID_LIVE[raidEntry.rawId] = nil
@@ -8281,13 +8284,13 @@ function StartAscensionLoop()
     task.wait(2)
     if not ASC.running then ASC.inMap = false; break end
 
-    -- [v55 FIX] Listener dipasang SETELAH masuk map + flush 2 frame
-    -- Tidak ada listener sebelum ini - mencegah event pending dari RAID normal
-    -- menyebabkan _ascDone=true sebelum attack dimulai
+    -- [v56 BUG FIX 1] Flush diperpanjang dari 0.2s → 0.5s
+    -- 0.2s (2 frame @30fps) tidak cukup buang pending event dari RAID sebelumnya
+    -- _cfConn sudah disconnect di atas, tidak ada risiko double-trigger lagi
     local _ascDone = false
     local _ascSuccess = false
     local connAS, connAF
-    task.wait(0.2) -- flush 2 frame: buang semua pending event sebelum listen
+    task.wait(0.5) -- flush 5+ frame: buang semua pending event sebelum listen
     local _reAS2 = Remotes:FindFirstChild("ChallengeRaidsSuccess")
     local _reAF2 = Remotes:FindFirstChild("ChallengeRaidsFail")
     if _reAS2 then connAS = _reAS2.OnClientEvent:Connect(function() _ascDone = true; _ascSuccess = true end) end
@@ -8973,6 +8976,19 @@ function StartRaidLoop()
     while _siegeInterrupt and RAID.running do task.wait(0.5) end
     if not RAID.running then break end
    end
+   -- [v56 BUG FIX 2] Jika ASC.running=true DAN ada Tower tersedia, RAID tidak boleh ambil alih.
+   -- ASC bisa saja sedang cooldown/standby (MODE sudah idle), tapi Tower masih menunggu.
+   -- RAID hanya boleh masuk jika ASC tidak running ATAU tidak ada Tower sama sekali.
+   if ASC and ASC.running then
+    local _ascHasTower = GetAscensionList and #GetAscensionList() > 0
+    if _ascHasTower then
+     RaidStatusUpdate("[||] ASC aktif & ada Tower - RAID menunggu ASC...", Color3.fromRGB(140,100,200))
+     while RAID.running and ASC.running and (GetAscensionList and #GetAscensionList() > 0) do
+      task.wait(0.5)
+     end
+     if not RAID.running then break end
+    end
+   end
    if MODE:Request("raid") then break end
    if MODE.current ~= "idle" then
     RaidStatusUpdate(("[Q] Menunggu %s selesai..."):format(MODE.current), Color3.fromRGB(255,160,60))
@@ -8987,6 +9003,12 @@ function StartRaidLoop()
   if _siegeInterrupt then
    MODE:Release("raid")
    RaidStatusUpdate("[||] Siege interrupt setelah dapat slot - lepas kembali...", Color3.fromRGB(255,140,0))
+   break
+  end
+  -- [v56 BUG FIX 2] Double-check: ASC butuh slot (Tower baru muncul setelah RAID dapat lock)
+  if ASC and ASC.running and GetAscensionList and #GetAscensionList() > 0 then
+   MODE:Release("raid")
+   RaidStatusUpdate("[||] ASC butuh slot (Tower muncul) - RAID lepas kembali...", Color3.fromRGB(140,100,200))
    break
   end
   RaidStatusUpdate("> Giliran RAID! Siap masuk...", C.ACC3)
