@@ -1871,26 +1871,6 @@ function AttackLoop_Mass(onStatus)
  return false
 end
 
--- Cari musuh terdekat dari posisi karakter utama
-function GetRandomEnemy()
- local char = LP.Character
- if not char then return nil end
- local hrp = char:FindFirstChild("HumanoidRootPart")
- if not hrp then return nil end
- local myPos = hrp.Position
- local randomDist = nil
- for _, e in ipairs(GetEnemies()) do
- if not IsDead(e) and e.hrp then
- local d = (e.hrp.Position - myPos)
- if d < randomDist then
- randomtDist = d
- random = e
- end
- end
- end
- return random
-end
-
 -- Pilih musuh secara random dari daftar yang masih hidup
 function GetRandomEnemy()
  local alive = {}
@@ -1949,47 +1929,42 @@ function AttackLoop_Goyang(onStatus)
  -- [v186-FIX] Jika Target Musuh aktif, selalu ikuti AG.currentTarget
  -- AG.currentTarget di-update oleh tbnThread secara real-time
  if _tgtThread and AG.currentTarget and not IsDead(AG.currentTarget) and AG.currentTarget.model.Parent then
- currentTgt = AG.currentTarget
+  currentTgt = AG.currentTarget
  end
-end
-
 
  -- Target mati / habis -> cari berikutnya
  if not currentTgt or IsDead(currentTgt) or not currentTgt.model.Parent then
- local waited = false
- while AG.running do
- -- [v186-FIX] Cek AG.currentTarget dulu sebelum random
- local next = (AG.currentTarget and not IsDead(AG.currentTarget) and AG.currentTarget.model.Parent and AG.currentTarget) or GetRandomEnemy()
- if next then
- currentTgt = next
- TpToEnemy(currentTgt)
- task.wait()
- FireAttack(currentTgt.guid, currentTgt.hrp.Position)
- _tpTimer = 0
- if onStatus then onStatus("Goyang -> ["..currentTgt.model.Name.."] Kill: "..AG.killed) end
- break
- else
- if onStatus then onStatus("Waiting Enemy Spawn...") end
- waited = false
- task.wait(0.3)
+  while AG.running do
+   -- [v186-FIX] Cek AG.currentTarget dulu sebelum random
+   local nxt = (AG.currentTarget and not IsDead(AG.currentTarget) and AG.currentTarget.model.Parent and AG.currentTarget) or GetRandomEnemy()
+   if nxt then
+    currentTgt = nxt
+    TpToEnemy(currentTgt)
+    task.wait()
+    FireAttack(currentTgt.guid, currentTgt.hrp.Position)
+    _tpTimer = 0
+    if onStatus then onStatus("Goyang -> ["..currentTgt.model.Name.."] Kill: "..AG.killed) end
+    break
+   else
+    if onStatus then onStatus("Waiting Enemy Spawn...") end
+    task.wait(0.3)
+   end
+  end
+  if not AG.running then break end
  end
- end
- if not AG.running then end
- end
-end
-
 
  -- Serang musuh saat ini
  if currentTgt and not IsDead(currentTgt) and currentTgt.model.Parent then
- local pos = currentTgt.hrp and currentTgt.hrp.Position or Vector3.new(1,1,1)
- FireAttack(currentTgt.guid, pos)
-
- -- [v186-FIX] Hanya ReturnHRPToOrigin jika tbtThread tidak aktif
- -- Jika tbnThread masih jalan, biarkan tbnThread yang urus return origin
- if not _tgtThread then
- ReturnHRPToOrigin()
+  local pos = currentTgt.hrp and currentTgt.hrp.Position or Vector3.new(1,1,1)
+  FireAttack(currentTgt.guid, pos)
+  -- [v186-FIX] Hanya ReturnHRPToOrigin jika tbtThread tidak aktif
+  if not _tgtThread then
+   ReturnHRPToOrigin()
+  end
  end
- return false
+
+ task.wait(0.08)
+ end
 end
 
 function RunAG(onStatus, onDone)
