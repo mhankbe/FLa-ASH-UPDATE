@@ -1191,9 +1191,14 @@ ASC = {
  thread   = nil,
  sukses   = 0,
  pickMode = "easy",   -- "easy" | "hard" | "manual"
- runeGrades  = {},    -- [manual] filter grade seperti Auto Raid
- runeEnabled = false, -- [manual] rune map item
- runeMapTarget = 0,   -- [manual] target map rune
+ runeGrades    = {},    -- filter grade (Preferred Rank)
+ runeEnabled   = false, -- rune map item aktif
+ runeMapTarget = 0,     -- target map rune (Preferred Rune)
+ updownEnabled     = false, -- UP/DOWN Rank toggle
+ updownDir         = "up",  -- "up" | "down"
+ updownTargetGrade = nil,   -- grade target UP/DOWN
+ autoKillBoss = false, -- AUTO BOSS KILL toggle
+ bossDelay    = 3,     -- delay sebelum TP ke boss (1-10s)
  statusLbl = nil,
  dot       = nil,
  suksesLbl = nil,
@@ -7839,10 +7844,10 @@ function StartAscensionLoop()
 
     -- STEP: Dalam map - tunggu boss / attack
     AscStatusUpdate("[~] Dalam Tower "..mn.."...", Color3.fromRGB(100,200,255))
-    task.wait(RAID.bossDelay or 3)
+    task.wait(ASC.bossDelay or 3)
 
     -- Cari boss dan serang (reuse logika dari Auto Raid)
-    if RAID.autoKillBoss then
+    if ASC.autoKillBoss then
      local _bDone = false
      local function IsBossAsc()
       local char = LP.Character
@@ -10422,7 +10427,394 @@ do
   end
  end)
 
- -- ROW 4: PICK MODE (Easy / Hard / Manual)
+ -- ============================================================
+ -- ROW 4: PREFERRED RANK (always visible, mirip Auto Raid)
+ -- ============================================================
+ local GRADE_COLORS_ASC = {
+  ["E"]=Color3.fromRGB(150,150,150),["D"]=Color3.fromRGB(100,200,100),
+  ["C"]=Color3.fromRGB(80,200,120), ["B"]=Color3.fromRGB(100,140,255),
+  ["A"]=Color3.fromRGB(180,100,255),["S"]=Color3.fromRGB(255,180,50),
+  ["SS"]=Color3.fromRGB(255,220,0), ["G"]=Color3.fromRGB(255,60,60),
+  ["N"]=Color3.fromRGB(255,100,200),["M"]=Color3.fromRGB(255,0,0),
+  ["M+"]=Color3.fromRGB(255,50,50), ["M++"]=Color3.fromRGB(255,100,100),
+  ["XM"]=Color3.fromRGB(180,0,0),   ["ULT"]=Color3.fromRGB(255,255,255),
+ }
+ local GRADE_VALUE_ASC = GRADE_RANK or {}
+
+ local ascRankHdr = Label(ascInner,"PREFERRED RANK",10,C.TXT3,Enum.Font.GothamBold)
+ ascRankHdr.LayoutOrder = 4; ascRankHdr.Size = UDim2.new(1,0,0,14)
+ local ascRankCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
+ ascRankCard.LayoutOrder = 5; Corner(ascRankCard,10); Stroke(ascRankCard,C.BORD,1.5,0.3); Padding(ascRankCard,6,6,10,10)
+ local ascRankRow = Frame(ascRankCard,C.BLACK,UDim2.new(1,0,1,0)); ascRankRow.BackgroundTransparency=1
+ local ascRankKeyL = Label(ascRankRow,"Select Rank",11,C.TXT2,Enum.Font.GothamBold)
+ ascRankKeyL.Size = UDim2.new(0,72,1,0)
+ local ascRankDDBtn = Btn(ascRankRow,C.BG3,UDim2.new(1,-82,1,0))
+ ascRankDDBtn.Position = UDim2.new(0,80,0,0); Corner(ascRankDDBtn,6); Stroke(ascRankDDBtn,C.BORD,1.5,0.25)
+ local ascRankDDVal = Label(ascRankDDBtn," -- SELECT RANK --",11,C.TXT3,Enum.Font.GothamBold)
+ ascRankDDVal.Size = UDim2.new(1,-20,1,0); ascRankDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local ascRankArr = Label(ascRankDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascRankArr.Size = UDim2.new(0,18,1,0); ascRankArr.Position = UDim2.new(1,-20,0,0)
+
+ local function RefreshAscRankLabel()
+  local ns={}
+  for _,g in ipairs(GRADE_LIST or {}) do
+   if ASC.runeGrades[g] then table.insert(ns,"["..g.."]") end
+  end
+  if #ns==0 then ascRankDDVal.Text=" -- SELECT RANK --"; ascRankDDVal.TextColor3=C.TXT3
+  else ascRankDDVal.Text=" "..table.concat(ns," "); ascRankDDVal.TextColor3=Color3.fromRGB(200,120,255) end
+ end
+ RefreshAscRankLabel()
+
+ ascRankDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local IH=30
+  local gl = GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
+  local SFH=math.min(#gl*(IH+4)+44,280)
+  local ab=ascRankDDBtn.AbsolutePosition; local sz=ascRankDDBtn.AbsoluteSize
+  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(ab.Y+SFH+44 > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
+  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
+  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
+  local sf=Instance.new("ScrollingFrame",popup)
+  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
+  local sfp=Instance.new("UIPadding",sf)
+  sfp.PaddingTop=UDim.new(0,4); sfp.PaddingBottom=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
+  local sfLayout=Instance.new("UIListLayout",sf)
+  sfLayout.SortOrder=Enum.SortOrder.LayoutOrder; sfLayout.Padding=UDim.new(0,4)
+  local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
+  rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
+  Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
+  local rl=Instance.new("TextLabel",rb); rl.Size=UDim2.new(1,-8,1,0); rl.Position=UDim2.new(0,8,0,0)
+  rl.BackgroundTransparency=1; rl.Text="x Reset ALL"; rl.TextSize=10
+  rl.Font=Enum.Font.GothamBold; rl.TextColor3=C.RED; rl.TextXAlignment=Enum.TextXAlignment.Left; rl.ZIndex=9999
+  rb.MouseButton1Click:Connect(function()
+   for _,g in ipairs(gl) do ASC.runeGrades[g]=nil end
+   CloseActiveDD(); RefreshAscRankLabel()
+  end)
+  for i,grade in ipairs(gl) do
+   local gc=grade; local col=GRADE_COLORS_ASC[grade] or C.ACC
+   local gv=GRADE_VALUE_ASC[grade] or "?"; local isSel=ASC.runeGrades[gc]==true
+   local item=Instance.new("TextButton",sf)
+   item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
+   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local ck=Instance.new("TextLabel",item); ck.Size=UDim2.new(0,20,1,0); ck.Position=UDim2.new(0,4,0,0)
+   ck.BackgroundTransparency=1; ck.Text=isSel and "v" or ""; ck.TextSize=11
+   ck.Font=Enum.Font.GothamBold; ck.TextColor3=col; ck.TextXAlignment=Enum.TextXAlignment.Center; ck.ZIndex=9999
+   local nl=Instance.new("TextLabel",item); nl.Size=UDim2.new(0,56,1,0); nl.Position=UDim2.new(0,26,0,0)
+   nl.BackgroundTransparency=1; nl.Text="Rank "..grade; nl.TextSize=11
+   nl.Font=Enum.Font.GothamBold; nl.TextColor3=isSel and Color3.fromRGB(255,255,255) or col
+   nl.TextXAlignment=Enum.TextXAlignment.Left; nl.ZIndex=9999
+   local vl=Instance.new("TextLabel",item); vl.Size=UDim2.new(1,-86,1,0); vl.Position=UDim2.new(0,84,0,0)
+   vl.BackgroundTransparency=1; vl.Text="Grade "..tostring(gv); vl.TextSize=9; vl.Font=Enum.Font.Gotham
+   vl.TextColor3=isSel and C.TXT2 or C.TXT3; vl.TextXAlignment=Enum.TextXAlignment.Left; vl.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    local ns=not ASC.runeGrades[gc]; ASC.runeGrades[gc]=ns and true or nil
+    item.BackgroundColor3=ns and C.SURFACE or C.DD_BG; item.BackgroundTransparency=ns and 0.18 or 0.42
+    ck.Text=ns and "v" or ""; nl.TextColor3=ns and Color3.fromRGB(255,255,255) or col
+    vl.TextColor3=ns and C.TXT2 or C.TXT3; RefreshAscRankLabel()
+    if _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- ============================================================
+ -- ROW 5-6: PREFERRED RUNE (Item) - always visible
+ -- ============================================================
+ local ascRuneHdr = Label(ascInner,"PREFERRED RUNE (Item)",10,C.TXT3,Enum.Font.GothamBold)
+ ascRuneHdr.LayoutOrder = 6; ascRuneHdr.Size = UDim2.new(1,0,0,14)
+ local ascRuneCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
+ ascRuneCard.LayoutOrder = 7; Corner(ascRuneCard,10); Stroke(ascRuneCard,C.BORD,1.5,0.3); Padding(ascRuneCard,6,6,10,10)
+ local ascRuneRow = Frame(ascRuneCard,C.BLACK,UDim2.new(1,0,1,0)); ascRuneRow.BackgroundTransparency=1
+ local ascRuneKeyL = Label(ascRuneRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
+ ascRuneKeyL.Size = UDim2.new(0,72,1,0)
+ local ascRuneDDBtn = Btn(ascRuneRow,C.BG3,UDim2.new(1,-82,1,0))
+ ascRuneDDBtn.Position = UDim2.new(0,80,0,0); Corner(ascRuneDDBtn,6); Stroke(ascRuneDDBtn,C.BORD,1.5,0.25)
+ local ascRuneDDVal = Label(ascRuneDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
+ ascRuneDDVal.Size = UDim2.new(1,-20,1,0); ascRuneDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local ascRuneArr = Label(ascRuneDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascRuneArr.Size = UDim2.new(0,18,1,0); ascRuneArr.Position = UDim2.new(1,-20,0,0)
+
+ local function AscSyncRuneState()
+  if ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then ASC.runeEnabled=true
+  else ASC.runeEnabled=false end
+ end
+ AscSyncRuneState()
+ if ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then
+  ascRuneDDVal.Text=" Map "..ASC.runeMapTarget.." - "..(MAP_NAMES and MAP_NAMES[ASC.runeMapTarget] or "")
+  ascRuneDDVal.TextColor3=C.ACC2
+ end
+
+ ascRuneDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local aP=ascRuneDDBtn.AbsolutePosition; local aS=ascRuneDDBtn.AbsoluteSize; local IH=28
+  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
+  local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(aP.Y+popH > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
+  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
+  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
+  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
+  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
+  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
+  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
+  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
+  local s0=(ASC.runeMapTarget==0)
+  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
+  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
+  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
+  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
+  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
+  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3; l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
+  i0.MouseButton1Click:Connect(function()
+   CloseActiveDD(); ASC.runeMapTarget=0; AscSyncRuneState()
+   ascRuneDDVal.Text=" -- NOT SELECTED --"; ascRuneDDVal.TextColor3=C.TXT3
+  end)
+  for mn=1,20 do
+   local ml=mn; local mnm=MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
+   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
+   local iS=(ASC.runeMapTarget==mn)
+   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
+   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
+   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
+   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
+   il.BackgroundTransparency=1; il.Text="Map "..mn.." - "..mnm; il.TextSize=10; il.Font=Enum.Font.GothamBold
+   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
+   it.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.runeMapTarget=ml; AscSyncRuneState()
+    ascRuneDDVal.Text=" Map "..ml.." - "..mnm; ascRuneDDVal.TextColor3=C.ACC2
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- ============================================================
+ -- ROW 8: UP/DOWN RANK
+ -- ============================================================
+ local ascUdHdr = Label(ascInner,"UP/DOWN RANK",10,C.TXT3,Enum.Font.GothamBold)
+ ascUdHdr.LayoutOrder = 8; ascUdHdr.Size = UDim2.new(1,0,0,14)
+
+ local ascUdCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,76))
+ ascUdCard.LayoutOrder = 9; Corner(ascUdCard,10); Stroke(ascUdCard,C.BORD,1.5,0.3)
+
+ local ascUdRowTop = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,38))
+ ascUdRowTop.BackgroundTransparency=1; ascUdRowTop.Position=UDim2.new(0,0,0,0)
+
+ local ascUdPill = Btn(ascUdRowTop,C.PILL_OFF,UDim2.new(0,52,0,30))
+ ascUdPill.AnchorPoint=Vector2.new(1,0.5); ascUdPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascUdPill,13)
+ local ascUdKnob = Frame(ascUdPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
+ ascUdKnob.AnchorPoint=Vector2.new(0,0.5); ascUdKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascUdKnob,10)
+ local ascUdLbl = Label(ascUdRowTop,"UP/DOWN Rank",14,C.TXT,Enum.Font.GothamBold)
+ ascUdLbl.Size=UDim2.new(1,-68,0,20); ascUdLbl.Position=UDim2.new(0,14,0.5,-10)
+
+ -- Dropdown Arah (UP/DOWN)
+ if not ASC.updownDir then ASC.updownDir="up" end
+ local ascUdRowBot = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,36))
+ ascUdRowBot.BackgroundTransparency=1; ascUdRowBot.Position=UDim2.new(0,0,0,38)
+ New("UIListLayout",{Parent=ascUdRowBot,FillDirection=Enum.FillDirection.Horizontal,
+  SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6),VerticalAlignment=Enum.VerticalAlignment.Center})
+ Instance.new("UIPadding",ascUdRowBot).PaddingLeft=UDim.new(0,10)
+
+ local ascDirDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(0,100,0,26))
+ ascDirDDBtn.LayoutOrder=1; Corner(ascDirDDBtn,6); Stroke(ascDirDDBtn,C.BORD,1.5,0.25)
+ local ascDirDDLbl = Label(ascDirDDBtn,ASC.updownDir=="up" and " UP (UP)" or " DOWN (DN)",11,C.ACC,Enum.Font.GothamBold)
+ ascDirDDLbl.Size=UDim2.new(1,0,1,0)
+
+ local ascGradeDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(1,-120,0,26))
+ ascGradeDDBtn.LayoutOrder=2; Corner(ascGradeDDBtn,6); Stroke(ascGradeDDBtn,C.BORD,1.5,0.25)
+ local ascGradeDDLbl = Label(ascGradeDDBtn,
+  ASC.updownTargetGrade and (" Target: ["..ASC.updownTargetGrade.."]") or " -- SELECT TARGET --",
+  11,ASC.updownTargetGrade and C.ACC2 or C.TXT3,Enum.Font.GothamBold)
+ ascGradeDDLbl.Size=UDim2.new(1,-20,1,0)
+ local ascGradeArr = Label(ascGradeDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascGradeArr.Size=UDim2.new(0,18,1,0); ascGradeArr.Position=UDim2.new(1,-20,0,0)
+
+ local function updateAscUpDownToggle()
+  local on=ASC.updownEnabled
+  TweenService:Create(ascUdPill,TweenInfo.new(0.16),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
+  TweenService:Create(ascUdKnob,TweenInfo.new(0.16),{
+   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
+   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
+  }):Play()
+ end
+ updateAscUpDownToggle()
+
+ ascUdPill.MouseButton1Click:Connect(function()
+  ASC.updownEnabled=not ASC.updownEnabled; updateAscUpDownToggle()
+ end)
+
+ -- Dropdown arah UP/DOWN
+ ascDirDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local dirOpts={
+   {label=" UP (UP)", dir="up", col=Color3.fromRGB(100,220,100)},
+   {label=" DOWN (DN)", dir="down", col=Color3.fromRGB(255,100,100)},
+  }
+  local aP=ascDirDDBtn.AbsolutePosition; local aS=ascDirDDBtn.AbsoluteSize; local IH=28
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+10,0,#dirOpts*(IH+2)+12)
+  popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.85)
+  local ll=Instance.new("UIListLayout",popup); ll.Padding=UDim.new(0,2); ll.SortOrder=Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",popup).PaddingTop=UDim.new(0,4)
+  for _,opt in ipairs(dirOpts) do
+   local d=opt.dir
+   local item=Instance.new("TextButton",popup); item.Size=UDim2.new(1,-8,0,IH)
+   local isSel=ASC.updownDir==d
+   item.BackgroundColor3=isSel and C.SURFACE or C.BG3; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local iL=Instance.new("TextLabel",item); iL.Size=UDim2.new(1,-8,1,0); iL.Position=UDim2.new(0,8,0,0)
+   iL.BackgroundTransparency=1; iL.Text=opt.label; iL.TextSize=11; iL.Font=Enum.Font.GothamBold
+   iL.TextColor3=opt.col; iL.TextXAlignment=Enum.TextXAlignment.Left; iL.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.updownDir=d; ascDirDDLbl.Text=opt.label; ascDirDDLbl.TextColor3=opt.col
+   end)
+  end
+  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- Dropdown target grade UP/DOWN
+ local ascClearRow = nil -- forward
+ ascGradeDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local gl=GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
+  local IH=28; local SFH=math.min(#gl*(IH+4)+44,260)
+  local ab=ascGradeDDBtn.AbsolutePosition; local sz=ascGradeDDBtn.AbsoluteSize
+  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(ab.Y+SFH+8 > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
+  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
+  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
+  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
+  local sf=Instance.new("ScrollingFrame",popup)
+  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
+  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
+  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
+  -- Clear button
+  local cRow=Instance.new("TextButton",sf); cRow.Size=UDim2.new(1,-8,0,IH); cRow.LayoutOrder=0
+  cRow.BackgroundColor3=not ASC.updownTargetGrade and C.SURFACE or C.DD_BG
+  cRow.BackgroundTransparency=not ASC.updownTargetGrade and 0.18 or 0.42
+  cRow.BorderSizePixel=0; cRow.Text=""; cRow.AutoButtonColor=false; cRow.ZIndex=9999
+  Instance.new("UICorner",cRow).CornerRadius=UDim.new(0,6)
+  local cLbl=Instance.new("TextLabel",cRow); cLbl.Size=UDim2.new(1,-8,1,0); cLbl.Position=UDim2.new(0,8,0,0)
+  cLbl.BackgroundTransparency=1; cLbl.Text="-- CLEAR --"; cLbl.TextSize=10
+  cLbl.Font=Enum.Font.GothamBold; cLbl.TextColor3=not ASC.updownTargetGrade and C.ACC2 or C.TXT3
+  cLbl.TextXAlignment=Enum.TextXAlignment.Left; cLbl.ZIndex=9999
+  cRow.MouseButton1Click:Connect(function()
+   ASC.updownTargetGrade=nil; CloseActiveDD()
+   ascGradeDDLbl.Text=" -- SELECT TARGET --"; ascGradeDDLbl.TextColor3=C.TXT3
+  end)
+  for i,g in ipairs(gl) do
+   local selGrade=g; local col=GRADE_COLORS_ASC[g] or C.ACC; local isSel=(ASC.updownTargetGrade==g)
+   local item=Instance.new("TextButton",sf); item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
+   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
+   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
+   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
+   local il=Instance.new("TextLabel",item); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
+   il.BackgroundTransparency=1; il.Text=" ["..g.."] Rank "..g; il.TextSize=11; il.Font=Enum.Font.GothamBold
+   il.TextColor3=isSel and Color3.fromRGB(255,255,255) or col; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999
+   item.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.updownTargetGrade=selGrade
+    ascGradeDDLbl.Text=" Target: ["..selGrade.."]"; ascGradeDDLbl.TextColor3=C.ACC2
+   end)
+  end
+  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+ -- ============================================================
+ -- ROW 10: AUTO BOSS KILL TOGGLE
+ -- ============================================================
+ local ascBossRow = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,44))
+ ascBossRow.LayoutOrder=10; Corner(ascBossRow,10); Stroke(ascBossRow,C.BORD,1.5,0.3)
+ local ascBossL = Label(ascBossRow,"AUTO KILL BOSS",13,C.TXT,Enum.Font.GothamBold)
+ ascBossL.Size=UDim2.new(1,-68,0,20); ascBossL.Position=UDim2.new(0,14,0.5,-10)
+ local ascBossPill = Btn(ascBossRow,C.PILL_OFF,UDim2.new(0,52,0,30))
+ ascBossPill.AnchorPoint=Vector2.new(1,0.5); ascBossPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascBossPill,13)
+ local ascBossKnob = Frame(ascBossPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
+ ascBossKnob.AnchorPoint=Vector2.new(0,0.5); ascBossKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascBossKnob,10)
+ ascBossPill.MouseButton1Click:Connect(function()
+  ASC.autoKillBoss=not ASC.autoKillBoss; local on=ASC.autoKillBoss
+  TweenService:Create(ascBossPill,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
+  TweenService:Create(ascBossKnob,TweenInfo.new(0.16),{
+   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
+   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
+  }):Play()
+ end)
+
+ -- ============================================================
+ -- ROW 11: TELEPORT DELAY SLIDER (1-10s)
+ -- ============================================================
+ local ascTpCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,54))
+ ascTpCard.LayoutOrder=11; Corner(ascTpCard,10); Stroke(ascTpCard,C.BORD,1.5,0.3); Padding(ascTpCard,6,6,10,10)
+ New("UIListLayout",{Parent=ascTpCard,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,4)})
+ local ascTpTop = Frame(ascTpCard,C.BLACK,UDim2.new(1,0,0,18)); ascTpTop.BackgroundTransparency=1; ascTpTop.LayoutOrder=0
+ local _ascTpKeyL = Label(ascTpTop,"Teleport Delay",11,C.TXT2,Enum.Font.GothamBold); _ascTpKeyL.Size=UDim2.new(0.7,0,1,0)
+ local ascTpValLbl = Label(ascTpTop,tostring(ASC.bossDelay).."s",11,C.ACC2,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
+ ascTpValLbl.Size=UDim2.new(0.3,0,1,0); ascTpValLbl.Position=UDim2.new(0.7,0,0,0)
+ local ascTpBot = Frame(ascTpCard,C.BLACK,UDim2.new(1,0,0,22)); ascTpBot.BackgroundTransparency=1; ascTpBot.LayoutOrder=1
+ New("UIListLayout",{Parent=ascTpBot,SortOrder=Enum.SortOrder.LayoutOrder,
+  FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,4),VerticalAlignment=Enum.VerticalAlignment.Center})
+ local ascTpMinus = Btn(ascTpBot,C.BG3,UDim2.new(0,26,0,22))
+ ascTpMinus.LayoutOrder=0; Corner(ascTpMinus,6); Stroke(ascTpMinus,C.BORD,1.5,0.4)
+ Label(ascTpMinus,"-",14,C.TXT,Enum.Font.GothamBold,Enum.TextXAlignment.Center).Size=UDim2.new(1,0,1,0)
+ local ascTpTrackBtn = Btn(ascTpBot,C.BG3,UDim2.new(1,-60,0,22))
+ ascTpTrackBtn.LayoutOrder=1; Corner(ascTpTrackBtn,11); Stroke(ascTpTrackBtn,C.BORD,1.5,0.4)
+ local ascTpFill = Frame(ascTpTrackBtn,C.ACC,UDim2.new((ASC.bossDelay-1)/9,1,1,-2))
+ ascTpFill.Position=UDim2.new(0,0,0,1); Corner(ascTpFill,10)
+ local ascTpKnob = Frame(ascTpTrackBtn,C.KNOB_ON,UDim2.new(0,18,0,18))
+ ascTpKnob.AnchorPoint=Vector2.new(0.5,0.5); ascTpKnob.Position=UDim2.new((ASC.bossDelay-1)/9,0,0.5,0)
+ Corner(ascTpKnob,9); Stroke(ascTpKnob,C.ACC,1.5,0.6)
+ local ascTpPlus = Btn(ascTpBot,C.BG3,UDim2.new(0,26,0,22))
+ ascTpPlus.LayoutOrder=2; Corner(ascTpPlus,6); Stroke(ascTpPlus,C.BORD,1.5,0.4)
+ Label(ascTpPlus,"+",14,C.TXT,Enum.Font.GothamBold,Enum.TextXAlignment.Center).Size=UDim2.new(1,0,1,0)
+ local function UpdateAscTpSlider(val)
+  val=math.clamp(math.round(val),1,10)
+  ASC.bossDelay=val; ascTpValLbl.Text=val.."s"
+  ascTpFill.Size=UDim2.new((val-1)/9,1,1,-2); ascTpKnob.Position=UDim2.new((val-1)/9,0,0.5,0)
+ end
+ ascTpMinus.MouseButton1Click:Connect(function() UpdateAscTpSlider(ASC.bossDelay-1) end)
+ ascTpPlus.MouseButton1Click:Connect(function() UpdateAscTpSlider(ASC.bossDelay+1) end)
+ local _ascTpDrag=false
+ ascTpTrackBtn.InputBegan:Connect(function(inp)
+  if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+   _ascTpDrag=true
+   local tA=ascTpTrackBtn.AbsolutePosition; local tS=ascTpTrackBtn.AbsoluteSize
+   UpdateAscTpSlider(math.round(math.clamp((inp.Position.X-tA.X)/tS.X,0,1)*9)+1)
+  end
+ end)
+ ascTpTrackBtn.InputChanged:Connect(function(inp)
+  if not _ascTpDrag then return end
+  if inp.UserInputType~=Enum.UserInputType.MouseMovement and inp.UserInputType~=Enum.UserInputType.Touch then return end
+  local tA=ascTpTrackBtn.AbsolutePosition; local tS=ascTpTrackBtn.AbsoluteSize
+  UpdateAscTpSlider(math.round(math.clamp((inp.Position.X-tA.X)/tS.X,0,1)*9)+1)
+ end)
+ ascTpTrackBtn.InputEnded:Connect(function(inp)
+  if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+   _ascTpDrag=false
+  end
+ end)
+
+ -- ============================================================
+ -- ROW 12-13: PICK MODE (Easy / Hard / Manual)
+ -- ============================================================
  local APM_OPTS  = {"Easy","Hard","Manual"}
  local APM_KEYS  = {"easy","hard","manual"}
  local APM_COLORS= {
@@ -10439,9 +10831,9 @@ do
  ASC.pickMode = APM_KEYS[curAPM]
 
  local apmHdr = Label(ascInner,"PICK MODE",10,C.TXT3,Enum.Font.GothamBold)
- apmHdr.LayoutOrder = 4; apmHdr.Size = UDim2.new(1,0,0,14)
+ apmHdr.LayoutOrder = 12; apmHdr.Size = UDim2.new(1,0,0,14)
  local apmCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,40))
- apmCard.LayoutOrder = 5; Corner(apmCard,10); Stroke(apmCard,C.BORD,1.5,0.3); Padding(apmCard,6,6,10,10)
+ apmCard.LayoutOrder = 13; Corner(apmCard,10); Stroke(apmCard,C.BORD,1.5,0.3); Padding(apmCard,6,6,10,10)
  local _apmKeyL = Label(apmCard,"Pick Mode",11,C.TXT2,Enum.Font.GothamBold)
  _apmKeyL.Size = UDim2.new(0,72,1,0)
  local apmDDBtn = Btn(apmCard, C.BG3, UDim2.new(1,-82,0,28))
@@ -10451,10 +10843,9 @@ do
  local apmArr = Label(apmDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
  apmArr.Size = UDim2.new(0,18,1,0); apmArr.Position = UDim2.new(1,-20,0,0)
  local apmDescLbl = Label(ascInner, APM_DESC[curAPM], 10, C.TXT3, Enum.Font.GothamBold)
- apmDescLbl.LayoutOrder = 6; apmDescLbl.Size = UDim2.new(1,0,0,14)
+ apmDescLbl.LayoutOrder = 14; apmDescLbl.Size = UDim2.new(1,0,0,14)
 
- -- Manual-only cards (Grade filter + Rune Map)
- -- Hanya tampil saat pickMode == "manual"
+ -- Manual-only cards (Grade filter + Rune Map) - tersembunyi kecuali manual
  local _ascManualSection -- forward declare
 
  apmDDBtn.MouseButton1Click:Connect(function()
@@ -10486,7 +10877,6 @@ do
     curAPM = ii; ASC.pickMode = APM_KEYS[ii]
     apmDDLbl.Text = " "..APM_OPTS[ii]; apmDDLbl.TextColor3 = APM_COLORS[ii]
     apmDescLbl.Text = APM_DESC[ii]
-    -- Tampil/sembunyikan manual section
     if _ascManualSection then _ascManualSection.Visible = (APM_KEYS[ii] == "manual") end
     task.defer(ResizeAscBody)
    end)
@@ -10496,22 +10886,12 @@ do
  end)
 
  -- MANUAL SECTION: Grade filter + Rune Map (tersembunyi kecuali manual)
- local GRADE_COLORS_ASC = {
-  ["E"]=Color3.fromRGB(150,150,150),["D"]=Color3.fromRGB(100,200,100),
-  ["C"]=Color3.fromRGB(80,200,120), ["B"]=Color3.fromRGB(100,140,255),
-  ["A"]=Color3.fromRGB(180,100,255),["S"]=Color3.fromRGB(255,180,50),
-  ["SS"]=Color3.fromRGB(255,220,0), ["G"]=Color3.fromRGB(255,60,60),
-  ["N"]=Color3.fromRGB(255,100,200),["M"]=Color3.fromRGB(255,0,0),
-  ["M+"]=Color3.fromRGB(255,50,50), ["M++"]=Color3.fromRGB(255,100,100),
-  ["XM"]=Color3.fromRGB(180,0,0),   ["ULT"]=Color3.fromRGB(255,255,255),
- }
-
  _ascManualSection = Frame(ascInner, C.BLACK, UDim2.new(1,0,0,0))
  _ascManualSection.BackgroundTransparency = 1; _ascManualSection.AutomaticSize = Enum.AutomaticSize.Y
- _ascManualSection.LayoutOrder = 7; _ascManualSection.Visible = false
+ _ascManualSection.LayoutOrder = 15; _ascManualSection.Visible = false
  local _ascManLayout = New("UIListLayout",{Parent=_ascManualSection, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
 
- -- Grade Filter
+ -- Grade Filter (Manual)
  local aGrHdr = Label(_ascManualSection,"FILTER GRADE",10,C.TXT3,Enum.Font.GothamBold)
  aGrHdr.LayoutOrder = 1; aGrHdr.Size = UDim2.new(1,0,0,14)
  local aGrCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
@@ -10551,7 +10931,6 @@ do
   sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
   local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
   local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
-  -- Reset button
   local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
   rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
   Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
