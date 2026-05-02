@@ -8115,6 +8115,20 @@ function StartAscensionLoop()
     local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
     AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
 
+    -- [FIX v51] Simpan baseMapId SEBELUM masuk Tower
+    -- Harus dari range lobby (50001-50020), bukan Tower (50301+)
+    local _ascBaseMapId
+    do
+     local _raw = _readMapId()
+     if type(_raw) == "number" and _raw >= 50001 and _raw <= 50020 then
+      _ascBaseMapId = _raw
+     elseif type(MR) == "table" and type(MR.lastMapId) == "number" and MR.lastMapId >= 50001 and MR.lastMapId <= 50020 then
+      _ascBaseMapId = MR.lastMapId
+     else
+      _ascBaseMapId = 50001
+     end
+    end
+
     ASC.inMap = true
 
     -- Resolve targetMapId Ascension Tower dari nama boss (chat parser)
@@ -8507,41 +8521,63 @@ function StartAscensionLoop()
     if raidEntry.rawId ~= raidEntry.id then RAID_LIVE[raidEntry.id] = nil end
     if RebuildRaidList then pcall(RebuildRaidList) end
 
-    -- Keluar dari Ascension Tower (kembali ke basemap Map 1)
+    AscStatusUpdate(("[<] Go Out Tower -> Map %d..."):format(_ascBaseMapId - 50000), Color3.fromRGB(100,200,255))
     local _exitRe = Remotes:FindFirstChild("QuitRaidsMap")
+    -- Helper TP sesuai range map (Map 1-4 pakai StartTp, sisanya LocalTp)
+    local function _fireTpAsc(mapId)
+     local m = mapId - 50000
+     if m >= 1 and m <= 4 then
+      pcall(function() RE.StartTp:FireServer({ mapId = mapId }) end)
+     else
+      pcall(function() RE.LocalTp:FireServer({ mapId = mapId }) end)
+     end
+    end
+    -- [FIX v51] Exit Tower - flow identik dengan RAID normal
+    -- 1) Fire QuitRaidsMap + TP berlapis
+    -- 2) Retry max 5x selama masih di Tower
+    -- 3) Tunggu konfirmasi di lobby (50001-50020)
+    -- 4) Release MODE
+
+    -- Cek apakah masih di area Tower (50301-50326)
+    -- TIDAK return false saat wm==0 (transisi map) agar retry tetap jalan
+    local function _inAscArea()
+     local wm = _readMapId()
+     if wm == 0 then return true end -- transisi map = anggap masih di Tower, lanjut retry
+     return (wm >= 50301 and wm <= 50326)
+    end
+
+    -- Fire pertama
     if _exitRe then
-     pcall(function()
-      _exitRe:FireServer({ currentSlotIndex = 2, toMapId = 50001 })
-     end)
+     pcall(function() _exitRe:FireServer({ currentSlotIndex = 2, toMapId = _ascBaseMapId }) end)
     end
     task.wait(0.3)
-    pcall(function() RE.LocalTp:FireServer({ mapId = 50001 }) end)
-    -- Retry exit jika masih di Ascension Tower
+    _fireTpAsc(_ascBaseMapId)
+
+    -- Retry max 5x (sama dengan RAID)
     local _exitTry = 0
-    local function _inAscArea()
-     local ok, wm = pcall(function()
-      return _readMapId() or 0
-     end)
-     return (ok and wm >= 50301 and wm <= 50326)
-    end
     while _inAscArea() and _exitTry < 5 and ASC.running do
      _exitTry = _exitTry + 1
      task.wait(1)
-     if _exitRe then pcall(function() _exitRe:FireServer({ currentSlotIndex=2, toMapId=50001 }) end) end
+     if _exitRe then pcall(function() _exitRe:FireServer({ currentSlotIndex=2, toMapId=_ascBaseMapId }) end) end
      task.wait(0.2)
-     pcall(function() RE.LocalTp:FireServer({ mapId=50001 }) end)
+     _fireTpAsc(_ascBaseMapId)
     end
 
     ASC.inMap = false
 
-    -- [v50] STEP 5b: Setelah keluar Tower, tunggu player benar-benar di lobby
-    -- lalu lepas lock MODE agar fitur lain bisa masuk
+    -- Tunggu konfirmasi player benar-benar di lobby (max 30 detik)
     AscStatusUpdate("[<] Menunggu konfirmasi kembali ke Lobby...", Color3.fromRGB(100,200,255))
     do
      local _lobWait = 0
      while ASC.running and _lobWait < 30 do
       local _wm3 = _readMapId()
       if _wm3 >= 50001 and _wm3 <= 50020 then break end
+      -- Jika masih stuck di Tower setelah 5 detik, retry TP sekali lagi
+      if _lobWait > 0 and _lobWait % 5 == 0 then
+       if _exitRe then pcall(function() _exitRe:FireServer({ currentSlotIndex=2, toMapId=_ascBaseMapId }) end) end
+       task.wait(0.2)
+       _fireTpAsc(_ascBaseMapId)
+      end
       task.wait(0.5); _lobWait = _lobWait + 0.5
      end
     end
