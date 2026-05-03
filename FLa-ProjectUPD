@@ -8216,8 +8216,9 @@ function StartAscensionLoop()
     ASC.inMap = true
     _ascPending = false -- [v57 FIX] inMap=true sudah cover, tidak perlu pending lagi
     -- [v56 FIX] _ascDominatedThisEvent dihapus - RAID dan ASC sekarang independen
-    -- [v52 FIX] Setelah inMap=true di-set, lock tidak diperlukan lagi (IsAnyMapActive sudah cover)
-    ReleaseMapLock("asc")
+    -- [v60 FIX] JANGAN release lock di sini! Lock harus ditahan sampai player
+    -- benar-benar masuk Tower (_tpOk=true di bawah). Kalau dilepas sekarang,
+    -- RAID bisa claim lock dan masuk map bersamaan sebelum ASC selesai TP.
 
     -- [v55] targetMapId langsung dari mapNum: Tower X -> 50300 + X
     -- Tidak lagi bergantung nama boss (bossName bisa nil atau berubah)
@@ -8278,15 +8279,6 @@ function StartAscensionLoop()
     if RE.StartLocalPlayerTeleport then
      pcall(function() RE.StartLocalPlayerTeleport:FireServer({hostId=LP.UserId, mapId=targetMapId}) end)
     end
-    task.wait(0.3)
-    -- [v60 FIX] LocalPlayerTeleportSuccess: konfirmasi handshake ke server bahwa client menerima TP
-    -- Dipanggil langsung setelah StartLocalPlayerTeleport (sama seperti pattern Dungeon & Siege)
-    -- Tanpa ini server tidak tahu TP diterima -> bisa reject / kirim ulang -> tabrakan dengan RAID
-    do
-     local _ltpRe = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
-     if _ltpRe then task.spawn(function() pcall(function() _ltpRe:InvokeServer() end) end) end
-    end
-    task.wait(0.2)
 
     -- Tunggu masuk map Ascension Tower (range 50301-50326)
     -- [v56 FIX] FASE A: konfirmasi MapId masuk range Tower (max 20s)
@@ -8318,16 +8310,10 @@ function StartAscensionLoop()
      AscStatusUpdate("Gagal masuk Tower - retry...", Color3.fromRGB(255,80,80))
      task.wait(3); break
     end
-
-    -- [v60 FIX] LocalPlayerTeleportSuccess ke-2: konfirmasi ke server bahwa player sudah di dalam Tower
-    -- Dipanggil setelah _tpOk=true (workspace MapId sudah di range Tower 50301-50326)
-    -- Pattern sama dengan Siege Step 5: second confirm setelah masuk map benar-benar terkonfirmasi
-    -- Tanpa ini server tidak tahu client sudah di Tower -> bisa overlap/tabrakan dengan RAID
-    do
-     local _ltpRe2 = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
-     if _ltpRe2 then task.spawn(function() pcall(function() _ltpRe2:InvokeServer() end) end) end
-    end
-    task.wait(0.1)
+    -- [v60 FIX] Lock dilepas DI SINI - setelah player confirmed masuk Tower (_tpOk=true)
+    -- Bukan di atas (setelah inMap=true) karena TP belum selesai saat itu.
+    -- Dengan ini RAID tidak bisa claim lock sampai ASC benar-benar di dalam Tower.
+    ReleaseMapLock("asc")
 
     -- FASE B: tunggu enemy spawn - non-blocking, timeout tidak menyebabkan skip
     -- [v52 FIX] Deklarasikan _ascDone lebih awal agar bisa dipakai di loop ini
@@ -9593,7 +9579,9 @@ local function ResolveEntry()
                     RAID.raidId = _resolvedRaidId
                     RAID.raidMapId = raidEntry.mapId
                     RAID.inMap = true
-                    ReleaseMapLock("raid") -- [v52 FIX] inMap=true sudah di-set, IsAnyMapActive sudah cover
+                    -- [v60 FIX] JANGAN release lock di sini! Lock harus ditahan sampai player
+                    -- benar-benar masuk map (_mapIdOk=true di STEP 3). Kalau dilepas sekarang,
+                    -- ASC bisa claim lock dan masuk Tower bersamaan sebelum RAID selesai TP.
                     if RAID.updateActiveLabel then pcall(RAID.updateActiveLabel) end
 
                     if MA.running then
@@ -9787,16 +9775,10 @@ local function ResolveEntry()
   _raidInterrupt = false; RAID.inMap = false; ReleaseMapLock("raid"); MODE:Release("raid"); RAID.fromMapId = nil
   task.wait(3); break
  end
-
- -- [v60 FIX] LocalPlayerTeleportSuccess: konfirmasi ke server bahwa player sudah berhasil masuk map
- -- Dipanggil setelah _mapIdOk=true (workspace MapId sudah di range raid 50101-50120)
- -- Pattern sama dengan Dungeon & Siege: konfirmasi handshake setelah TP diterima
- -- Tanpa ini server tidak tahu client sudah di map -> bisa overlap/tabrakan dengan ASC
- do
-  local _ltpRe = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
-  if _ltpRe then task.spawn(function() pcall(function() _ltpRe:InvokeServer() end) end) end
- end
- task.wait(0.1)
+ -- [v60 FIX] Lock dilepas DI SINI - setelah player confirmed masuk map (_mapIdOk=true)
+ -- Bukan di atas (setelah inMap=true) karena TP belum selesai saat itu.
+ -- Dengan ini ASC tidak bisa claim lock sampai RAID benar-benar di dalam map.
+ ReleaseMapLock("raid")
 
  -- FASE B: tunggu enemy spawn (non-blocking, timeout tidak skip)
  RaidStatusUpdate("[~] Waiting Enemy...", Color3.fromRGB(180,100,255))
