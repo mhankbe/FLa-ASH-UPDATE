@@ -1183,28 +1183,6 @@ RAID = {
 _raidOn = false
 
 -- ============================================================
--- AUTO ASCENSION STATE TABLE
--- ============================================================
-ASC = {
- running  = false,
- inMap    = false,
- thread   = nil,
- sukses   = 0,
- pickMode = "easy",   -- "easy" | "hard" | "manual"
- runeGrades    = {},    -- filter grade (Preferred Rank)
- runeEnabled   = false, -- rune map item aktif
- runeMapTarget = 0,     -- target map rune (Preferred Rune)
- updownEnabled     = false, -- UP/DOWN Rank toggle
- updownDir         = "up",  -- "up" | "down"
- updownTargetGrade = nil,   -- grade target UP/DOWN
- autoKillBoss = false, -- AUTO BOSS KILL toggle
- bossDelay    = 3,     -- delay sebelum TP ke boss (1-10s)
- statusLbl = nil,
- dot       = nil,
- suksesLbl = nil,
-}
-_ascOn = false
-_ascWakeup = nil -- BindableEvent untuk wakeup loop
 _visAscension = nil -- visual pill toggle
 
 -- Pre-deklarasi variabel expose antar-block (diisi saat masing-masing block UI terbentuk)
@@ -7658,300 +7636,6 @@ function RaidCounterUpdate()
 end
 
 -- ============================================================
--- AUTO ASCENSION : LOGIC
--- ============================================================
-function StopAscension()
- ASC.running = false
- ASC.inMap   = false
- if ASC.thread then
-  pcall(function() task.cancel(ASC.thread) end)
-  ASC.thread = nil
- end
- if _ascWakeup then
-  pcall(function() _ascWakeup:Destroy() end)
-  _ascWakeup = nil
- end
-end
-
-function AscStatusUpdate(msg, color)
- if ASC.statusLbl then
-  ASC.statusLbl.Text = msg
-  ASC.statusLbl.TextColor3 = color or Color3.fromRGB(255,200,100)
- end
- if ASC.dot then
-  ASC.dot.BackgroundColor3 = color or Color3.fromRGB(100,100,100)
- end
-end
-
-function AscCounterUpdate()
- if ASC.suksesLbl then ASC.suksesLbl.Text = tostring(ASC.sukses) end
-end
-
--- Helper: ambil semua entry Ascension dari RAID_LIVE (sorted)
-local function GetAscensionList()
- local list = {}
- for rid, ent in pairs(RAID_LIVE) do
-  if ent.isAscension == true then
-   -- Resolve raidId positif jika entry chat (negatif)
-   local resolvedId = rid
-   if rid < 0 then
-    -- Cari raidId positif dari RAID_LIVE yang sama mapId & isAscension
-    for rid2, ent2 in pairs(RAID_LIVE) do
-     if rid2 > 0 and ent2.isAscension and ent2.mapId == ent.mapId then
-      resolvedId = rid2; break
-     end
-    end
-    -- Jika masih negatif, berarti raidId dari server belum datang
-    -- Gunakan nilai absolut sebagai ID sementara supaya CreateRaidTeam bisa dicoba
-    -- (server akan reject jika ID tidak valid, dan loop akan retry)
-    if resolvedId < 0 then resolvedId = math.abs(resolvedId) end
-   end
-   local mn = (ent.mapId or 50000) - 50000
-   -- [manual] filter grade jika pickMode manual & ada grade dipilih
-   local gradeOk = true
-   if ASC.pickMode == "manual" and next(ASC.runeGrades) then
-    local g = ent.grade or "?"
-    gradeOk = ASC.runeGrades[g] == true
-   end
-   if gradeOk then
-    table.insert(list, {
-     id      = resolvedId,
-     rawId   = rid,
-     mapId   = ent.mapId,
-     mapNum  = mn,
-     grade   = ent.grade or "?",
-     bossName= ent.bossName,
-     isAscension = true,
-    })
-   end
-  end
- end
- return list
-end
-
-function StartAscensionLoop()
- StopAscension()
- ASC.running = true
- ASC.sukses  = 0
- AscCounterUpdate()
- if _ascWakeup then pcall(function() _ascWakeup:Destroy() end) end
- _ascWakeup = Instance.new("BindableEvent")
-
- AscStatusUpdate("Siap. Menunggu Ascension Tower...", Color3.fromRGB(180,180,60))
-
- ASC.thread = task.spawn(function()
-  while ASC.running do
-   repeat
-
-    -- Tunggu ada Ascension Tower di RAID_LIVE
-    local ascList = GetAscensionList()
-    if #ascList == 0 then
-     -- Jika Auto Raid aktif → dia yang fallback, Ascension cukup standby
-     if RAID.running then
-      AscStatusUpdate("[Standby] Auto Raid fallback - tunggu Ascension Tower...", Color3.fromRGB(140,100,200))
-     else
-      AscStatusUpdate("Menunggu Ascension Tower...", Color3.fromRGB(140,140,60))
-     end
-     -- Tunggu max 30s, bisa di-wakeup oleh chat parser
-     local _woken = false
-     local _wConn
-     if _ascWakeup then
-      _wConn = _ascWakeup.Event:Connect(function() _woken = true end)
-     end
-     local _wt = 0
-     while not _woken and _wt < 30 and ASC.running do
-      task.wait(1); _wt = _wt + 1
-      ascList = GetAscensionList()
-      if #ascList > 0 then _woken = true end
-     end
-     if _wConn then pcall(function() _wConn:Disconnect() end) end
-     if not ASC.running then break end
-     ascList = GetAscensionList()
-     if #ascList == 0 then break end
-    end
-
-    -- Pick entry berdasarkan pickMode
-    local pm = ASC.pickMode or "easy"
-    local raidEntry = nil
-    if pm == "easy" then
-     -- Tower mapNum terendah
-     table.sort(ascList, function(a,b) return a.mapNum < b.mapNum end)
-     raidEntry = ascList[1]
-    elseif pm == "hard" then
-     -- Tower mapNum tertinggi
-     table.sort(ascList, function(a,b) return a.mapNum > b.mapNum end)
-     raidEntry = ascList[1]
-    else -- manual
-     -- Pilih mapNum terendah dari yang lolos filter grade
-     table.sort(ascList, function(a,b) return a.mapNum < b.mapNum end)
-     raidEntry = ascList[1]
-    end
-
-    if not raidEntry then break end
-
-    local mn = raidEntry.mapNum
-    local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
-    AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
-
-    -- Pause jika Dungeon / Siege / ST2 sedang jalan (hormat prioritas global)
-    if MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt) then
-     AscStatusUpdate("[||] Dungeon aktif - tunggu...", Color3.fromRGB(255,140,0))
-     while (MODE.current == "dungeon" or (DUNGEON and DUNGEON.interrupt)) and ASC.running do task.wait(0.5) end
-     if not ASC.running then break end
-    end
-    if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
-     AscStatusUpdate("[||] Siege aktif - tunggu...", Color3.fromRGB(255,140,0))
-     while ((SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt) and ASC.running do task.wait(0.5) end
-     if not ASC.running then break end
-    end
-    if ST2 and (ST2.running or ST2.inMap) then
-     AscStatusUpdate("[||] Tower aktif - tunggu...", Color3.fromRGB(255,140,0))
-     while ST2 and (ST2.running or ST2.inMap) and ASC.running do task.wait(0.5) end
-     if not ASC.running then break end
-    end
-
-    -- Blokir jika sudah di dalam map raid/tower/siege
-    local curWm = workspace:GetAttribute("MapId") or 0
-    if (curWm >= 50101 and curWm <= 50120) or (curWm >= 50201 and curWm <= 50205) or curWm >= 50300 then
-     AscStatusUpdate("[||] Sedang di dalam map lain...", Color3.fromRGB(255,140,0))
-     task.wait(3); break
-    end
-
-    ASC.inMap = true
-
-    -- STEP: CreateRaidTeam + StartChallengeRaidMap
-    -- Ascension Tower pakai mapId normal (50000+mn) -> area = +100 (50100+mn)
-    local targetMapId = raidEntry.mapId + 100
-    if RE.CreateRaidTeam then
-     pcall(function() RE.CreateRaidTeam:InvokeServer(raidEntry.id) end)
-    end
-    task.wait(0.2)
-    if not ASC.running then ASC.inMap = false; break end
-
-    -- [manual] Rune Map Override (opsional)
-    if pm == "manual" and ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then
-     local RUNE_IDS = {
-      [1]=10265,[2]=10266,[3]=10267,[4]=10268,[5]=10269,[6]=10314,[7]=10315,[8]=10316,
-      [9]=10357,[10]=10358,[11]=10359,[12]=10360,[13]=10361,[14]=10362,[15]=10363,[16]=10364,[17]=10365,[18]=10366,
-     }
-     local itemId = RUNE_IDS[ASC.runeMapTarget]
-     if itemId and RE.UseRaidItem then
-      pcall(function() RE.UseRaidItem:FireServer(itemId) end)
-      task.wait(0.2)
-      targetMapId = 50100 + ASC.runeMapTarget
-     end
-    end
-
-    local _cfail = false
-    local _cfConn
-    local _cfRe = Remotes:FindFirstChild("ChallengeRaidsFail")
-    if _cfRe then _cfConn = _cfRe.OnClientEvent:Connect(function() _cfail = true end) end
-
-    if RE.StartChallengeRaidMap then
-     pcall(function() RE.StartChallengeRaidMap:FireServer({mapId = targetMapId}) end)
-    end
-
-    -- Tunggu masuk map (max 10s)
-    local _serverMap = nil
-    local _tpOk = false
-    local _tpW  = 0
-    while not _tpOk and _tpW < 15 and ASC.running and not _cfail do
-     task.wait(0.3); _tpW = _tpW + 0.3
-     pcall(function()
-      local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId")
-      -- [FIX] Ascension Tower masuk ke range map yang sama dengan RAID normal (50101-50120)
-      -- Server tidak beda-bedakan mapId antara Normal Raid dan Ascension Tower
-      if wm and wm >= 50101 and wm <= 50120 then
-       _serverMap = wm; _tpOk = true
-      end
-     end)
-     if not _tpOk and #GetEnemies() > 0 then _tpOk = true end
-    end
-    if _cfConn then pcall(function() _cfConn:Disconnect() end) end
-
-    if not _tpOk or _cfail then
-     -- Expired / gagal masuk
-     RAID_LIVE[raidEntry.rawId] = nil
-     if raidEntry.rawId ~= raidEntry.id then RAID_LIVE[raidEntry.id] = nil end
-     if RebuildRaidList then pcall(RebuildRaidList) end
-     ASC.inMap = false
-     AscStatusUpdate("Gagal masuk Tower - tunggu...", Color3.fromRGB(255,80,80))
-     task.wait(2); break
-    end
-
-    -- STEP: Dalam map - tunggu boss / attack
-    AscStatusUpdate("[~] Dalam Tower "..mn.."...", Color3.fromRGB(100,200,255))
-    task.wait(ASC.bossDelay or 3)
-
-    -- Cari boss dan serang (reuse logika dari Auto Raid)
-    if ASC.autoKillBoss then
-     local _bDone = false
-     local function IsBossAsc()
-      local char = LP.Character
-      local hrp = char and char:FindFirstChild("HumanoidRootPart")
-      if not hrp then return false end
-      for _, obj in ipairs(workspace:GetDescendants()) do
-       if obj:IsA("Model") and obj:GetAttribute("IsBoss") then return true end
-       if obj.Name:lower():find("boss") and obj:IsA("Model") then return true end
-      end
-      return false
-     end
-     local _bTimeout = 0
-     while not _bDone and _bTimeout < 60 and ASC.running do
-      task.wait(1); _bTimeout = _bTimeout + 1
-      local enemies = GetEnemies()
-      if #enemies > 0 then
-       local tgt = enemies[1]
-       pcall(function()
-        if RE.Click then RE.Click:FireServer(tgt:GetAttribute("GUID") or "") end
-       end)
-       for _, hg in ipairs(HERO_GUIDS) do
-        pcall(function()
-         if RE.HeroUseSkill then RE.HeroUseSkill:FireServer({heroGuid=hg, targetGuid=tgt:GetAttribute("GUID") or ""}) end
-        end)
-       end
-      else
-       _bDone = true
-      end
-     end
-    else
-     -- Tanpa autoKillBoss: tunggu map selesai sendiri
-     local _doneW = 0
-     while ASC.running and _doneW < 90 do
-      task.wait(1); _doneW = _doneW + 1
-      local wm = workspace:GetAttribute("MapId") or 0
-      if wm == 0 or (wm >= 50001 and wm <= 50020) then break end
-     end
-    end
-
-    -- Collect reward
-    if RaidCollectAll then pcall(RaidCollectAll) end
-    task.wait(0.5)
-    if RE.GainRaidsRewards then pcall(function() RE.GainRaidsRewards:FireServer(1) end) end
-    task.wait(0.5)
-
-    -- Hapus entry dari RAID_LIVE (sudah selesai)
-    RAID_LIVE[raidEntry.rawId] = nil
-    if raidEntry.rawId ~= raidEntry.id then RAID_LIVE[raidEntry.id] = nil end
-    if RebuildRaidList then pcall(RebuildRaidList) end
-
-    ASC.inMap  = false
-    ASC.sukses = ASC.sukses + 1
-    AscCounterUpdate()
-    AscStatusUpdate("Tower "..mn.." selesai! ("..ASC.sukses.."x)", Color3.fromRGB(110,231,183))
-    task.wait(3)
-
-   until true
-  end -- while ASC.running
-
-  ASC.running = false
-  ASC.inMap   = false
-  _ascOn      = false
-  AscStatusUpdate("Auto Ascension STOP", Color3.fromRGB(160,148,135))
-  if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
- end)
-end
-
 -- ============================================================
 -- [v73 FIX] RaidCollectAll - scan lebih agresif:
 -- 1. Scan semua folder reward yang mungkin
@@ -8284,31 +7968,9 @@ function StartRaidLoop()
  task.wait(0.1)
  end
 
- -- [FIX v46] Cek Ascension Mode sedang di dalam map - pause Auto Raid
- if ASC.inMap then
- RAID.inMap = false
- RaidStatusUpdate("[||] Ascension Tower aktif - Auto Raid pause...", Color3.fromRGB(180,100,255))
- while ASC.inMap and RAID.running do
-  task.wait(0.5)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Ascension selesai - lanjut raid...", C.ACC3)
- task.wait(0.1)
- end
 
- -- [FIX v46] Fallback logic: jika Ascension Mode aktif DAN ada Ascension Tower tersedia,
- -- Auto Raid mengalah dan menunggu Ascension Mode selesai menangani Tower.
- -- Auto Raid hanya jalan jika: Ascension Mode OFF, atau Ascension Mode ON tapi tidak ada Tower.
- if ASC.running and #GetAscensionList() > 0 then
- RAID.inMap = false
- RaidStatusUpdate("[||] Ascension Tower tersedia - menunggu Ascension Mode...", Color3.fromRGB(180,100,255))
- while ASC.running and #GetAscensionList() > 0 and RAID.running do
-  task.wait(1)
- end
- if not RAID.running then break end
- RaidStatusUpdate("> Tidak ada Ascension Tower - Auto Raid ambil alih...", C.ACC3)
- task.wait(0.1)
- end
+
+
 
  -- [FIX] Cek Siege - pause Auto Raid selama player di dalam Siege map
  if (SIEGE and (SIEGE.inMap or SIEGE.teleporting)) or _siegeInterrupt then
@@ -10428,710 +10090,6 @@ end -- end Auto Raid do block
 -- ============================================================
 -- PANEL : AUTOMATION - Auto Ascension [v46 NEW]
 -- ============================================================
-do
- local p = Panels["autoraid"] -- reuse panel yg sudah dibuat oleh Auto Raid (JANGAN NewPanel lagi!)
-
- -- ACCORDION HEADER
- local ascOpen = false
- local ascHeader = Btn(p, C.SURFACE, UDim2.new(1,0,0,42))
- ascHeader.LayoutOrder = 3 -- setelah Auto Raid (LayoutOrder 1=header, 2=body)
- Corner(ascHeader, 10)
- -- Border warna emas/kuning untuk beda dari Auto Raid
- New("UIStroke",{Parent=ascHeader, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.35})
- local ascArr = Label(ascHeader, ">", 13, Color3.fromRGB(220,180,50), Enum.Font.GothamBold)
- ascArr.Size = UDim2.new(0,22,1,0); ascArr.Position = UDim2.new(0,10,0,0)
- local ascHeaderLbl = Label(ascHeader, "Auto RAID Ascension", 14, C.TXT, Enum.Font.GothamBold)
- ascHeaderLbl.Size = UDim2.new(1,-50,1,0); ascHeaderLbl.Position = UDim2.new(0,34,0,0)
-
- local ascBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
- ascBody.LayoutOrder = 4
- ascBody.ClipsDescendants = true
- Corner(ascBody, 10)
- New("UIStroke",{Parent=ascBody, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.25})
- ascBody.Visible = false
-
- local ascInner = Frame(ascBody, C.BLACK, UDim2.new(1,-16,0,0))
- ascInner.BackgroundTransparency = 1; ascInner.Position = UDim2.new(0,8,0,8)
- local ascLayout = New("UIListLayout",{Parent=ascInner, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
-
- local function ResizeAscBody()
-  task.spawn(function()
-   task.wait(0)
-   ascLayout:ApplyLayout()
-   local h = ascLayout.AbsoluteContentSize.Y + 16
-   ascInner.Size = UDim2.new(1,0,0,h)
-   ascBody.Size = UDim2.new(1,0,0,h+16)
-  end)
- end
-
- ascHeader.MouseButton1Click:Connect(function()
-  ascOpen = not ascOpen; ascBody.Visible = ascOpen
-  ascArr.Text = ascOpen and "v" or ">"
-  if ascOpen then task.defer(ResizeAscBody) end
- end)
-
- -- ROW 1: STATUS
- local aStatusCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,38))
- aStatusCard.LayoutOrder = 1; Corner(aStatusCard,10); Stroke(aStatusCard,C.BORD,1.5,0.3); Padding(aStatusCard,6,6,10,10)
- local _ascDot = Frame(aStatusCard, Color3.fromRGB(100,100,100), UDim2.new(0,9,0,9))
- _ascDot.AnchorPoint = Vector2.new(0,0.5); _ascDot.Position = UDim2.new(0,0,0.5,0); Corner(_ascDot,5)
- ASC.dot = _ascDot
- local _ascStKeyL = Label(aStatusCard,"Status",11,C.TXT3,Enum.Font.GothamBold)
- _ascStKeyL.Size = UDim2.new(0,54,1,0); _ascStKeyL.Position = UDim2.new(0,16,0,0)
- local _ascStatusLbl = Label(aStatusCard,"Disabled",11,Color3.fromRGB(160,148,135),Enum.Font.GothamBold)
- _ascStatusLbl.Size = UDim2.new(1,-76,1,0); _ascStatusLbl.Position = UDim2.new(0,70,0,0)
- _ascStatusLbl.TextXAlignment = Enum.TextXAlignment.Right
- _ascStatusLbl.TextTruncate = Enum.TextTruncate.AtEnd
- ASC.statusLbl = _ascStatusLbl
-
- -- ROW 2: COMPLETED
- local aCompCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,38))
- aCompCard.LayoutOrder = 2; Corner(aCompCard,10); Stroke(aCompCard,C.BORD,1.5,0.3); Padding(aCompCard,6,6,10,10)
- local _acKeyL = Label(aCompCard,"Ascension Completed",11,C.TXT3,Enum.Font.GothamBold)
- _acKeyL.Size = UDim2.new(0.7,0,1,0)
- local _ascSuksesLbl = Label(aCompCard,"0",11,Color3.fromRGB(220,180,50),Enum.Font.GothamBold)
- _ascSuksesLbl.Size = UDim2.new(0.3,0,1,0); _ascSuksesLbl.Position = UDim2.new(0.7,0,0,0)
- _ascSuksesLbl.TextXAlignment = Enum.TextXAlignment.Right
- ASC.suksesLbl = _ascSuksesLbl
-
- -- ROW 3: ENABLE TOGGLE
- local aCtrlRow = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,44))
- aCtrlRow.LayoutOrder = 3; Corner(aCtrlRow,10)
- New("UIStroke",{Parent=aCtrlRow, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.2})
- local aTogLbl = Label(aCtrlRow,"Enable Auto Ascension",13,C.TXT,Enum.Font.GothamBold)
- aTogLbl.Size = UDim2.new(1,-68,0,20); aTogLbl.Position = UDim2.new(0,14,0.5,-10)
- local aSubLbl = Label(aCtrlRow,"Hanya Ascension Tower",10,C.TXT3,Enum.Font.Gotham)
- aSubLbl.Size = UDim2.new(1,-68,0,14); aSubLbl.Position = UDim2.new(0,14,0.5,10)
- local aPill = Btn(aCtrlRow, C.PILL_OFF, UDim2.new(0,52,0,30))
- aPill.AnchorPoint = Vector2.new(1,0.5); aPill.Position = UDim2.new(1,-12,0.5,0); Corner(aPill,13)
- local aKnob = Frame(aPill, C.KNOB_OFF, UDim2.new(0,24,0,24))
- aKnob.AnchorPoint = Vector2.new(0,0.5); aKnob.Position = UDim2.new(0,3,0.5,0); Corner(aKnob,10)
-
- local function SetAscPill(on)
-  TweenService:Create(aPill,TweenInfo.new(0.16),{BackgroundColor3=on and Color3.fromRGB(180,140,20) or C.PILL_OFF}):Play()
-  TweenService:Create(aKnob,TweenInfo.new(0.16),{
-   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
-   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
-  }):Play()
- end
-
- aPill.MouseButton1Click:Connect(function()
-  _ascOn = not _ascOn
-  SetAscPill(_ascOn)
-  if _ascOn then
-   StartAscensionLoop()
-  else
-   StopAscension()
-   AscStatusUpdate("Disabled", Color3.fromRGB(160,148,135))
-   if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
-  end
- end)
-
- -- ============================================================
- -- ROW 4: PREFERRED RANK (always visible, mirip Auto Raid)
- -- ============================================================
- local GRADE_COLORS_ASC = {
-  ["E"]=Color3.fromRGB(150,150,150),["D"]=Color3.fromRGB(100,200,100),
-  ["C"]=Color3.fromRGB(80,200,120), ["B"]=Color3.fromRGB(100,140,255),
-  ["A"]=Color3.fromRGB(180,100,255),["S"]=Color3.fromRGB(255,180,50),
-  ["SS"]=Color3.fromRGB(255,220,0), ["G"]=Color3.fromRGB(255,60,60),
-  ["N"]=Color3.fromRGB(255,100,200),["M"]=Color3.fromRGB(255,0,0),
-  ["M+"]=Color3.fromRGB(255,50,50), ["M++"]=Color3.fromRGB(255,100,100),
-  ["XM"]=Color3.fromRGB(180,0,0),   ["ULT"]=Color3.fromRGB(255,255,255),
- }
- local GRADE_VALUE_ASC = GRADE_RANK or {}
-
- local ascRankHdr = Label(ascInner,"PREFERRED RANK",10,C.TXT3,Enum.Font.GothamBold)
- ascRankHdr.LayoutOrder = 4; ascRankHdr.Size = UDim2.new(1,0,0,14)
- local ascRankCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
- ascRankCard.LayoutOrder = 5; Corner(ascRankCard,10); Stroke(ascRankCard,C.BORD,1.5,0.3); Padding(ascRankCard,6,6,10,10)
- local ascRankRow = Frame(ascRankCard,C.BLACK,UDim2.new(1,0,1,0)); ascRankRow.BackgroundTransparency=1
- local ascRankKeyL = Label(ascRankRow,"Select Rank",11,C.TXT2,Enum.Font.GothamBold)
- ascRankKeyL.Size = UDim2.new(0,72,1,0)
- local ascRankDDBtn = Btn(ascRankRow,C.BG3,UDim2.new(1,-82,1,0))
- ascRankDDBtn.Position = UDim2.new(0,80,0,0); Corner(ascRankDDBtn,6); Stroke(ascRankDDBtn,C.BORD,1.5,0.25)
- local ascRankDDVal = Label(ascRankDDBtn," -- SELECT RANK --",11,C.TXT3,Enum.Font.GothamBold)
- ascRankDDVal.Size = UDim2.new(1,-20,1,0); ascRankDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local ascRankArr = Label(ascRankDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- ascRankArr.Size = UDim2.new(0,18,1,0); ascRankArr.Position = UDim2.new(1,-20,0,0)
-
- local function RefreshAscRankLabel()
-  local ns={}
-  for _,g in ipairs(GRADE_LIST or {}) do
-   if ASC.runeGrades[g] then table.insert(ns,"["..g.."]") end
-  end
-  if #ns==0 then ascRankDDVal.Text=" -- SELECT RANK --"; ascRankDDVal.TextColor3=C.TXT3
-  else ascRankDDVal.Text=" "..table.concat(ns," "); ascRankDDVal.TextColor3=Color3.fromRGB(200,120,255) end
- end
- RefreshAscRankLabel()
-
- ascRankDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local IH=30
-  local gl = GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
-  local SFH=math.min(#gl*(IH+4)+44,280)
-  local ab=ascRankDDBtn.AbsolutePosition; local sz=ascRankDDBtn.AbsoluteSize
-  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(ab.Y+SFH+44 > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
-  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
-  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
-  local sf=Instance.new("ScrollingFrame",popup)
-  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
-  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
-  local sfp=Instance.new("UIPadding",sf)
-  sfp.PaddingTop=UDim.new(0,4); sfp.PaddingBottom=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
-  local sfLayout=Instance.new("UIListLayout",sf)
-  sfLayout.SortOrder=Enum.SortOrder.LayoutOrder; sfLayout.Padding=UDim.new(0,4)
-  local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
-  rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
-  Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
-  local rl=Instance.new("TextLabel",rb); rl.Size=UDim2.new(1,-8,1,0); rl.Position=UDim2.new(0,8,0,0)
-  rl.BackgroundTransparency=1; rl.Text="x Reset ALL"; rl.TextSize=10
-  rl.Font=Enum.Font.GothamBold; rl.TextColor3=C.RED; rl.TextXAlignment=Enum.TextXAlignment.Left; rl.ZIndex=9999
-  rb.MouseButton1Click:Connect(function()
-   for _,g in ipairs(gl) do ASC.runeGrades[g]=nil end
-   CloseActiveDD(); RefreshAscRankLabel()
-  end)
-  for i,grade in ipairs(gl) do
-   local gc=grade; local col=GRADE_COLORS_ASC[grade] or C.ACC
-   local gv=GRADE_VALUE_ASC[grade] or "?"; local isSel=ASC.runeGrades[gc]==true
-   local item=Instance.new("TextButton",sf)
-   item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
-   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local ck=Instance.new("TextLabel",item); ck.Size=UDim2.new(0,20,1,0); ck.Position=UDim2.new(0,4,0,0)
-   ck.BackgroundTransparency=1; ck.Text=isSel and "v" or ""; ck.TextSize=11
-   ck.Font=Enum.Font.GothamBold; ck.TextColor3=col; ck.TextXAlignment=Enum.TextXAlignment.Center; ck.ZIndex=9999
-   local nl=Instance.new("TextLabel",item); nl.Size=UDim2.new(0,56,1,0); nl.Position=UDim2.new(0,26,0,0)
-   nl.BackgroundTransparency=1; nl.Text="Rank "..grade; nl.TextSize=11
-   nl.Font=Enum.Font.GothamBold; nl.TextColor3=isSel and Color3.fromRGB(255,255,255) or col
-   nl.TextXAlignment=Enum.TextXAlignment.Left; nl.ZIndex=9999
-   local vl=Instance.new("TextLabel",item); vl.Size=UDim2.new(1,-86,1,0); vl.Position=UDim2.new(0,84,0,0)
-   vl.BackgroundTransparency=1; vl.Text="Grade "..tostring(gv); vl.TextSize=9; vl.Font=Enum.Font.Gotham
-   vl.TextColor3=isSel and C.TXT2 or C.TXT3; vl.TextXAlignment=Enum.TextXAlignment.Left; vl.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    local ns=not ASC.runeGrades[gc]; ASC.runeGrades[gc]=ns and true or nil
-    item.BackgroundColor3=ns and C.SURFACE or C.DD_BG; item.BackgroundTransparency=ns and 0.18 or 0.42
-    ck.Text=ns and "v" or ""; nl.TextColor3=ns and Color3.fromRGB(255,255,255) or col
-    vl.TextColor3=ns and C.TXT2 or C.TXT3; RefreshAscRankLabel()
-    if _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- ============================================================
- -- ROW 5-6: PREFERRED RUNE (Item) - always visible
- -- ============================================================
- local ascRuneHdr = Label(ascInner,"PREFERRED RUNE (Item)",10,C.TXT3,Enum.Font.GothamBold)
- ascRuneHdr.LayoutOrder = 6; ascRuneHdr.Size = UDim2.new(1,0,0,14)
- local ascRuneCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
- ascRuneCard.LayoutOrder = 7; Corner(ascRuneCard,10); Stroke(ascRuneCard,C.BORD,1.5,0.3); Padding(ascRuneCard,6,6,10,10)
- local ascRuneRow = Frame(ascRuneCard,C.BLACK,UDim2.new(1,0,1,0)); ascRuneRow.BackgroundTransparency=1
- local ascRuneKeyL = Label(ascRuneRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
- ascRuneKeyL.Size = UDim2.new(0,72,1,0)
- local ascRuneDDBtn = Btn(ascRuneRow,C.BG3,UDim2.new(1,-82,1,0))
- ascRuneDDBtn.Position = UDim2.new(0,80,0,0); Corner(ascRuneDDBtn,6); Stroke(ascRuneDDBtn,C.BORD,1.5,0.25)
- local ascRuneDDVal = Label(ascRuneDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
- ascRuneDDVal.Size = UDim2.new(1,-20,1,0); ascRuneDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local ascRuneArr = Label(ascRuneDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- ascRuneArr.Size = UDim2.new(0,18,1,0); ascRuneArr.Position = UDim2.new(1,-20,0,0)
-
- local function AscSyncRuneState()
-  if ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then ASC.runeEnabled=true
-  else ASC.runeEnabled=false end
- end
- AscSyncRuneState()
- if ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 20 then
-  ascRuneDDVal.Text=" Map "..ASC.runeMapTarget.." - "..(MAP_NAMES and MAP_NAMES[ASC.runeMapTarget] or "")
-  ascRuneDDVal.TextColor3=C.ACC2
- end
-
- ascRuneDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local aP=ascRuneDDBtn.AbsolutePosition; local aS=ascRuneDDBtn.AbsoluteSize; local IH=28
-  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
-  local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(aP.Y+popH > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
-  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
-  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
-  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
-  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
-  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
-  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
-  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
-  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
-  local s0=(ASC.runeMapTarget==0)
-  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
-  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
-  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
-  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
-  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
-  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3; l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
-  i0.MouseButton1Click:Connect(function()
-   CloseActiveDD(); ASC.runeMapTarget=0; AscSyncRuneState()
-   ascRuneDDVal.Text=" -- NOT SELECTED --"; ascRuneDDVal.TextColor3=C.TXT3
-  end)
-  for mn=1,20 do
-   local ml=mn; local mnm=MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
-   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
-   local iS=(ASC.runeMapTarget==mn)
-   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
-   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
-   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
-   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
-   il.BackgroundTransparency=1; il.Text="Map "..mn.." - "..mnm; il.TextSize=10; il.Font=Enum.Font.GothamBold
-   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
-   it.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.runeMapTarget=ml; AscSyncRuneState()
-    ascRuneDDVal.Text=" Map "..ml.." - "..mnm; ascRuneDDVal.TextColor3=C.ACC2
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- ============================================================
- -- ROW 8: UP/DOWN RANK
- -- ============================================================
- local ascUdHdr = Label(ascInner,"UP/DOWN RANK",10,C.TXT3,Enum.Font.GothamBold)
- ascUdHdr.LayoutOrder = 8; ascUdHdr.Size = UDim2.new(1,0,0,14)
-
- local ascUdCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,76))
- ascUdCard.LayoutOrder = 9; Corner(ascUdCard,10); Stroke(ascUdCard,C.BORD,1.5,0.3)
-
- local ascUdRowTop = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,38))
- ascUdRowTop.BackgroundTransparency=1; ascUdRowTop.Position=UDim2.new(0,0,0,0)
-
- local ascUdPill = Btn(ascUdRowTop,C.PILL_OFF,UDim2.new(0,52,0,30))
- ascUdPill.AnchorPoint=Vector2.new(1,0.5); ascUdPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascUdPill,13)
- local ascUdKnob = Frame(ascUdPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
- ascUdKnob.AnchorPoint=Vector2.new(0,0.5); ascUdKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascUdKnob,10)
- local ascUdLbl = Label(ascUdRowTop,"UP/DOWN Rank",14,C.TXT,Enum.Font.GothamBold)
- ascUdLbl.Size=UDim2.new(1,-68,0,20); ascUdLbl.Position=UDim2.new(0,14,0.5,-10)
-
- -- Dropdown Arah (UP/DOWN)
- if not ASC.updownDir then ASC.updownDir="up" end
- local ascUdRowBot = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,36))
- ascUdRowBot.BackgroundTransparency=1; ascUdRowBot.Position=UDim2.new(0,0,0,38)
- New("UIListLayout",{Parent=ascUdRowBot,FillDirection=Enum.FillDirection.Horizontal,
-  SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6),VerticalAlignment=Enum.VerticalAlignment.Center})
- Instance.new("UIPadding",ascUdRowBot).PaddingLeft=UDim.new(0,10)
-
- local ascDirDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(0,100,0,26))
- ascDirDDBtn.LayoutOrder=1; Corner(ascDirDDBtn,6); Stroke(ascDirDDBtn,C.BORD,1.5,0.25)
- local ascDirDDLbl = Label(ascDirDDBtn,ASC.updownDir=="up" and " UP (UP)" or " DOWN (DN)",11,C.ACC,Enum.Font.GothamBold)
- ascDirDDLbl.Size=UDim2.new(1,0,1,0)
-
- local ascGradeDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(1,-120,0,26))
- ascGradeDDBtn.LayoutOrder=2; Corner(ascGradeDDBtn,6); Stroke(ascGradeDDBtn,C.BORD,1.5,0.25)
- local ascGradeDDLbl = Label(ascGradeDDBtn,
-  ASC.updownTargetGrade and (" Target: ["..ASC.updownTargetGrade.."]") or " -- SELECT TARGET --",
-  11,ASC.updownTargetGrade and C.ACC2 or C.TXT3,Enum.Font.GothamBold)
- ascGradeDDLbl.Size=UDim2.new(1,-20,1,0)
- local ascGradeArr = Label(ascGradeDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- ascGradeArr.Size=UDim2.new(0,18,1,0); ascGradeArr.Position=UDim2.new(1,-20,0,0)
-
- local function updateAscUpDownToggle()
-  local on=ASC.updownEnabled
-  TweenService:Create(ascUdPill,TweenInfo.new(0.16),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
-  TweenService:Create(ascUdKnob,TweenInfo.new(0.16),{
-   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
-   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
-  }):Play()
- end
- updateAscUpDownToggle()
-
- ascUdPill.MouseButton1Click:Connect(function()
-  ASC.updownEnabled=not ASC.updownEnabled; updateAscUpDownToggle()
- end)
-
- -- Dropdown arah UP/DOWN
- ascDirDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local dirOpts={
-   {label=" UP (UP)", dir="up", col=Color3.fromRGB(100,220,100)},
-   {label=" DOWN (DN)", dir="down", col=Color3.fromRGB(255,100,100)},
-  }
-  local aP=ascDirDDBtn.AbsolutePosition; local aS=ascDirDDBtn.AbsoluteSize; local IH=28
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,aS.X+10,0,#dirOpts*(IH+2)+12)
-  popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.85)
-  local ll=Instance.new("UIListLayout",popup); ll.Padding=UDim.new(0,2); ll.SortOrder=Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",popup).PaddingTop=UDim.new(0,4)
-  for _,opt in ipairs(dirOpts) do
-   local d=opt.dir
-   local item=Instance.new("TextButton",popup); item.Size=UDim2.new(1,-8,0,IH)
-   local isSel=ASC.updownDir==d
-   item.BackgroundColor3=isSel and C.SURFACE or C.BG3; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local iL=Instance.new("TextLabel",item); iL.Size=UDim2.new(1,-8,1,0); iL.Position=UDim2.new(0,8,0,0)
-   iL.BackgroundTransparency=1; iL.Text=opt.label; iL.TextSize=11; iL.Font=Enum.Font.GothamBold
-   iL.TextColor3=opt.col; iL.TextXAlignment=Enum.TextXAlignment.Left; iL.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.updownDir=d; ascDirDDLbl.Text=opt.label; ascDirDDLbl.TextColor3=opt.col
-   end)
-  end
-  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- Dropdown target grade UP/DOWN
- local ascClearRow = nil -- forward
- ascGradeDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local gl=GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
-  local IH=28; local SFH=math.min(#gl*(IH+4)+44,260)
-  local ab=ascGradeDDBtn.AbsolutePosition; local sz=ascGradeDDBtn.AbsoluteSize
-  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(ab.Y+SFH+8 > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
-  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
-  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
-  local sf=Instance.new("ScrollingFrame",popup)
-  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
-  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
-  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
-  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
-  -- Clear button
-  local cRow=Instance.new("TextButton",sf); cRow.Size=UDim2.new(1,-8,0,IH); cRow.LayoutOrder=0
-  cRow.BackgroundColor3=not ASC.updownTargetGrade and C.SURFACE or C.DD_BG
-  cRow.BackgroundTransparency=not ASC.updownTargetGrade and 0.18 or 0.42
-  cRow.BorderSizePixel=0; cRow.Text=""; cRow.AutoButtonColor=false; cRow.ZIndex=9999
-  Instance.new("UICorner",cRow).CornerRadius=UDim.new(0,6)
-  local cLbl=Instance.new("TextLabel",cRow); cLbl.Size=UDim2.new(1,-8,1,0); cLbl.Position=UDim2.new(0,8,0,0)
-  cLbl.BackgroundTransparency=1; cLbl.Text="-- CLEAR --"; cLbl.TextSize=10
-  cLbl.Font=Enum.Font.GothamBold; cLbl.TextColor3=not ASC.updownTargetGrade and C.ACC2 or C.TXT3
-  cLbl.TextXAlignment=Enum.TextXAlignment.Left; cLbl.ZIndex=9999
-  cRow.MouseButton1Click:Connect(function()
-   ASC.updownTargetGrade=nil; CloseActiveDD()
-   ascGradeDDLbl.Text=" -- SELECT TARGET --"; ascGradeDDLbl.TextColor3=C.TXT3
-  end)
-  for i,g in ipairs(gl) do
-   local selGrade=g; local col=GRADE_COLORS_ASC[g] or C.ACC; local isSel=(ASC.updownTargetGrade==g)
-   local item=Instance.new("TextButton",sf); item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
-   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local il=Instance.new("TextLabel",item); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
-   il.BackgroundTransparency=1; il.Text=" ["..g.."] Rank "..g; il.TextSize=11; il.Font=Enum.Font.GothamBold
-   il.TextColor3=isSel and Color3.fromRGB(255,255,255) or col; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.updownTargetGrade=selGrade
-    ascGradeDDLbl.Text=" Target: ["..selGrade.."]"; ascGradeDDLbl.TextColor3=C.ACC2
-   end)
-  end
-  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- ============================================================
- -- ROW 10: AUTO BOSS KILL TOGGLE
- -- ============================================================
- local ascBossRow = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,44))
- ascBossRow.LayoutOrder=10; Corner(ascBossRow,10); Stroke(ascBossRow,C.BORD,1.5,0.3)
- local ascBossL = Label(ascBossRow,"AUTO KILL BOSS",13,C.TXT,Enum.Font.GothamBold)
- ascBossL.Size=UDim2.new(1,-68,0,20); ascBossL.Position=UDim2.new(0,14,0.5,-10)
- local ascBossPill = Btn(ascBossRow,C.PILL_OFF,UDim2.new(0,52,0,30))
- ascBossPill.AnchorPoint=Vector2.new(1,0.5); ascBossPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascBossPill,13)
- local ascBossKnob = Frame(ascBossPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
- ascBossKnob.AnchorPoint=Vector2.new(0,0.5); ascBossKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascBossKnob,10)
- ascBossPill.MouseButton1Click:Connect(function()
-  ASC.autoKillBoss=not ASC.autoKillBoss; local on=ASC.autoKillBoss
-  TweenService:Create(ascBossPill,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
-  TweenService:Create(ascBossKnob,TweenInfo.new(0.16),{
-   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
-   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
-  }):Play()
- end)
-
- -- ============================================================
- -- ROW 11: TELEPORT DELAY SLIDER (1-10s)
- -- ============================================================
- local ascTpCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,54))
- ascTpCard.LayoutOrder=11; Corner(ascTpCard,10); Stroke(ascTpCard,C.BORD,1.5,0.3); Padding(ascTpCard,6,6,10,10)
- New("UIListLayout",{Parent=ascTpCard,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,4)})
- local ascTpTop = Frame(ascTpCard,C.BLACK,UDim2.new(1,0,0,18)); ascTpTop.BackgroundTransparency=1; ascTpTop.LayoutOrder=0
- local _ascTpKeyL = Label(ascTpTop,"Teleport Delay",11,C.TXT2,Enum.Font.GothamBold); _ascTpKeyL.Size=UDim2.new(0.7,0,1,0)
- local ascTpValLbl = Label(ascTpTop,tostring(ASC.bossDelay).."s",11,C.ACC2,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
- ascTpValLbl.Size=UDim2.new(0.3,0,1,0); ascTpValLbl.Position=UDim2.new(0.7,0,0,0)
- local ascTpBot = Frame(ascTpCard,C.BLACK,UDim2.new(1,0,0,22)); ascTpBot.BackgroundTransparency=1; ascTpBot.LayoutOrder=1
- New("UIListLayout",{Parent=ascTpBot,SortOrder=Enum.SortOrder.LayoutOrder,
-  FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,4),VerticalAlignment=Enum.VerticalAlignment.Center})
- local ascTpMinus = Btn(ascTpBot,C.BG3,UDim2.new(0,26,0,22))
- ascTpMinus.LayoutOrder=0; Corner(ascTpMinus,6); Stroke(ascTpMinus,C.BORD,1.5,0.4)
- Label(ascTpMinus,"-",14,C.TXT,Enum.Font.GothamBold,Enum.TextXAlignment.Center).Size=UDim2.new(1,0,1,0)
- local ascTpTrackBtn = Btn(ascTpBot,C.BG3,UDim2.new(1,-60,0,22))
- ascTpTrackBtn.LayoutOrder=1; Corner(ascTpTrackBtn,11); Stroke(ascTpTrackBtn,C.BORD,1.5,0.4)
- local ascTpFill = Frame(ascTpTrackBtn,C.ACC,UDim2.new((ASC.bossDelay-1)/9,1,1,-2))
- ascTpFill.Position=UDim2.new(0,0,0,1); Corner(ascTpFill,10)
- local ascTpKnob = Frame(ascTpTrackBtn,C.KNOB_ON,UDim2.new(0,18,0,18))
- ascTpKnob.AnchorPoint=Vector2.new(0.5,0.5); ascTpKnob.Position=UDim2.new((ASC.bossDelay-1)/9,0,0.5,0)
- Corner(ascTpKnob,9); Stroke(ascTpKnob,C.ACC,1.5,0.6)
- local ascTpPlus = Btn(ascTpBot,C.BG3,UDim2.new(0,26,0,22))
- ascTpPlus.LayoutOrder=2; Corner(ascTpPlus,6); Stroke(ascTpPlus,C.BORD,1.5,0.4)
- Label(ascTpPlus,"+",14,C.TXT,Enum.Font.GothamBold,Enum.TextXAlignment.Center).Size=UDim2.new(1,0,1,0)
- local function UpdateAscTpSlider(val)
-  val=math.clamp(math.round(val),1,10)
-  ASC.bossDelay=val; ascTpValLbl.Text=val.."s"
-  ascTpFill.Size=UDim2.new((val-1)/9,1,1,-2); ascTpKnob.Position=UDim2.new((val-1)/9,0,0.5,0)
- end
- ascTpMinus.MouseButton1Click:Connect(function() UpdateAscTpSlider(ASC.bossDelay-1) end)
- ascTpPlus.MouseButton1Click:Connect(function() UpdateAscTpSlider(ASC.bossDelay+1) end)
- local _ascTpDrag=false
- ascTpTrackBtn.InputBegan:Connect(function(inp)
-  if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
-   _ascTpDrag=true
-   local tA=ascTpTrackBtn.AbsolutePosition; local tS=ascTpTrackBtn.AbsoluteSize
-   UpdateAscTpSlider(math.round(math.clamp((inp.Position.X-tA.X)/tS.X,0,1)*9)+1)
-  end
- end)
- ascTpTrackBtn.InputChanged:Connect(function(inp)
-  if not _ascTpDrag then return end
-  if inp.UserInputType~=Enum.UserInputType.MouseMovement and inp.UserInputType~=Enum.UserInputType.Touch then return end
-  local tA=ascTpTrackBtn.AbsolutePosition; local tS=ascTpTrackBtn.AbsoluteSize
-  UpdateAscTpSlider(math.round(math.clamp((inp.Position.X-tA.X)/tS.X,0,1)*9)+1)
- end)
- ascTpTrackBtn.InputEnded:Connect(function(inp)
-  if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
-   _ascTpDrag=false
-  end
- end)
-
- -- ============================================================
- -- ROW 12-13: PICK MODE (Easy / Hard / Manual)
- -- ============================================================
- local APM_OPTS  = {"Easy","Hard","Manual"}
- local APM_KEYS  = {"easy","hard","manual"}
- local APM_COLORS= {
-  Color3.fromRGB(80,220,80),   -- Easy: hijau
-  Color3.fromRGB(255,80,80),   -- Hard: merah
-  Color3.fromRGB(255,180,50),  -- Manual: kuning
- }
- local APM_DESC  = {
-  "Pilih Tower mapNum TERENDAH yang tersedia",
-  "Pilih Tower mapNum TERTINGGI yang tersedia",
-  "Filter grade + rune item (mirip Auto Raid)",
- }
- local curAPM = 1
- ASC.pickMode = APM_KEYS[curAPM]
-
- local apmHdr = Label(ascInner,"PICK MODE",10,C.TXT3,Enum.Font.GothamBold)
- apmHdr.LayoutOrder = 12; apmHdr.Size = UDim2.new(1,0,0,14)
- local apmCard = Frame(ascInner, C.SURFACE, UDim2.new(1,0,0,40))
- apmCard.LayoutOrder = 13; Corner(apmCard,10); Stroke(apmCard,C.BORD,1.5,0.3); Padding(apmCard,6,6,10,10)
- local _apmKeyL = Label(apmCard,"Pick Mode",11,C.TXT2,Enum.Font.GothamBold)
- _apmKeyL.Size = UDim2.new(0,72,1,0)
- local apmDDBtn = Btn(apmCard, C.BG3, UDim2.new(1,-82,0,28))
- apmDDBtn.Position = UDim2.new(0,80,0.5,-14); Corner(apmDDBtn,6); Stroke(apmDDBtn,C.BORD,1.5,0.25)
- local apmDDLbl = Label(apmDDBtn," "..APM_OPTS[curAPM],11,APM_COLORS[curAPM],Enum.Font.GothamBold)
- apmDDLbl.Size = UDim2.new(1,-20,1,0)
- local apmArr = Label(apmDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- apmArr.Size = UDim2.new(0,18,1,0); apmArr.Position = UDim2.new(1,-20,0,0)
- local apmDescLbl = Label(ascInner, APM_DESC[curAPM], 10, C.TXT3, Enum.Font.GothamBold)
- apmDescLbl.LayoutOrder = 14; apmDescLbl.Size = UDim2.new(1,0,0,14)
-
- -- Manual-only cards (Grade filter + Rune Map) - tersembunyi kecuali manual
- local _ascManualSection -- forward declare
-
- apmDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local aP = apmDDBtn.AbsolutePosition; local aS = apmDDBtn.AbsoluteSize; local IH = 28
-  local popup = Instance.new("Frame")
-  popup.Parent = DDLayer; popup.BackgroundColor3 = C.DD_BG; popup.BorderSizePixel = 0
-  popup.Size = UDim2.new(0,aS.X+10,0,#APM_OPTS*(IH+2)+12)
-  popup.Position = UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
-  popup.ZIndex = 9999; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.85)
-  local ll = Instance.new("UIListLayout",popup)
-  ll.Padding = UDim.new(0,2); ll.SortOrder = Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",popup).PaddingTop = UDim.new(0,4)
-  for i, opt in ipairs(APM_OPTS) do
-   local item = Instance.new("TextButton",popup)
-   item.Size = UDim2.new(1,-8,0,IH); item.LayoutOrder = i
-   item.BackgroundColor3 = i==curAPM and C.SURFACE or C.BG3
-   item.BackgroundTransparency = i==curAPM and 0.18 or 0.42
-   item.BorderSizePixel = 0; item.Text = ""; item.AutoButtonColor = false; item.ZIndex = 9999
-   Instance.new("UICorner",item).CornerRadius = UDim.new(0,6)
-   local iL = Instance.new("TextLabel",item)
-   iL.Size = UDim2.new(1,-8,1,0); iL.Position = UDim2.new(0,8,0,0)
-   iL.BackgroundTransparency = 1; iL.Text = opt; iL.TextSize = 12
-   iL.Font = Enum.Font.Gotham; iL.TextColor3 = APM_COLORS[i]
-   iL.TextXAlignment = Enum.TextXAlignment.Left; iL.ZIndex = 9999
-   local ii = i
-   item.MouseButton1Click:Connect(function()
-    CloseActiveDD()
-    curAPM = ii; ASC.pickMode = APM_KEYS[ii]
-    apmDDLbl.Text = " "..APM_OPTS[ii]; apmDDLbl.TextColor3 = APM_COLORS[ii]
-    apmDescLbl.Text = APM_DESC[ii]
-    if _ascManualSection then _ascManualSection.Visible = (APM_KEYS[ii] == "manual") end
-    task.defer(ResizeAscBody)
-   end)
-  end
-  DDLayer.Visible = true
-  _activeDDClose = function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- MANUAL SECTION: Grade filter + Rune Map (tersembunyi kecuali manual)
- _ascManualSection = Frame(ascInner, C.BLACK, UDim2.new(1,0,0,0))
- _ascManualSection.BackgroundTransparency = 1; _ascManualSection.AutomaticSize = Enum.AutomaticSize.Y
- _ascManualSection.LayoutOrder = 15; _ascManualSection.Visible = false
- local _ascManLayout = New("UIListLayout",{Parent=_ascManualSection, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
-
- -- Grade Filter (Manual)
- local aGrHdr = Label(_ascManualSection,"FILTER GRADE",10,C.TXT3,Enum.Font.GothamBold)
- aGrHdr.LayoutOrder = 1; aGrHdr.Size = UDim2.new(1,0,0,14)
- local aGrCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
- aGrCard.LayoutOrder = 2; Corner(aGrCard,10); Stroke(aGrCard,C.BORD,1.5,0.3); Padding(aGrCard,6,6,10,10)
- local aGrRow = Frame(aGrCard,C.BLACK,UDim2.new(1,0,1,0)); aGrRow.BackgroundTransparency=1
- local aGrKeyL = Label(aGrRow,"Grade",11,C.TXT2,Enum.Font.GothamBold)
- aGrKeyL.Size = UDim2.new(0,72,1,0)
- local aGrDDBtn = Btn(aGrRow,C.BG3,UDim2.new(1,-82,1,0))
- aGrDDBtn.Position = UDim2.new(0,80,0,0); Corner(aGrDDBtn,6); Stroke(aGrDDBtn,C.BORD,1.5,0.25)
- local aGrDDVal = Label(aGrDDBtn," -- ANY GRADE --",11,C.TXT3,Enum.Font.GothamBold)
- aGrDDVal.Size = UDim2.new(1,-20,1,0); aGrDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local aGrArr = Label(aGrDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- aGrArr.Size = UDim2.new(0,18,1,0); aGrArr.Position = UDim2.new(1,-20,0,0)
-
- local function RefreshAscGradeLabel()
-  local ns={}
-  for _,g in ipairs(GRADE_LIST or {}) do
-   if ASC.runeGrades[g] then table.insert(ns,"["..g.."]") end
-  end
-  if #ns==0 then aGrDDVal.Text=" -- ANY GRADE --"; aGrDDVal.TextColor3=C.TXT3
-  else aGrDDVal.Text=" "..table.concat(ns," "); aGrDDVal.TextColor3=Color3.fromRGB(200,120,255) end
- end
-
- aGrDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local IH=30
-  local gl = GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
-  local SFH=math.min(#gl*(IH+4)+44,260)
-  local ab=aGrDDBtn.AbsolutePosition; local sz=aGrDDBtn.AbsoluteSize
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
-  popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4)
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
-  local sf=Instance.new("ScrollingFrame",popup)
-  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
-  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
-  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
-  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
-  local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
-  rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
-  Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
-  local rl=Instance.new("TextLabel",rb); rl.Size=UDim2.new(1,-8,1,0); rl.Position=UDim2.new(0,8,0,0)
-  rl.BackgroundTransparency=1; rl.Text="x Reset ALL"; rl.TextSize=10
-  rl.Font=Enum.Font.GothamBold; rl.TextColor3=C.RED; rl.TextXAlignment=Enum.TextXAlignment.Left; rl.ZIndex=9999
-  rb.MouseButton1Click:Connect(function()
-   for _,g in ipairs(gl) do ASC.runeGrades[g]=nil end
-   CloseActiveDD(); RefreshAscGradeLabel()
-  end)
-  for i,grade in ipairs(gl) do
-   local gc=grade; local col=GRADE_COLORS_ASC[grade] or C.ACC; local isSel=ASC.runeGrades[gc]==true
-   local item=Instance.new("TextButton",sf)
-   item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
-   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local ck=Instance.new("TextLabel",item); ck.Size=UDim2.new(0,20,1,0); ck.Position=UDim2.new(0,4,0,0)
-   ck.BackgroundTransparency=1; ck.Text=isSel and "v" or ""; ck.TextSize=11
-   ck.Font=Enum.Font.GothamBold; ck.TextColor3=col; ck.TextXAlignment=Enum.TextXAlignment.Center; ck.ZIndex=9999
-   local nl=Instance.new("TextLabel",item); nl.Size=UDim2.new(1,-28,1,0); nl.Position=UDim2.new(0,26,0,0)
-   nl.BackgroundTransparency=1; nl.Text="Rank "..grade; nl.TextSize=11
-   nl.Font=Enum.Font.GothamBold; nl.TextColor3=isSel and Color3.fromRGB(255,255,255) or col
-   nl.TextXAlignment=Enum.TextXAlignment.Left; nl.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    local ns=not ASC.runeGrades[gc]; ASC.runeGrades[gc]=ns and true or nil
-    item.BackgroundColor3=ns and C.SURFACE or C.DD_BG; item.BackgroundTransparency=ns and 0.18 or 0.42
-    ck.Text=ns and "v" or ""; nl.TextColor3=ns and Color3.fromRGB(255,255,255) or col
-    RefreshAscGradeLabel()
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- Rune Map (Manual)
- local aRnHdr = Label(_ascManualSection,"RUNE MAP (Manual)",10,C.TXT3,Enum.Font.GothamBold)
- aRnHdr.LayoutOrder = 3; aRnHdr.Size = UDim2.new(1,0,0,14)
- local aRnCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
- aRnCard.LayoutOrder = 4; Corner(aRnCard,10); Stroke(aRnCard,C.BORD,1.5,0.3); Padding(aRnCard,6,6,10,10)
- local aRnRow = Frame(aRnCard,C.BLACK,UDim2.new(1,0,1,0)); aRnRow.BackgroundTransparency=1
- local aRnKeyL = Label(aRnRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
- aRnKeyL.Size = UDim2.new(0,72,1,0)
- local aRnDDBtn = Btn(aRnRow,C.BG3,UDim2.new(1,-82,1,0))
- aRnDDBtn.Position = UDim2.new(0,80,0,0); Corner(aRnDDBtn,6); Stroke(aRnDDBtn,C.BORD,1.5,0.25)
- local aRnDDVal = Label(aRnDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
- aRnDDVal.Size = UDim2.new(1,-20,1,0); aRnDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local aRnArr = Label(aRnDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- aRnArr.Size = UDim2.new(0,18,1,0); aRnArr.Position = UDim2.new(1,-20,0,0)
-
- aRnDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local aP=aRnDDBtn.AbsolutePosition; local aS=aRnDDBtn.AbsoluteSize; local IH=28
-  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
-  local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(aP.Y+popH > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
-  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
-  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
-  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
-  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
-  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
-  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
-  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
-  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
-  local s0=(ASC.runeMapTarget==0)
-  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
-  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
-  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
-  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
-  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
-  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3
-  l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
-  i0.MouseButton1Click:Connect(function()
-   CloseActiveDD(); ASC.runeMapTarget=0; ASC.runeEnabled=false
-   aRnDDVal.Text=" -- NOT SELECTED --"; aRnDDVal.TextColor3=C.TXT3
-  end)
-  for mn=1,20 do
-   local ml=mn; local mnm=MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
-   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
-   local iS=(ASC.runeMapTarget==mn)
-   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
-   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
-   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
-   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
-   il.BackgroundTransparency=1; il.Text="Map "..mn.." - "..mnm; il.TextSize=10; il.Font=Enum.Font.GothamBold
-   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
-   it.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.runeMapTarget=ml; ASC.runeEnabled=true
-    aRnDDVal.Text=" Map "..ml.." - "..mnm; aRnDDVal.TextColor3=C.ACC2
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- task.defer(ResizeAscBody)
-end -- end Auto Ascension do block
 
 
 -- ============================================================
@@ -12060,24 +11018,52 @@ local function ConnectDungeonListener()
  return
  end
 
- -- Fallback: hook __namecall untuk tangkap FireClient/OnClientEvent dari game
- -- Sambil itu, poll workspace.Map.MessageBoard setiap 2s sebagai fallback state detector
+    -- [FIX] Polling improved: 3 metode deteksi dungeon OPEN
  task.spawn(function()
- while ScreenGui and ScreenGui.Parent do
- task.wait(2)
- pcall(function()
- -- Deteksi PreparatoryPhase via TowerUnlock effect di workspace
- local mf = workspace:FindFirstChild("Map")
- local tp = mf and mf:FindFirstChild("TeleportPoints")
- local tower= tp and tp:FindFirstChild("Tower")
- if tower then
- local unlocked = tower:FindFirstChild("TowerUnlock") ~= nil
- local locked = tower:FindFirstChild("TowerLock") ~= nil
- if unlocked and not locked then
- if DUNGEON.towerState ~= 2 then
- DUNGEON.towerState = 2
- if _dungeonWakeup then pcall(function() _dungeonWakeup:Fire() end) end
- end
+  while ScreenGui and ScreenGui.Parent do
+   task.wait(1)
+   pcall(function()
+    -- Metode C: jika player sudah di MapId 50303, dungeon pasti open
+    local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
+    if wm == DUNGEON_MAP_ID then
+     if DUNGEON.towerState ~= 2 then
+      DUNGEON.towerState = 2
+      if _dungeonWakeup then pcall(function() _dungeonWakeup:Fire() end) end
+     end
+     return
+    end
+    -- Metode A: TowerUnlock object di workspace.Map.TeleportPoints.Tower
+    local mf = workspace:FindFirstChild("Map")
+    local tp = mf and mf:FindFirstChild("TeleportPoints")
+    local tower = tp and tp:FindFirstChild("Tower")
+    if tower then
+     local unlocked = tower:FindFirstChild("TowerUnlock") ~= nil
+     local locked   = tower:FindFirstChild("TowerLock") ~= nil
+     if unlocked and not locked then
+      if DUNGEON.towerState ~= 2 then
+       DUNGEON.towerState = 2
+       if _dungeonWakeup then pcall(function() _dungeonWakeup:Fire() end) end
+      end
+     elseif locked and not unlocked then
+      if DUNGEON.towerState ~= 1 then DUNGEON.towerState = 1 end
+     end
+     return
+    end
+    -- Metode B: portal/entrance object di workspace.Map
+    if mf then
+     local portal = mf:FindFirstChild("TowerEntrance") or mf:FindFirstChild("DungeonPortal")
+      or mf:FindFirstChild("TowerGate") or mf:FindFirstChild("DungeonGate")
+     if portal then
+      if DUNGEON.towerState ~= 2 then
+       DUNGEON.towerState = 2
+       if _dungeonWakeup then pcall(function() _dungeonWakeup:Fire() end) end
+      end
+     end
+    end
+   end)
+  end
+ end)
+end
  elseif locked and not unlocked then
  if DUNGEON.towerState ~= 1 then
  DUNGEON.towerState = 1
@@ -12106,18 +11092,40 @@ end
 -- Attack loop dalam dungeon
 local function DungeonAttackLoop(onStatus)
     -- ============================================================
-    -- Identik dengan logika Mass Attack:
-    -- - GetEnemies() scan semua folder (sama persis MA)
-    -- - FireAllDamage + FireHeroRemotes (sama persis MA)
-    -- - Berhenti jika keluar dari MapId 50303 (server TP keluar)
-    -- - Berhenti jika 5 menit musuh tidak update di workspace
+    -- [FIX] GetDungeonEnemies: scan HANYA saat workspace.MapId == 50303
+    -- Mencegah serang musuh di map lain saat dungeon belum masuk
     -- ============================================================
-    local _deadG_D      = {}    -- dead list lokal dungeon
-    local noUpdateT     = 0    -- timer musuh tidak berkurang di workspace
-    local NO_UPDATE_LIMIT = 300 -- 5 menit (300 detik)
-    local lastAliveCount = -1  -- jumlah musuh hidup di iterasi sebelumnya
+    local function GetDungeonEnemies()
+        local list = {}
+        -- Guard: hanya valid di dalam dungeon map
+        local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
+        if wm ~= DUNGEON_MAP_ID then return list end
+        local FOLDERS = {"Enemys","Enemies","Enemy","RaidEnemys","Monsters"}
+        local seen = {}
+        for _, fn in ipairs(FOLDERS) do
+            local f = workspace:FindFirstChild(fn)
+            if f then
+                for _, e in ipairs(f:GetChildren()) do
+                    if e:IsA("Model") then
+                        local g = e:GetAttribute("EnemyGuid") or e:GetAttribute("Guid") or e:GetAttribute("GUID")
+                        local h = e:FindFirstChild("HumanoidRootPart")
+                        local hum = e:FindFirstChildOfClass("Humanoid")
+                        if g and h and hum and hum.Health > 0 and not seen[g] then
+                            seen[g] = true
+                            table.insert(list, {model=e, guid=g, hrp=h})
+                        end
+                    end
+                end
+            end
+        end
+        return list
+    end
 
-    -- Pasang listener EnemyDeath lokal (tidak ganggu _deadG global MA)
+    local _deadG_D      = {}
+    local noUpdateT     = 0
+    local NO_UPDATE_LIMIT = 300
+    local lastAliveCount = -1
+
     local _deathConn = nil
     if RE.Death then
         _deathConn = RE.Death.OnClientEvent:Connect(function(d)
@@ -12134,7 +11142,7 @@ local function DungeonAttackLoop(onStatus)
         MODE:Release("dungeon")
     end
 
-    -- -- FASE 1: Tunggu musuh muncul (maks 30 detik) --------------
+    -- FASE 1: Tunggu masuk map + musuh muncul (maks 30 detik)
     local wt = 0
     while wt < 30 and DUNGEON.running and DUNGEON.inMap do
         local inDungeon = IsInDungeonMap()
@@ -12142,25 +11150,25 @@ local function DungeonAttackLoop(onStatus)
             if onStatus then onStatus("[!] Keluar map dungeon") end
             cleanup(); return "exited_by_server"
         end
-        if #GetEnemies() > 0 then break end
+        if #GetDungeonEnemies() > 0 then break end
         if onStatus then onStatus("[~] Tunggu musuh dungeon... (" .. math.floor(30-wt) .. "s)") end
         task.wait(0.4); wt = wt + 0.4
     end
 
-    -- -- FASE 2: Attack loop (identik Mass Attack) -----------------
+    -- FASE 2: Attack loop - hanya di dalam MapId 50303
     while DUNGEON.running and DUNGEON.inMap do
 
-        -- Hukum: wajib stop jika keluar dari MapId 50303
+        -- Guard: wajib stop jika keluar dari MapId 50303
         local inDungeon = IsInDungeonMap()
         if not inDungeon then
             if onStatus then onStatus("[OK] Server TP keluar Dungeon - DONE!") end
             cleanup(); return "exited_by_server"
         end
 
-        -- Ambil semua musuh hidup (SAMA PERSIS dengan GetEnemies() Mass Attack)
+        -- [FIX] GetDungeonEnemies: scan HANYA saat di MapId 50303
         local alive   = 0
         local targets = {}
-        for _, e in ipairs(GetEnemies()) do
+        for _, e in ipairs(GetDungeonEnemies()) do
             if not _deadG_D[e.guid] then
                 if e.model and e.model.Parent then
                     local hum = e.model:FindFirstChildOfClass("Humanoid")
@@ -12245,17 +11253,31 @@ local function DungeonTpOut()
 end
 
 -- Masuk dungeon
+-- [FIX] TP ke lobby Map 5 dulu jika belum di sana, baru TP masuk 50303
 local function DungeonTpIn()
+ -- Step 1: Pastikan player di Map 5 (DUNGEON_LOBBY_ID) sebelum masuk
+ local curWm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
+ if curWm ~= DUNGEON_LOBBY_ID then
+  local tpLobby = Remotes:FindFirstChild("StartLocalPlayerTeleport")
+  if tpLobby then pcall(function() tpLobby:FireServer({mapId = DUNGEON_LOBBY_ID}) end) end
+  -- Tunggu konfirmasi di Map 5 max 5s
+  local _wt = 0
+  while _wt < 5 do
+   task.wait(0.3); _wt = _wt + 0.3
+   local wm2 = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
+   if wm2 == DUNGEON_LOBBY_ID then break end
+  end
+  task.wait(0.3)
+ end
+ -- Step 2: TP masuk dungeon 50303
  local startTpRe = Remotes:FindFirstChild("StartLocalPlayerTeleport")
  if startTpRe then
- pcall(function() startTpRe:FireServer({mapId = DUNGEON_MAP_ID}) end)
+  pcall(function() startTpRe:FireServer({mapId = DUNGEON_MAP_ID}) end)
  end
  task.wait(0.3)
  local ltpSucc = Remotes:FindFirstChild("LocalPlayerTeleportSuccess")
  if ltpSucc then
- task.spawn(function()
- pcall(function() ltpSucc:InvokeServer() end)
- end)
+  task.spawn(function() pcall(function() ltpSucc:InvokeServer() end) end)
  end
 end
 
@@ -12356,29 +11378,42 @@ StartDungeonLoop = function()
  DungeonStatus("[>>] ENTER dungeon...", Color3.fromRGB(180,120,255))
  if DUNGEON.dot then DUNGEON.dot.BackgroundColor3 = Color3.fromRGB(180,120,255) end
 
+ -- [FIX] DungeonTpIn sudah handle TP ke lobby dulu sebelum masuk
  DungeonTpIn()
 
- -- Tunggu konfirmasi masuk max 15 detik
+ -- Tunggu konfirmasi masuk max 15 detik, retry tiap 5s
  local _entered = false
  local _entWait = 0
+ local _sinceLastTp = 0
  while not _entered and _entWait < 15 and DUNGEON.running do
- task.wait(0.3); _entWait = _entWait + 0.3
- local inD, _ = IsInDungeonMap()
- if inD then _entered = true; break end
- -- Fallback: cek ada enemy di workspace.Enemys
- if #GetSiegeEnemies() > 0 then _entered = true; break end
+  task.wait(0.3); _entWait = _entWait + 0.3; _sinceLastTp = _sinceLastTp + 0.3
+  local inD, _ = IsInDungeonMap()
+  if inD then _entered = true; break end
+  -- [FIX] Retry TP tiap 5s jika belum masuk
+  if _sinceLastTp >= 5 then
+   _sinceLastTp = 0
+   DungeonStatus("[~] Retry TP masuk dungeon...", Color3.fromRGB(255,200,60))
+   local tpRe = Remotes:FindFirstChild("StartLocalPlayerTeleport")
+   if tpRe then pcall(function() tpRe:FireServer({mapId = DUNGEON_MAP_ID}) end) end
+   task.wait(0.3)
+   local inD2, _ = IsInDungeonMap()
+   if inD2 then _entered = true; break end
+  end
  end
 
  if not _entered then
- DungeonStatus("[!] Failure Enter - Waiting Next DUNGEON", Color3.fromRGB(255,100,60))
- DUNGEON.towerState = 1
- DUNGEON.interrupt = false
- _siegeInterrupt = false
- _raidInterrupt = false
- MODE:Release("dungeon") -- [v252]
- task.wait(3); break
+  DungeonStatus("[!] Failure Enter - Waiting Next DUNGEON", Color3.fromRGB(255,100,60))
+  DUNGEON.towerState = 1
+  DUNGEON.interrupt = false
+  _siegeInterrupt = false
+  _raidInterrupt = false
+  MODE:Release("dungeon")
+  task.wait(3); break
  end
  else
+  DungeonStatus("[OK] Sudah di dalam Dungeon - langsung attack!", Color3.fromRGB(100,255,150))
+ end
+
  end
 
  -- 
@@ -12407,7 +11442,18 @@ StartDungeonLoop = function()
  end
 
  -- Auto hide reward popup
- DungeonHideRewardPopup()
+ -- [FIX] Hide reward popup - pakai pcall guard karena popup mungkin tidak ada
+ pcall(function()
+  local playerGui = LP and LP.PlayerGui
+  if not playerGui then return end
+  for _, gui in ipairs(playerGui:GetChildren()) do
+   if gui:IsA("ScreenGui") or gui:IsA("BillboardGui") then
+    local reward = gui:FindFirstChild("RewardPanel") or gui:FindFirstChild("Reward")
+     or gui:FindFirstChild("RewardUI") or gui:FindFirstChild("ItemReward")
+    if reward and reward.Visible then reward.Visible = false end
+   end
+  end
+ end)
 
  -- Reset towerState ke WaitPhase (server akan update via ChangeTowerState)
  DUNGEON.towerState = 1
