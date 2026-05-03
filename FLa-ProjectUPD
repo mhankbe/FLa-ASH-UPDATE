@@ -9285,12 +9285,22 @@ local function ResolveEntry()
  end
 
  local raidEntry = ResolveEntry()
+ -- [v53 FIX] Jika ASC ON dan ada Tower tersedia, jangan resolve entry Normal (ASC adalah prioritas)
+ if raidEntry and ASC and ASC.running then
+  local _ascCheck = ResolveAscEntry and ResolveAscEntry()
+  if _ascCheck then raidEntry = nil end -- mundur, biarkan ASC masuk dulu
+ end
 
  while RAID.running and not raidEntry do
  -- [INDEPENDEN] tidak pause saat siege di waiting loop
  -- [FIX v256] Agresif: manual scan workspace tiap cycle
  ForceRescanRaidEnter()
  raidEntry = ResolveEntry()
+ -- [v53 FIX] Prioritas ASC: jika ASC ON dan ada Tower, biarkan ResolveEntry nil-kan entry
+ if raidEntry and ASC and ASC.running then
+  local _ascW = ResolveAscEntry and ResolveAscEntry()
+  if _ascW then raidEntry = nil end
+ end
  if not raidEntry then
  -- Prune expired entries
  local _now2 = os.time()
@@ -9378,6 +9388,23 @@ local function ResolveEntry()
      break
  end
  
+ -- [v53 FIX] PRIORITAS AUTO RAID ASCENSION > AUTO RAID NORMAL
+ -- Jika ASC sedang running (toggle ON) DAN ada entry Ascension tersedia di server,
+ -- Auto Raid Normal HARUS mundur dan menunggu sebagai FALLBACK.
+ -- Auto Raid Normal hanya boleh masuk jika:
+ --   1. Toggle AUTO RAID ASCENSION = OFF (ASC.running = false), ATAU
+ --   2. Toggle ON tapi tidak ada entry Ascension yang cocok (ResolveAscEntry() = nil)
+ if ASC and ASC.running then
+     local _ascEntry = ResolveAscEntry and ResolveAscEntry()
+     if _ascEntry then
+         -- ASC ON dan ada Ascension Tower tersedia -> RAID Normal harus berhenti di sini
+         RaidStatusUpdate("[||] AUTO RAID ASCENSION aktif & ada Tower tersedia - Normal Raid standby...", Color3.fromRGB(180,100,255))
+         task.wait(1)
+         break
+     end
+     -- ASC ON tapi tidak ada Tower yang match -> lanjut sebagai fallback
+ end
+
  local currentWm = workspace:GetAttribute("MapId") or 0
  -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Ascension Tower (50301-50326)
  if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or (currentWm >= 50301 and currentWm <= 50326) then
@@ -10198,10 +10225,19 @@ local function ResolveEntry()
             -- [BUG FIX v49] Juga cek: jika player secara fisik masih di area Ascension Tower (50301-50326)
             if mapId >= 50301 and mapId <= 50326 then isBusy = true end
 
-            if isBusy then
+            -- [v53 FIX] Cek prioritas ASC: jika ASC ON dan ada Tower tersedia, blokir Normal Raid
+            local _ascBlocking = false
+            if ASC and ASC.running then
+                local _ascEntry2 = ResolveAscEntry and ResolveAscEntry()
+                if _ascEntry2 then _ascBlocking = true end
+            end
+
+            if isBusy or _ascBlocking then
                 -- Jika ada Siege/Dungeon/Ascension aktif, diam saja dan JANGAN panggil ResolveEntry
                 if ASC.inMap or (mapId >= 50301 and mapId <= 50326) then
                     RaidStatusUpdate("[!] PAUSE: Ascension Tower aktif - menunggu...", Color3.fromRGB(180, 100, 255))
+                elseif _ascBlocking then
+                    RaidStatusUpdate("[||] AUTO RAID ASCENSION aktif & ada Tower - Normal Raid standby fallback...", Color3.fromRGB(180, 100, 255))
                 else
                     RaidStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255, 100, 100))
                 end
