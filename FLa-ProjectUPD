@@ -1210,9 +1210,10 @@ _ascOn = false
 _ascWakeup = nil -- BindableEvent untuk wakeup loop
 _visAscension = nil -- visual pill toggle
 -- [v54] Flag dominasi ASC per event raid:
--- true  = ASC sudah match & dominasi di event raid saat ini -> RAID Normal diblokir sampai event habis
--- false = reset ketika RAID_ID_LIST kosong (event habis) atau ASC di-OFF
-_ascDominatedThisEvent = false
+-- [v56 DEPRECATED] _ascDominatedThisEvent tidak dipakai lagi
+-- RAID Normal dan ASC Ascension kini INDEPENDEN: masing-masing jalan sesuai filter sendiri
+-- RAID pause HANYA saat ASC.inMap = true, ASC pause HANYA saat RAID.inMap = true
+_ascDominatedThisEvent = false -- tetap ada agar tidak crash referensi lama
 
 -- [v55 FIX] Mapping Ascension Tower: Tower X -> mapId = 50300 + X
 -- Data confirmed: Tower 1=50301, Tower 2=50302, ..., Tower 26=50326
@@ -7830,7 +7831,7 @@ end
 function StopAscension()
  ASC.running = false
  ASC.inMap   = false
- _ascDominatedThisEvent = false -- [v54] reset dominasi: RAID Normal bebas saat ASC di-OFF
+ -- [v56 DEPRECATED] _ascDominatedThisEvent tidak dipakai lagi
  ReleaseMapLock("asc") -- [v52 FIX] pastikan lock terlepas saat stop paksa
  if ASC.thread then
   pcall(function() task.cancel(ASC.thread) end)
@@ -8129,16 +8130,22 @@ function StartAscensionLoop()
     if not ASC.running then break end
     if not raidEntry then break end
 
-    -- [GUARD v50] ASC tunggu SEMUA fitur lain selesai sebelum masuk Tower
-    -- Tidak hanya RAID - tapi juga SIEGE, DUNGEON, ST2
+    -- [v56 FIX] ASC guard: tunggu fitur lain selesai, KECUALI RAID (independen)
+    -- RAID dan ASC boleh running bersamaan, hanya tidak boleh masuk map bersamaan
     do
      local _aWait = 0
      while ASC.running and _aWait < 90 do
       local _busy, _who = IsAnyMapActive()
       local _selfBusy = (_who == "asc")
+      local _raidBusy = (_who == "raid") -- RAID di map = independen, ASC tunggu giliran
       if not _busy or _selfBusy then break end
-      AscStatusUpdate("[||] Tunggu "..(_who or "?").." selesai dulu...", Color3.fromRGB(255,140,0))
-      task.wait(0.5); _aWait = _aWait + 0.5
+      if _raidBusy then
+       AscStatusUpdate("[||] RAID Normal sedang di map - ASC tunggu giliran...", Color3.fromRGB(255,140,0))
+       task.wait(0.5); _aWait = _aWait + 0.5
+      else
+       AscStatusUpdate("[||] Tunggu "..(_who or "?").." selesai dulu...", Color3.fromRGB(255,140,0))
+       task.wait(0.5); _aWait = _aWait + 0.5
+      end
      end
      if not ASC.running then break end
     end
@@ -8161,7 +8168,7 @@ function StartAscensionLoop()
     AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
 
     ASC.inMap = true
-    _ascDominatedThisEvent = true -- [v54] ASC match di event ini -> blokir RAID Normal sampai event habis
+    -- [v56 FIX] _ascDominatedThisEvent dihapus - RAID dan ASC sekarang independen
     -- [v52 FIX] Setelah inMap=true di-set, lock tidak diperlukan lagi (IsAnyMapActive sudah cover)
     ReleaseMapLock("asc")
 
@@ -8226,10 +8233,16 @@ function StartAscensionLoop()
     end
 
     -- Tunggu masuk map Ascension Tower (range 50301-50326)
-    -- [v52 FIX] FASE A: konfirmasi MapId masuk range Tower (max 20s)
+    -- [v56 FIX] FASE A: konfirmasi MapId masuk range Tower (max 20s)
+    -- Pre-check dulu: kalau sudah di dalam Tower sebelum loop mulai, langsung OK.
     -- FASE B: tunggu enemy spawn non-blocking (tidak menyebabkan rejoin)
     local _tpOk = false
     local _tpW  = 0
+    -- [v56 FIX] Pre-check sebelum loop
+    pcall(function()
+     local _preWm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId")
+     if _preWm and _preWm >= 50301 and _preWm <= 50326 then _tpOk = true end
+    end)
     while not _tpOk and _tpW < 20 and ASC.running and not _cfail do
      task.wait(0.3); _tpW = _tpW + 0.3
      pcall(function()
@@ -8697,12 +8710,9 @@ function StartAscensionLoop()
       local _wm2 = workspace:GetAttribute("MapId") or 0
       if (_wm2 >= 50201 and _wm2 <= 50204) or _wm2 == 50303 then isBusy = true end
 
-      -- [v54] Cek apakah event raid benar-benar habis (RAID_ID_LIST kosong)
-      -- Jika habis -> reset dominasi, biarkan RAID Normal berpeluang di event berikutnya
-      if #RAID_ID_LIST == 0 and _ascDominatedThisEvent then
-       _ascDominatedThisEvent = false
-       AscStatusUpdate("[>>] Event habis - Menunggu event RAID baru...", Color3.fromRGB(120,120,120))
-      end
+      -- [v56 FIX] _ascDominatedThisEvent dihapus dari logika RAID
+      -- ASC cooldown loop tidak perlu reset flag ini lagi
+      -- RAID sekarang independen: jalan saat ASC.inMap = false, pause saat ASC.inMap = true
 
       if isBusy then
        AscStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255,100,100))
@@ -8748,7 +8758,7 @@ function StartAscensionLoop()
   ASC.running = false
   ASC.inMap   = false
   _ascOn      = false
-  _ascDominatedThisEvent = false -- [v54] reset dominasi saat ASC di-OFF
+  _ascDominatedThisEvent = false -- [v56 DEPRECATED] tidak dipakai lagi
   ASC._rrIdx  = 0
   AscStatusUpdate("Auto Ascension STOP", Color3.fromRGB(160,148,135))
   if ASC.dot then ASC.dot.BackgroundColor3 = Color3.fromRGB(100,100,100) end
@@ -9090,14 +9100,15 @@ function StartRaidLoop()
  task.wait(0.1)
  end
 
- -- [GUARD v50] Tunggu SEMUA fitur lain selesai sebelum RAID masuk map
- -- Satu guard terpusat menggantikan semua cek ASC/SIEGE/ST2 terpisah
+ -- [v56 FIX] Guard RAID: tunggu fitur lain selesai, KECUALI ASC (independen)
+ -- ASC dan RAID boleh running bersamaan, hanya tidak boleh masuk map bersamaan
  do
   local _rGuard = 0
   while RAID.running and _rGuard < 90 do
    local _busy, _who = IsAnyMapActive()
    local _selfBusy = (_who == "raid")
-   if not _busy or _selfBusy then break end
+   local _ascBusy  = (_who == "asc") -- ASC di Tower = independen, tidak perlu tunggu selesai total
+   if not _busy or _selfBusy or _ascBusy then break end
    RAID.inMap = false
    RaidStatusUpdate("[||] Tunggu "..(_who or "?").." selesai dulu...", Color3.fromRGB(255,140,0))
    task.wait(0.5); _rGuard = _rGuard + 0.5
@@ -9322,15 +9333,11 @@ local function ResolveEntry()
  end
 
  local raidEntry = ResolveEntry()
- -- [v54] Blokir RAID Normal jika:
- --   A) ASC ON dan ada Tower tersedia sekarang (prioritas langsung), ATAU
- --   B) ASC ON dan sudah pernah dominasi event ini (_ascDominatedThisEvent)
- --      tapi event belum habis -> RAID tetap diblokir, ASC terus dominasi
- if raidEntry and ASC and ASC.running then
-  local _ascCheck = ResolveAscEntry and ResolveAscEntry()
-  if _ascCheck or _ascDominatedThisEvent then
-   raidEntry = nil -- mundur, ASC dominasi event ini
-  end
+ -- [v56 FIX] RAID Normal hanya mundur jika ASC sedang AKTIF di dalam Tower (ASC.inMap)
+ -- Tidak lagi diblokir oleh _ascDominatedThisEvent (sudah dihapus logikanya)
+ -- Jika ASC.inMap = false (ASC sedang waiting / cooldown), RAID bebas jalan
+ if raidEntry and ASC and ASC.running and ASC.inMap then
+  raidEntry = nil -- ASC sedang di dalam Tower, tunggu giliran
  end
 
  while RAID.running and not raidEntry do
@@ -9338,12 +9345,9 @@ local function ResolveEntry()
  -- [FIX v256] Agresif: manual scan workspace tiap cycle
  ForceRescanRaidEnter()
  raidEntry = ResolveEntry()
- -- [v54] Sama: cek dominasi ASC setiap cycle waiting loop
- if raidEntry and ASC and ASC.running then
-  local _ascW = ResolveAscEntry and ResolveAscEntry()
-  if _ascW or _ascDominatedThisEvent then
-   raidEntry = nil -- ASC masih dominasi event ini
-  end
+ -- [v56 FIX] Sama: blokir hanya saat ASC.inMap = true (sedang di Tower)
+ if raidEntry and ASC and ASC.running and ASC.inMap then
+  raidEntry = nil -- ASC sedang di Tower, tunggu giliran
  end
  if not raidEntry then
  -- Prune expired entries
@@ -9361,12 +9365,9 @@ local function ResolveEntry()
  local _pm = RAID.pickMode
  if not IsRaidLiveInGame() then
  RaidStatusUpdate("Empty RAID - Waiting new RAID", Color3.fromRGB(160,100,60))
- elseif ASC and ASC.running and _ascDominatedThisEvent then
- -- [v54] ASC sedang dominasi event ini -> RAID Normal standby sampai event habis
- RaidStatusUpdate("[||] ASC Ascension dominasi - Normal Raid standby...", Color3.fromRGB(180,100,255))
- elseif ASC and ASC.running and (ResolveAscEntry and ResolveAscEntry()) then
- -- [v54] ASC ON dan ada Tower tersedia sekarang
- RaidStatusUpdate("[||] ASC aktif & ada Tower - Normal Raid standby fallback...", Color3.fromRGB(180,100,255))
+ elseif ASC and ASC.running and ASC.inMap then
+ -- [v56 FIX] ASC sedang di dalam Tower -> RAID tunggu giliran
+ RaidStatusUpdate("[||] ASC Ascension di Tower - Normal Raid standby...", Color3.fromRGB(180,100,255))
  elseif _pm == "byrank" and next(RAID.runeGrades) ~= nil then
  local _gr = {}
  for _,g in ipairs(GRADE_LIST) do if RAID.runeGrades[g] then table.insert(_gr,g) end end
@@ -9444,37 +9445,30 @@ local function ResolveEntry()
  --          tetap diblokir meskipun Tower saat ini tidak match, sampai event benar-benar habis
  -- Kasus 3: ASC ON + tidak pernah dominasi event ini + tidak ada Tower match -> RAID boleh (fallback)
  -- Kasus 4: ASC OFF -> RAID jalan penuh tanpa batasan
- if ASC and ASC.running then
-     local _ascEntry = ResolveAscEntry and ResolveAscEntry()
-     if _ascEntry then
-         -- Kasus 1: ada Tower tersedia sekarang
-         RaidStatusUpdate("[||] AUTO RAID ASCENSION aktif & ada Tower tersedia - Normal Raid standby...", Color3.fromRGB(180,100,255))
-         task.wait(1)
-         break
-     elseif _ascDominatedThisEvent then
-         -- Kasus 2: ASC sudah dominasi event ini, event belum habis -> RAID tetap diblokir
-         RaidStatusUpdate("[||] ASC Ascension dominasi event ini - Normal Raid standby sampai event habis...", Color3.fromRGB(160,80,255))
-         task.wait(1)
-         break
-     end
-     -- Kasus 3: ASC ON, tidak pernah dominasi event ini, tidak ada Tower -> fallback, lanjut
+ -- [v56 FIX] RAID Normal dan ASC INDEPENDEN:
+ -- RAID hanya pause saat ASC.inMap = true (sedang aktif di dalam Tower)
+ -- Begitu ASC keluar Tower (ASC.inMap = false), RAID langsung boleh masuk
+ -- Tidak ada lagi blokir berdasarkan "ada Tower tersedia" atau "dominasi event"
+ if ASC and ASC.running and ASC.inMap then
+     RaidStatusUpdate("[||] ASC sedang di Tower - Normal Raid tunggu giliran...", Color3.fromRGB(180,100,255))
+     task.wait(1)
+     break
  end
 
  local currentWm = workspace:GetAttribute("MapId") or 0
- -- [FIX] Blokir Auto Raid saat di dalam Map Siege, Dungeon, atau Ascension Tower (50301-50326)
- if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 or (currentWm >= 50301 and currentWm <= 50326) then
-     if currentWm >= 50301 and currentWm <= 50326 then
-      RaidStatusUpdate("[!] Di dalam Ascension Tower - Auto Raid skip iterasi ini", Color3.fromRGB(180,100,255))
-     end
+ -- [FIX] Blokir Auto Raid saat di dalam Map Siege atau Dungeon
+ if (currentWm >= 50201 and currentWm <= 50204) or currentWm == 50303 then
      task.wait(2)
      break
  end
- -- [BUG FIX v49] Blokir juga jika ASC.inMap = true (sedang proses join Tower)
- -- Ini mencegah RAID masuk bersamaan saat ASC belum selesai teleport ke Tower
- if ASC.inMap then
-     RaidStatusUpdate("[!] Ascension Tower sedang aktif - Auto Raid skip", Color3.fromRGB(180,100,255))
-     task.wait(2)
-     break
+ -- [v56 FIX] Jika player masih secara fisik di dalam Tower (seharusnya tidak terjadi karena ASC.inMap sudah cover)
+ -- Tapi sebagai safety net: tunggu sampai keluar, jangan langsung break
+ if currentWm >= 50301 and currentWm <= 50326 then
+     RaidStatusUpdate("[||] Masih di dalam Ascension Tower - tunggu keluar...", Color3.fromRGB(180,100,255))
+     while (workspace:GetAttribute("MapId") or 0) >= 50301 and RAID.running do
+         task.wait(0.5)
+     end
+     if not RAID.running then break end
  end
  -- [FIX] Pause Auto Raid jika ST2 (Single Tower) sedang aktif di dalam map
  if ST2 and ST2.inMap then
@@ -9672,14 +9666,26 @@ local function ResolveEntry()
                         end
                     end
  -- STEP 3: Tunggu masuk map
- -- [v52 FIX] Pisah dua fase:
+ -- [v56 FIX] Pisah dua fase:
  -- FASE A (max 20s): tunggu workspace.MapId masuk range raid (50101-50120)
+ --   Pre-check dulu: kalau sudah di dalam map sebelum loop mulai, langsung OK.
  --   Jika gagal = TP server tidak jalan, retry iterasi (JANGAN hapus raidEntry).
  -- FASE B (max 15s): tunggu enemy spawn - TIDAK menyebabkan skip/rejoin.
  --   Boss scan di STEP 4 sudah punya loop 30s yang handle enemy lambat spawn.
  RaidStatusUpdate("[~] Waiting Map...", Color3.fromRGB(180,100,255))
  local _mapIdOk = false
  local _tpWait = 0
+ -- [v56 FIX] Pre-check: kalau sudah masuk map sebelum loop mulai, langsung OK
+ pcall(function()
+  local _preMap = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+  if not _preMap then return end
+  if RAID.serverMapId and _preMap == RAID.serverMapId then
+   _mapIdOk = true
+  elseif (_preMap >= 50101 and _preMap <= 50120) then
+   if not RAID.serverMapId then RAID.serverMapId = _preMap end
+   _mapIdOk = true
+  end
+ end)
  while not _mapIdOk and _tpWait < 20 and RAID.running do
   task.wait(0.3); _tpWait = _tpWait + 0.3
   pcall(function()
@@ -10275,32 +10281,16 @@ local function ResolveEntry()
             if (mapId >= 50201 and mapId <= 50204) or mapId == 50303 then
                 isBusy = true
             end
-            -- [BUG FIX v49] Cek ASC.inMap: jika Ascension sedang di dalam Tower, RAID harus pause
+            -- [v56 FIX] ASC.inMap = true -> RAID pause di cooldown juga (giliran ASC)
+            -- Tidak lagi pakai _ascDominatedThisEvent atau ResolveAscEntry sebagai blokir
             if ASC.inMap then isBusy = true end
-            -- [BUG FIX v49] Juga cek: jika player secara fisik masih di area Ascension Tower (50301-50326)
+            -- Safety net: jika player fisik masih di Tower range
             if mapId >= 50301 and mapId <= 50326 then isBusy = true end
 
-            -- [v54] Cek prioritas ASC: dominasi penuh sampai event habis
-            local _ascBlocking = false
-            if ASC and ASC.running then
-                -- Blokir jika: (ada Tower tersedia sekarang) ATAU (sudah dominasi event ini)
-                local _ascEntry2 = ResolveAscEntry and ResolveAscEntry()
-                if _ascEntry2 or _ascDominatedThisEvent then _ascBlocking = true end
-                -- Tapi jika event benar-benar habis -> reset dominasi, biarkan RAID jalan di event baru
-                if #RAID_ID_LIST == 0 and _ascDominatedThisEvent then
-                    _ascDominatedThisEvent = false
-                    _ascBlocking = false
-                end
-            end
-
-            if isBusy or _ascBlocking then
-                -- Jika ada Siege/Dungeon/Ascension aktif, diam saja dan JANGAN panggil ResolveEntry
+            if isBusy then
+                -- Jika ada Siege/Dungeon/ASC aktif di dalam map
                 if ASC.inMap or (mapId >= 50301 and mapId <= 50326) then
-                    RaidStatusUpdate("[!] PAUSE: Ascension Tower aktif - menunggu...", Color3.fromRGB(180, 100, 255))
-                elseif _ascBlocking and _ascDominatedThisEvent then
-                    RaidStatusUpdate("[||] ASC Ascension dominasi event ini - Normal Raid standby...", Color3.fromRGB(160, 80, 255))
-                elseif _ascBlocking then
-                    RaidStatusUpdate("[||] AUTO RAID ASCENSION aktif & ada Tower - Normal Raid standby...", Color3.fromRGB(180, 100, 255))
+                    RaidStatusUpdate("[||] ASC di Tower - Normal Raid tunggu giliran...", Color3.fromRGB(180, 100, 255))
                 else
                     RaidStatusUpdate("[!] PAUSE: Menunggu Siege/Dungeon Selesai...", Color3.fromRGB(255, 100, 100))
                 end
