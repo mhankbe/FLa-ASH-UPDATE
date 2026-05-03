@@ -1317,7 +1317,7 @@ local StatusDots, StatusLbls = {}, {}
 -- MAPS
 -- ============================================================
 local MAPS = {}
-for i = 1, 20 do
+for i = 1, 19 do
  MAPS[i] = {name="Map "..i, id=50000+i, remote=i<=4 and "Start" or "Local"}
 end
 MR = {selected={}, nextMapDelay=3, teleportDelay=3}
@@ -2189,7 +2189,7 @@ function DoMassAttack(on)
  if not MA.running then break end
 
  local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
+ for i = 1, 19 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
 
  if #mapsToUse == 0 then
  local cont = AttackLoop_Mass(function(msg)
@@ -2210,7 +2210,7 @@ function DoMassAttack(on)
  while MA.running do
  repeat
  local _fresh = {}
- for i = 1, 20 do
+ for i = 1, 19 do
  if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
  end
  if #_fresh == 0 then mapsToUse = {}; break end
@@ -2314,7 +2314,7 @@ function DoMassAttack(on)
  if not MA.running then break end
 
  local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
+ for i = 1, 19 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
 
  if #mapsToUse == 0 then
  local cont = AttackLoop_Mass(function(msg)
@@ -2335,7 +2335,7 @@ function DoMassAttack(on)
  while MA.running do
  repeat
  local _fresh = {}
- for i = 1, 20 do
+ for i = 1, 19 do
  if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
  end
  if #_fresh == 0 then mapsToUse = {}; break end
@@ -4924,7 +4924,7 @@ do
  local mapLbl=Label(mapCard,"Rotation Map",12,C.TXT,Enum.Font.GothamBold)
  mapLbl.Size=UDim2.new(0.5,0,1,0)
  local mapOpts={"ALL MAP"}
- for i=1,20 do mapOpts[i+1]="Map "..i end
+ for i=1,19 do mapOpts[i+1]="Map "..i end
  local mapDDBtn=Btn(mapCard,C.BG3,UDim2.new(0.5,-4,1,-4))
  mapDDBtn.Position=UDim2.new(0.5,0,0,2); Corner(mapDDBtn,6); Stroke(mapDDBtn,C.BORD, 1.5,0.2)
  local mapDDLbl=Label(mapDDBtn," SELECT MAP",11,C.ACC2,Enum.Font.GothamBold)
@@ -4935,7 +4935,7 @@ do
  function UpdateMapDDLbl()
  local count=0; for _ in pairs(mapSelSet) do count=count+1 end
  if count==0 then mapDDLbl.Text=" MAP NOW"
- elseif count==20 then mapDDLbl.Text=" ALL MAP"
+ elseif count==19 then mapDDLbl.Text=" ALL MAP"
  else mapDDLbl.Text=" "..count.." MAP SELECTED" end
  end
 
@@ -4971,7 +4971,7 @@ do
  item.MouseButton1Click:Connect(function()
  if ii==1 then
  local anyOff=false
- for j=1,20 do if not mapSelSet[j] then anyOff=true; break end end
+ for j=1,19 do if not mapSelSet[j] then anyOff=true; break end end
  if anyOff then
  for j=1,19 do mapSelSet[j]=true; MR.selected[j]=true end
  for j=2,#mapItemRefs do mapItemRefs[j].chk.Text="v"; mapItemRefs[j].lbl.TextColor3=C.ACC2 end
@@ -4984,7 +4984,7 @@ do
  local mi=ii-1; mapSelSet[mi]=not mapSelSet[mi]; MR.selected[mi]=mapSelSet[mi]
  mapItemRefs[ii].chk.Text=mapSelSet[mi] and "v" or ""
  mapItemRefs[ii].lbl.TextColor3=mapSelSet[mi] and C.ACC2 or C.TXT
- local allOn=true; for j=1,20 do if not mapSelSet[j] then allOn=false; break end end
+ local allOn=true; for j=1,19 do if not mapSelSet[j] then allOn=false; break end end
  mapItemRefs[1].chk.Text=allOn and "v" or ""; mapItemRefs[1].lbl.TextColor3=allOn and C.ACC2 or C.TXT
  end
  UpdateMapDDLbl()
@@ -6547,7 +6547,6 @@ MAP_NAMES = {
  [17] = "Angel Holy Realm",
  [18] = "Golden Throne",
  [19] = "Dragon Ball City",
- [20] = "Dragon Ball Wasteland",
 
 }
 
@@ -6573,7 +6572,6 @@ RAID_SPAWN_POS = {
  [50117] = Vector3.new( -0.4, 18.5, 93.5), -- Map 17 Angel Holy Realm
  [50118] = Vector3.new(2000.0, 45.4, 234.7), -- Map 18 Golden Throne
  [50119] = Vector3.new(0, 10.0, 0), -- Map 19 Dragon Ball City (update posisi jika perlu)
- [50120] = Vector3.new(0, 10.0, 0), -- Map 20 Dragon Ball Wasteland (update posisi jika perlu)
 }
 end -- chat listener + grade cache
 
@@ -7079,7 +7077,7 @@ RebuildRaidList = function()
  local sorted = {}
  for _, e in pairs(RAID_LIVE) do
   -- [FIX] Skip AT entries yang mungkin lolos (mapNum 19+)
-  if e.mapId and (e.mapId - 50000) <= 20 then
+  if e.mapId and (e.mapId - 50000) <= 19 then
    table.insert(sorted, e)
   end
  end
@@ -7112,10 +7110,10 @@ ParseRaidEntry = function(k, info)
  local spawnName = info.spawnName or "RE1001"
  if not raidId or not mapId then return end
  -- Normalize mapId: 50101-50118 -> 50001-50018
- if mapId >= 50101 and mapId <= 50120 then
+ if mapId >= 50101 and mapId <= 50119 then
  mapId = mapId - 100
  end
- if mapId < 50001 or mapId > 50020 then return end
+ if mapId < 50001 or mapId > 50019 then return end
  local rank = SPAWN_RANK[spawnName] or 0
  local mapNum = mapId - 50000
  local mapName = MAP_NAMES[mapNum] or ("Map "..mapNum)
@@ -7340,8 +7338,8 @@ ConnectRaidListeners = function()
  local mapId = info.mapId
  if not raidId or not mapId then break end
  -- Normalize mapId ke lobby range
- if mapId >= 50101 and mapId <= 50120 then mapId = mapId - 100 end
- if mapId < 50001 or mapId > 50020 then break end
+ if mapId >= 50101 and mapId <= 50119 then mapId = mapId - 100 end
+ if mapId < 50001 or mapId > 50019 then break end
 
  local mapNum = mapId - 50000
  local spawnName = info.spawnName or "RE1001"
@@ -7948,9 +7946,9 @@ local function ResolveEntry()
  for mn in pairs(RAID.preferMaps) do table.insert(_ms,"Map "..mn) end
  table.sort(_ms)
  RaidStatusUpdate("Waiting Map: "..table.concat(_ms,", ").."...", Color3.fromRGB(100,200,100))
- elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 and next(RAID.runeGrades) ~= nil then
+ elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 and next(RAID.runeGrades) ~= nil then
  RaidStatusUpdate("Waiting grade cocok -> override Map " .. RAID.runeMapTarget .. "...", Color3.fromRGB(200,140,255))
- elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then
+ elseif RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then
  RaidStatusUpdate("Waiting raid apapun -> override Map " .. RAID.runeMapTarget .. "...", Color3.fromRGB(147,197,253))
  elseif next(RAID.runeGrades) ~= nil then
  RaidStatusUpdate("Waiting grade cocok [" .. RAID.difficulty .. "]...", Color3.fromRGB(200,255,150))
@@ -8035,7 +8033,7 @@ local function ResolveEntry()
                     if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
                     
                     local mn = raidEntry.mapId - 50000
-                    if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then mn = RAID.runeMapTarget end
+                    if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then mn = RAID.runeMapTarget end
                     local mapLabel = MAP_NAMES[mn] or ("Map " .. mn)
 
                     local _liveEntry = RAID_LIVE[RAID.raidId]
@@ -8066,7 +8064,7 @@ local function ResolveEntry()
                     if pm == "manual" then
                         if RAID.manualMatchMode == "primary" then
                             -- TAHAP 1: MATCH PREFERRED RANK -> HANYA RUNE YANG BOLEH JALAN!
-                            if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then 
+                            if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then 
                                 -- [SISTEM ANTI-MUBAZIR]
                                 if (raidEntry.mapId - 50000) == RAID.runeMapTarget then
                                     useRune = false -- Map sudah sama, simpan Rune-nya!
@@ -8090,7 +8088,7 @@ local function ResolveEntry()
                         end
                     else
                         -- Mode selain Manual (ByRank, dll)
-                        if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then 
+                        if RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then 
                             if (raidEntry.mapId - 50000) == RAID.runeMapTarget then
                                 useRune = false
                             else
@@ -8707,7 +8705,7 @@ do
  if RAID.inMap and RAID.raidMapId then
  local rawMn = RAID.raidMapId - 50000
  -- Kalau Rune Map aktif, tampilkan map tujuan (bukan kendaraan)
- local mn = (RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20) and RAID.runeMapTarget or rawMn
+ local mn = (RAID.runeEnabled and RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19) and RAID.runeMapTarget or rawMn
  local nm = MAP_NAMES and MAP_NAMES[mn] or ("Map "..tostring(mn))
  local grade = (_runeGradeCache and _runeGradeCache[mn]) or ""
  local gs = grade ~= "" and grade ~= "?" and (" ["..grade.."]") or ""
@@ -8881,7 +8879,7 @@ do
 
  -- [PERBAIKAN 1: Default All Maps terpilih otomatis]
  if not next(RAID.preferMaps) then
-     for mn=1, 20 do RAID.preferMaps[mn] = true end
+     for mn=1, 19 do RAID.preferMaps[mn] = true end
  end
 
  local function UpdatePrefLabel()
@@ -8911,7 +8909,7 @@ do
     popup.ZIndex=9999; popup.ClipsDescendants=true
     Corner(popup, 10); Stroke(popup,Color3.fromRGB(100,180,255),1,0.2)
     local hdr=Frame(popup,C.BG3,UDim2.new(1,0,0,HDR)); hdr.ZIndex=9999
-    local cntL=Label(hdr,"0/20 Selected",10.5,Color3.fromRGB(100,180,255),Enum.Font.GothamBold)
+    local cntL=Label(hdr,"0/18 Selected",10.5,Color3.fromRGB(100,180,255),Enum.Font.GothamBold)
     cntL.Size=UDim2.new(0.6,0,1,0); cntL.Position=UDim2.new(0,8,0,0); cntL.ZIndex=9999
     local clrB=Btn(hdr,Color3.fromRGB(120,30,30),UDim2.new(0,48,0,20))
     clrB.Position=UDim2.new(1,-54,0.5,-10); Corner(clrB,5); clrB.ZIndex=9999
@@ -8920,7 +8918,7 @@ do
     local sf=Instance.new("ScrollingFrame"); sf.Parent=popup
     sf.BackgroundTransparency=1; sf.BorderSizePixel=0
     sf.Position=UDim2.new(0,0,0,HDR); sf.Size=UDim2.new(1,0,0,scrollH)
-    sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+    sf.CanvasSize=UDim2.new(0,0,0,20*(IH+2)+8)
     sf.ScrollBarThickness=5; sf.ScrollBarImageColor3=Color3.fromRGB(100,180,255)
     sf.ZIndex=9999
     local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder
@@ -8929,9 +8927,9 @@ do
     local rr={}
     local function UpdCnt()
         local n=0; for _ in pairs(RAID.preferMaps) do n=n+1 end
-        cntL.Text=n.."/20 Selected"
+        cntL.Text=n.."/19 Selected"
     end
-    for mn=1,20 do
+    for mn=1,19 do
         local it=Instance.new("TextButton",sf)
         it.Size=UDim2.new(1,-4,0,IH); it.LayoutOrder=mn
         it.BackgroundColor3=RAID.preferMaps[mn] and C.BORD or C.BG3
@@ -8962,7 +8960,7 @@ do
     end
     UpdCnt()
     clrB.MouseButton1Click:Connect(function()
-        for mn=1,20 do
+        for mn=1,19 do
             RAID.preferMaps[mn]=nil
             if rr[mn] then
                 rr[mn].tick.Text=""
@@ -9126,11 +9124,11 @@ do
  runeArr.Size=UDim2.new(0,18,1,0); runeArr.Position=UDim2.new(1,-20,0,0)
 
  local function SyncRuneState()
-    if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then RAID.runeEnabled=true
+    if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then RAID.runeEnabled=true
     else RAID.runeEnabled=false end
  end
  SyncRuneState()
- if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 20 then
+ if RAID.runeMapTarget >= 1 and RAID.runeMapTarget <= 19 then
     runeDDVal.Text=" Map "..RAID.runeMapTarget.." - "..(MAP_NAMES[RAID.runeMapTarget] or "")
     runeDDVal.TextColor3=C.ACC2
  end
@@ -9154,7 +9152,7 @@ do
     local sf=Instance.new("ScrollingFrame",popup)
     sf.Size=UDim2.new(1,0,1,0); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
     sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC; sf.ZIndex=9999
-    sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
+    sf.CanvasSize=UDim2.new(0,0,0,20*(IH+2)+8)
     local sfl=Instance.new("UIListLayout",sf)
     sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
     Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
@@ -9176,7 +9174,7 @@ do
         runeDDVal.Text=" -- NOT SELECTED --"; runeDDVal.TextColor3=C.TXT3
     end)
     
-    for mn=1,20 do
+    for mn=1,19 do
         local ml=mn; local mnm=MAP_NAMES[mn] or ("Map "..mn)
         local it=Instance.new("TextButton",sf)
         it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
@@ -9506,7 +9504,7 @@ do
   curPM = 1; RAID.pickMode = PM_KEYS[1]; RAID.difficulty = PM_TO_DIFF[PM_KEYS[1]]; RAID.snapshotMapId = nil
   pmDDLbl.Text = " "..PM_OPTS[1]; pmDDLbl.TextColor3 = PM_COLORS[1]; pmDescLbl.Text = PM_DESC[1]
   for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
-  for mn = 1, 20 do RAID.preferMaps[mn] = true end
+  for mn = 1, 19 do RAID.preferMaps[mn] = true end
   pcall(UpdatePrefLabel)
   for _, g in ipairs(GRADE_LIST) do RAID.runeGrades[g] = nil end
   pcall(RefreshRankDDLabel)
@@ -9545,7 +9543,7 @@ do
   for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
   if mapsStr ~= "" then
    for mn in mapsStr:gmatch("(%d+)") do
-    local n = tonumber(mn); if n and n >= 1 and n <= 20 then RAID.preferMaps[n] = true end
+    local n = tonumber(mn); if n and n >= 1 and n <= 19 then RAID.preferMaps[n] = true end
    end
   end
   pcall(UpdatePrefLabel)
@@ -9553,7 +9551,7 @@ do
   if gradesStr ~= "" then for g in gradesStr:gmatch("([^|]+)") do RAID.runeGrades[g] = true end end
   pcall(RefreshRankDDLabel)
   RAID.runeMapTarget = runeTarget
-  if runeTarget >= 1 and runeTarget <= 20 then
+  if runeTarget >= 1 and runeTarget <= 19 then
    RAID.runeEnabled = true
    pcall(function() runeDDVal.Text = " Map "..runeTarget.." - "..(MAP_NAMES[runeTarget] or ""); runeDDVal.TextColor3 = C.ACC2 end)
   else
@@ -11620,7 +11618,7 @@ do
     local jtpArrow = Label(jtpHeader,">",13,Color3.fromRGB(80,200,120),Enum.Font.GothamBold)
     jtpArrow.Size = UDim2.new(0,22,1,0); jtpArrow.Position = UDim2.new(0,10,0,0)
 
-    local jtpHeaderLbl = Label(jtpHeader,"Join to Tower Player",14,C.TXT2,Enum.Font.GothamBold)
+    local jtpHeaderLbl = Label(jtpHeader,"⚡ Join to Tower Player",14,C.TXT2,Enum.Font.GothamBold)
     jtpHeaderLbl.Size = UDim2.new(1,-50,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
 
     local jtpBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
@@ -11650,6 +11648,18 @@ do
         jtpArrow.Text = jtpOpen and "v" or ">"
         if jtpOpen then task.defer(ResizeJTPBody) end
     end)
+
+    -- ── Info card ─────────────────────────────────────────────────────────
+    local infoCard = Frame(jtpInner, C.BG3, UDim2.new(1,0,0,0))
+    infoCard.LayoutOrder = 0; infoCard.AutomaticSize = Enum.AutomaticSize.Y; Corner(infoCard,10)
+    New("UIPadding",{Parent=infoCard,
+        PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),
+        PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)})
+    local infoLbl = Label(infoCard,
+        "SCAN = ambil semua player di server (global).\nPilih player yg kamu yakin ada di Tower Map 2,\nlalu tekan JOIN → masuk via hostId = UserId mereka.",
+        10, C.TXT3, Enum.Font.Gotham)
+    infoLbl.Size = UDim2.new(1,0,0,0); infoLbl.AutomaticSize = Enum.AutomaticSize.Y
+    infoLbl.TextWrapped = true; infoLbl.LineHeight = 1.3
 
     -- ── Status bar ────────────────────────────────────────────────────────
     local jtpStatCard = Frame(jtpInner, C.SURFACE, UDim2.new(1,0,0,28))
@@ -12176,13 +12186,13 @@ do
   -- Kumpulkan mapSelState untuk Attack
   local maMapKeys = {}
   if _maMapSelState then
-   for mn = 1, 20 do
+   for mn = 1, 19 do
     if _maMapSelState[mn] then table.insert(maMapKeys, tostring(mn)) end
    end
   end
   -- Kumpulkan RAID data lewat _RAID_SaveConfig logic (ambil nilai langsung)
   local raidMapKeys = {}
-  for mn = 1, 20 do
+  for mn = 1, 19 do
    if RAID.preferMaps[mn] then table.insert(raidMapKeys, tostring(mn)) end
   end
   local raidGradeKeys = {}
@@ -12276,7 +12286,7 @@ do
   pcall(function() if _setKillDDGlobal then _setKillDDGlobal(1) end end)
   pcall(function() if _setDelayDDGlobal then _setDelayDDGlobal(2) end end)
   if _maMapSelState then
-   for mn = 1, 20 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
+   for mn = 1, 19 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
   end
   pcall(UpdateMapDDLbl)
   -- Player (reset speed ke 16)
@@ -12433,10 +12443,10 @@ do
   pcall(function() if _setKillDDGlobal  then _setKillDDGlobal(killIdx)  end end)
   pcall(function() if _setDelayDDGlobal then _setDelayDDGlobal(delayIdx) end end)  -- Restore map selection Attack
   if _maMapSelState then
-   for mn = 1, 20 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
+   for mn = 1, 19 do _maMapSelState[mn] = nil; MR.selected[mn] = nil end
    if maMaps ~= "" then
     for mn in maMaps:gmatch("(%d+)") do
-     local n = tonumber(mn); if n and n>=1 and n<=20 then _maMapSelState[n]=true; MR.selected[n]=true end
+     local n = tonumber(mn); if n and n>=1 and n<=19 then _maMapSelState[n]=true; MR.selected[n]=true end
     end
    end
   end
