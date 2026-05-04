@@ -13498,7 +13498,9 @@ task.spawn(function()
     if not _reEnter then return end
     _reEnter.OnClientEvent:Connect(function(data)
         if type(data) ~= "table" then return end
-        if data.mapId then
+        -- [GODMODE FIX] Hanya update _st2CurrentMapId jika mapId == 50301 (Single Tower Map 2)
+        -- Jangan ikut-capture mapId SIEGE (50201-50205), ASC (50302-50326), atau RAID (50101-50120)
+        if data.mapId and data.mapId == 50301 then
             _st2CurrentMapId = data.mapId
         end
     end)
@@ -13506,27 +13508,41 @@ end)
 
 -- 
 
+-- ST2 MapId yang valid: HANYA 50301 (Single Tower Map 2)
+-- BUKAN 50201-50205 (SIEGE), BUKAN 50302-50326 (ASC Tower lain), BUKAN 50101-50120 (RAID)
+local ST2_MAP_ID = 50301
+
 local function ST2IsInMap()
-    -- Sumber 1: cek workspace MapId via attribute (berbagai nama)
+    -- Sumber 1: cek workspace MapId via attribute — HANYA cocok jika 50301
     local ok, wm = pcall(function()
         return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
     end)
-    if ok and type(wm) == "number" and wm > 50000 and wm ~= 50001 and wm ~= 50002 then
+    if ok and type(wm) == "number" and wm == ST2_MAP_ID then
         return true
     end
-    -- Sumber 2: dari EnterRaidsUpdateInfo
-    if type(_st2CurrentMapId) == "number" and _st2CurrentMapId > 50000 and _st2CurrentMapId ~= 50001 and _st2CurrentMapId ~= 50002 then
+    -- Sumber 2: dari EnterRaidsUpdateInfo — HANYA 50301
+    if type(_st2CurrentMapId) == "number" and _st2CurrentMapId == ST2_MAP_ID then
         return true
     end
-    -- Sumber 3 (paling reliable): ada enemy hidup di Enemys folder
-    local FOLDERS = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy"}
-    for _, fname in ipairs(FOLDERS) do
-        local f = workspace:FindFirstChild(fname)
-        if f then
-            for _, e in ipairs(f:GetChildren()) do
-                if e:IsA("Model") and e:GetAttribute("EnemyGuid") then
-                    local hum = e:FindFirstChildOfClass("Humanoid")
-                    if hum and hum.Health > 0 then return true end
+    -- Sumber 3: ada enemy hidup DAN MapId tidak dikenali sebagai map lain
+    -- Guard: jangan return true jika player di SIEGE (50201-50205), ASC (50302-50326), atau RAID (50101-50120)
+    if ok and type(wm) == "number" then
+        if (wm >= 50201 and wm <= 50205) then return false end -- SIEGE map
+        if (wm >= 50101 and wm <= 50120) then return false end -- RAID map
+        if (wm >= 50302 and wm <= 50326) then return false end -- ASC Tower lain
+        if (wm >= 50001 and wm <= 50020) then return false end -- Lobby/basemap
+    end
+    -- Sumber 3 hanya aktif jika ST2.running dan MapId tidak bisa dibaca / tidak dikenali
+    if ST2 and ST2.running then
+        local FOLDERS = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy"}
+        for _, fname in ipairs(FOLDERS) do
+            local f = workspace:FindFirstChild(fname)
+            if f then
+                for _, e in ipairs(f:GetChildren()) do
+                    if e:IsA("Model") and e:GetAttribute("EnemyGuid") then
+                        local hum = e:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 then return true end
+                    end
                 end
             end
         end
