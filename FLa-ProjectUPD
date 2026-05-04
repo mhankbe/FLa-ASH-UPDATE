@@ -6870,8 +6870,10 @@ function ParseChatLine(text)
  -- Jangan buat entry RAID_LIVE di sini - tunggu server
  else
  -- Update isAscension = false untuk entry normal di RAID_LIVE
+ -- [BUG FIX] Hanya reset entry yang mapId-nya di range RAID Normal (50001-50020)
+ -- Jangan sentuh entry ASC Tower (50301-50326) meskipun mapNum-nya sama
  for rid, entry in pairs(RAID_LIVE) do
- if entry.mapId and (entry.mapId - 50000) == mapNum then
+ if entry.mapId and (entry.mapId - 50000) == mapNum and not (entry.mapId >= 50301 and entry.mapId <= 50326) then
  entry.isAscension = false
  end
  end
@@ -7376,6 +7378,11 @@ RebuildRaidList = function()
   -- Auto-mark isAscension jika raidId >= 935001 (dari server, meskipun chat belum datang)
   local ridAbs = e.raidId and (e.raidId < 0 and math.abs(e.raidId) or e.raidId) or 0
   if ridAbs >= 935001 and not e.isAscension then
+   e.isAscension = true
+  end
+  -- [BUG FIX] Auto-mark isAscension berdasarkan mapId range ASC Tower (50301-50326)
+  -- Ini mencegah flag corrupt (dari chat parser) meloloskan entry ASC ke RAID Normal
+  if e.mapId and e.mapId >= 50301 and e.mapId <= 50326 then
    e.isAscension = true
   end
   if e.isAscension then
@@ -9211,6 +9218,8 @@ local function ResolveEntry()
                     if not entry then return false end
                     -- Cek flag isAscension dari entry RAID_ID_LIST itu sendiri
                     if entry.isAscension == true then return false end
+                    -- Cek mapId range Ascension Tower (50301-50326) - safety net jika flag corrupt
+                    if entry.mapId and entry.mapId >= 50301 and entry.mapId <= 50326 then return false end
                     -- Cek raidId range Ascension Tower (confirmed SimpleSPY: 936501+)
                     -- Server pakai raidId >= 935001 untuk semua Ascension Tower event
                     if entry.id and entry.id >= 935001 then return false end
@@ -11457,8 +11466,6 @@ do
  New("UIStroke",{Parent=aCtrlRow, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.2})
  local aTogLbl = Label(aCtrlRow,"Enable Auto Ascension",13,C.TXT,Enum.Font.GothamBold)
  aTogLbl.Size = UDim2.new(1,-68,0,20); aTogLbl.Position = UDim2.new(0,14,0.5,-10)
- local aSubLbl = Label(aCtrlRow,"Hanya Ascension Tower",10,C.TXT3,Enum.Font.Gotham)
- aSubLbl.Size = UDim2.new(1,-68,0,14); aSubLbl.Position = UDim2.new(0,14,0.5,10)
  local aPill = Btn(aCtrlRow, C.PILL_OFF, UDim2.new(0,52,0,30))
  aPill.AnchorPoint = Vector2.new(1,0.5); aPill.Position = UDim2.new(1,-12,0.5,0); Corner(aPill,13)
  local aKnob = Frame(aPill, C.KNOB_OFF, UDim2.new(0,24,0,24))
@@ -11881,9 +11888,9 @@ do
   Color3.fromRGB(255,180,50),  -- Manual: kuning
  }
  local APM_DESC  = {
-  "Pilih Tower mapNum TERENDAH yang tersedia",
-  "Pilih Tower mapNum TERTINGGI yang tersedia",
-  "Filter grade + rune item (mirip Auto Raid)",
+  ".",
+  ".",
+  ".",
  }
  local curAPM = 1
  ASC.pickMode = APM_KEYS[curAPM]
