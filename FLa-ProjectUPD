@@ -12514,7 +12514,7 @@ StartSiegeLoop = function()
             end
 
             _siegeInterrupt = true
-            if not MODE:WaitAndRequest("siege", 15) then
+            if not MODE:WaitAndRequest("siege", 5) then
                 _siegeInterrupt = false
                 task.wait(2); break
             end
@@ -12528,8 +12528,9 @@ StartSiegeLoop = function()
                     local tpWait = 0
                     while tpWait < 1 and SIEGE.running do
                         task.wait(0.5); tpWait = tpWait + 0.5
-                    local curMapNow = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
-                    if curMapNow == baseMapId then
+                        local curMap = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+                        if curMap == baseMapId then break end
+                    end
                         SiegeStatus(("[OK] TP %d sukses, stabilize..."):format(baseMapId), Color3.fromRGB(80,220,80))
                         task.wait(0.5) -- beri waktu server register posisi player di map
                     else
@@ -12599,7 +12600,7 @@ StartSiegeLoop = function()
             local _entered = false
             local _entWait = 0
             local _sinceLastFire = 2.5 -- sudah fire di atas, beri jeda 4s sebelum retry pertama
-            while not _entered and _entWait < 15 and SIEGE.running do
+            while not _entered and _entWait < 5 and SIEGE.running do
                 task.wait(0.5); _entWait = _entWait + 0.5; _sinceLastFire = _sinceLastFire + 0.5
                 -- Cek 1: MapId sudah di range Siege (50201-50205)
                 local inSiege, _ = IsInSiegeMap()
