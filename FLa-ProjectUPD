@@ -2047,25 +2047,6 @@ function AttackLoop_Mass(onStatus)
 end
 
 -- Cari musuh terdekat dari posisi karakter utama
-function GetRandomEnemy()
- local char = LP.Character
- if not char then return nil end
- local hrp = char:FindFirstChild("HumanoidRootPart")
- if not hrp then return nil end
- local myPos = hrp.Position
- local randomDist = nil
- for _, e in ipairs(GetEnemies()) do
- if not IsDead(e) and e.hrp then
- local d = (e.hrp.Position - myPos)
- if d < randomDist then
- randomtDist = d
- random = e
- end
- end
- end
- return random
-end
-
 -- Pilih musuh secara random dari daftar yang masih hidup
 function GetRandomEnemy()
  local alive = {}
@@ -2442,6 +2423,24 @@ function DoMassAttack(on)
  end
 end
 
+-- [BUGFIX] Forward declare IsInSiegeMap agar WaitSiegeDone tidak nil-call
+-- Definisi lengkap ada di bawah bersama SIEGE system (~line 12149)
+-- Tanpa ini: "attempt to call a nil value" karena WaitSiegeDone dipanggil jauh sebelum deklarasi
+IsInSiegeMap = IsInSiegeMap or function()
+    local ok, wm = pcall(function()
+        return workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+    end)
+    if ok and type(wm) == "number" then
+        if wm >= 50201 and wm <= 50205 then return true, wm end
+        local ok2, hasCRE = pcall(function()
+            local mapFolder = workspace:FindFirstChild("Map")
+            return mapFolder and mapFolder:FindFirstChild("CityRaidEnter") ~= nil
+        end)
+        if ok2 and hasCRE then return true, nil end
+    end
+    return false, nil
+end
+
 -- ============================================================
 function WaitSiegeDone()
     local waited = 0
@@ -2473,100 +2472,6 @@ function WaitSiegeDone()
         end
     end
 end
-function DoMassAttack(on)
- if on then
- _mOn = true
- MA.running = true
- MA.killed = 0
- MA.collected = 0
- StopGoldMagnet() -- [v258] Reset magnet sebelum start
- StartInstantGoldCollector(true) -- [v258] Instant collect (fix: listen ke folder)
- StartDestroyWorker(function() return MA.running end)
- StartGoldMagnet(function() return MA.running end) -- [v258] Super magnet
- MA.thread = task.spawn(function()
- local _maStart = os.time()
- local function maStatus(msg, col)
- if _maStatusLbl then
- local dur = os.time() - _maStart
- local ts = string.format("%02d:%02d:%02d", math.floor(dur/3600), math.floor(dur/60)%60, dur%60)
- _maStatusLbl.Text = "["..ts.."] "..msg
- _maStatusLbl.TextColor3 = col or C.ACC2
- end
- end
- while MA.running do
- -- [v252] Pause kalau ada fitur prioritas lebih tinggi aktif
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
-
- local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
-
- if #mapsToUse == 0 then
- local cont = AttackLoop_Mass(function(msg)
- maStatus(msg)
- end)
- if cont == "interrupted" then
- WaitRaidDone()
- elseif not cont or not MA.running then
- break
- end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- task.wait(MR.nextMapDelay)
- else
- -- [FIX] while+index manual: loop balik ke map pertama setelah map terakhir
- -- Rebuild _fresh tiap iterasi dari MR.selected terbaru
- -- -> langsung respon kalau user ubah selection di tengah jalan
- local _mapIdx = 1
- while MA.running do
- repeat
- local _fresh = {}
- for i = 1, 20 do
- if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
- end
- if #_fresh == 0 then mapsToUse = {}; break end
- if _mapIdx > #_fresh then _mapIdx = 1 end
- local m = _fresh[_mapIdx]
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
- if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
- maStatus("-> TP ke "..m.name.."...", Color3.fromRGB(180,220,255))
- TpMap(m)
- task.wait(MR.teleportDelay)
- if not MA.running then break end
- local cont = AttackLoop_Mass(function(msg)
- maStatus("["..m.name.."] "..msg)
- end)
- if cont == "interrupted" then
- WaitRaidDone()
- elseif not cont or not MA.running then
- break
- end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
- maStatus("[OK] SUCCES "..m.name.." - Go to...", Color3.fromRGB(100,255,150))
- task.wait(MR.nextMapDelay)
- _mapIdx = _mapIdx + 1
- if _mapIdx > #_fresh then
- _mapIdx = 1
- end
- until true
- end
- end
- end
- _mOn = false
- MA.running = false
- if _maStatusLbl then
- _maStatusLbl.Text = "[.] SUCCES"
- _maStatusLbl.TextColor3 = C.DIM
- end
- end)
- else
- _mOn = false; MA.running = false
- if MA.thread then pcall(function() task.cancel(MA.thread) end); MA.thread = nil end
- if _maStatusLbl then _maStatusLbl.Text = "Idle" end
- end
-end
-
 -- ============================================================
 -- [FIXED] FUNGSI REJOIN SERVER (ANTI-NIL)
 -- ============================================================
