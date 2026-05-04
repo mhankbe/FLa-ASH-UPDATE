@@ -6870,10 +6870,8 @@ function ParseChatLine(text)
  -- Jangan buat entry RAID_LIVE di sini - tunggu server
  else
  -- Update isAscension = false untuk entry normal di RAID_LIVE
- -- [BUG FIX] Hanya reset entry yang mapId-nya di range RAID Normal (50001-50020)
- -- Jangan sentuh entry ASC Tower (50301-50326) meskipun mapNum-nya sama
  for rid, entry in pairs(RAID_LIVE) do
- if entry.mapId and (entry.mapId - 50000) == mapNum and not (entry.mapId >= 50301 and entry.mapId <= 50326) then
+ if entry.mapId and (entry.mapId - 50000) == mapNum then
  entry.isAscension = false
  end
  end
@@ -7313,8 +7311,13 @@ TriggerEntryWakeup = function()
         -- Data sudah stabil selama 3 detik. Bangunkan RAID dan ASC bersamaan.
         -- Masing-masing akan resolve entry mereka sendiri dan filter sesuai setting user.
         -- TryClaimMapLock menjamin hanya satu yang bisa masuk map dalam satu waktu.
-        if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+        -- [RACE FIX] Fire ASC wakeup DULU, baru RAID setelah 1 frame.
+        -- Ini memberi ASC loop kesempatan untuk set _ascBusy/ASC.inMap sebelum RAID
+        -- lolos guard dan mencoba masuk map di frame yang sama (race condition → crash).
         if _ascWakeup  then pcall(function() _ascWakeup:Fire()  end) end
+        task.defer(function()
+            if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+        end)
     end)
 end
 -- ============================================================
@@ -7378,11 +7381,6 @@ RebuildRaidList = function()
   -- Auto-mark isAscension jika raidId >= 935001 (dari server, meskipun chat belum datang)
   local ridAbs = e.raidId and (e.raidId < 0 and math.abs(e.raidId) or e.raidId) or 0
   if ridAbs >= 935001 and not e.isAscension then
-   e.isAscension = true
-  end
-  -- [BUG FIX] Auto-mark isAscension berdasarkan mapId range ASC Tower (50301-50326)
-  -- Ini mencegah flag corrupt (dari chat parser) meloloskan entry ASC ke RAID Normal
-  if e.mapId and e.mapId >= 50301 and e.mapId <= 50326 then
    e.isAscension = true
   end
   if e.isAscension then
@@ -8244,6 +8242,10 @@ function StartAscensionLoop()
      if not ASC.running then break end
     end
 
+    -- [RACE FIX] Set _ascBusy SEBELUM TryClaimMapLock agar RAID guard (cek _ascBusy/ASC.inMap)
+    -- langsung blokir RAID bahkan selama ASC masih proses acquire lock
+    _ascBusy = true
+
     -- [v52 FIX] Atomic lock: cegah RAID masuk bersamaan saat ASC baru lolos guard
     -- Tanpa lock ini: RAID dan ASC bisa lolos guard hampir bersamaan (keduanya lihat inMap=false)
     -- lalu keduanya coba TP player ke map berbeda dalam waktu bersamaan
@@ -8254,7 +8256,7 @@ function StartAscensionLoop()
       AscStatusUpdate("[||] Tunggu slot masuk map bebas...", Color3.fromRGB(200,160,255))
       task.wait(0.2); _lockWait = _lockWait + 0.2
      end
-     if not ASC.running then ReleaseMapLock("asc"); break end
+     if not ASC.running then ReleaseMapLock("asc"); _ascBusy = false; break end
     end
 
     local mn = raidEntry.mapNum
@@ -9192,8 +9194,9 @@ function StartRaidLoop()
   -- _ascBusy diset false oleh ASC hanya saat benar-benar tidak ada Tower lagi
   local _rGuard = 0
   while RAID.running and _rGuard < 90 do
-   -- Cek ASC busy dulu (prioritas)
-   if ASC and ASC.running and _ascBusy then
+   -- [RACE FIX] Cek ASC.inMap LANGSUNG (bukan hanya _ascBusy) karena _ascBusy bisa belum diset
+   -- pada window race antara TryClaimMapLock release dan _ascBusy = true di ASC loop
+   if ASC and ASC.running and (ASC.inMap or _ascBusy) then
     RaidStatusUpdate("[||] ASC aktif - RAID standby...", Color3.fromRGB(180,100,255))
     task.wait(0.5); _rGuard = _rGuard + 0.5
     continue
@@ -9218,8 +9221,6 @@ local function ResolveEntry()
                     if not entry then return false end
                     -- Cek flag isAscension dari entry RAID_ID_LIST itu sendiri
                     if entry.isAscension == true then return false end
-                    -- Cek mapId range Ascension Tower (50301-50326) - safety net jika flag corrupt
-                    if entry.mapId and entry.mapId >= 50301 and entry.mapId <= 50326 then return false end
                     -- Cek raidId range Ascension Tower (confirmed SimpleSPY: 936501+)
                     -- Server pakai raidId >= 935001 untuk semua Ascension Tower event
                     if entry.id and entry.id >= 935001 then return false end
@@ -9427,6 +9428,16 @@ local function ResolveEntry()
  end
 
  local raidEntry = ResolveEntry()
+ -- [RACE FIX] Jika ASC ON dan baru lolos dari waiting loop (event baru datang),
+ -- beri ASC sedikit waktu untuk set ASC.inMap/lock sebelum RAID lanjut resolve.
+ -- Ini menutup race window: keduanya bangun dari TriggerEntryWakeup di frame yang sama.
+ if ASC and ASC.running and raidEntry then
+  task.wait(0.05) -- yield 1 frame agar ASC loop sempat set inMap/lock duluan
+  -- Re-cek setelah yield: kalau ASC sudah inMap atau lock, RAID harus mundur
+  if ASC.inMap or _ascBusy or _MAP_ENTER_LOCK == "asc" then
+   raidEntry = nil
+  end
+ end
  -- [v56 FIX] RAID standby selama ASC.running=true DAN masih ada Tower match di event saat ini
  -- ResolveAscEntry() ~= nil = masih ada Tower yg cocok filter ASC -> RAID harus tunggu
  -- ResolveAscEntry() = nil  = tidak ada Tower match sama sekali -> RAID boleh jalan
@@ -9547,6 +9558,13 @@ local function ResolveEntry()
  -- Tidak diblokir oleh ASC.inMap atau _ascDominatedThisEvent
  -- RAID hanya boleh jalan kalau ResolveAscEntry() = nil (tidak ada Tower match sama sekali)
  if ASC and ASC.running then
+     -- [RACE FIX] Cek ASC.inMap langsung, bukan hanya ResolveAscEntry
+     -- ASC.inMap bisa sudah true meskipun ResolveAscEntry() belum sempat dikonfirmasi
+     if ASC.inMap then
+         RaidStatusUpdate("[||] ASC sedang masuk Tower - RAID standby...", Color3.fromRGB(180,100,255))
+         task.wait(1)
+         break
+     end
      local _ascEntry = ResolveAscEntry and ResolveAscEntry()
      if _ascEntry then
          RaidStatusUpdate("[||] AUTO RAID ASCENSION aktif & ada Tower match - Normal Raid standby...", Color3.fromRGB(180,100,255))
