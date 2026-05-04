@@ -12580,16 +12580,11 @@ StartSiegeLoop = function()
                 local grtRe = _RE:FindFirstChild("GetRaidTeamInfos")
                 if grtRe then task.spawn(function() pcall(function() grtRe:InvokeServer() end) end) end
                 task.wait(0.3)
-                -- [v59 FIX] Step 3a: LocalPlayerTeleport (bukan Start) dulu, dengan hostId
-                -- Tanpa hostId server reject -> player di-TP balik ke baseMapId
-                -- Urutan ini sesuai JTP flow yang confirmed bekerja
-                local ltpRe2 = _RE:FindFirstChild("LocalPlayerTeleport")
-                if ltpRe2 then pcall(function() ltpRe2:FireServer({mapId=d.tpMapId, hostId=LP.UserId}) end) end
-                task.wait(0.35)
-                -- [v59 FIX] Step 3b: StartLocalPlayerTeleport dengan hostId (WAJIB ada hostId)
-                -- Sebelumnya: {mapId=d.tpMapId} tanpa hostId -> server reject -> TP balik ke baseMap
+                -- Step 3: StartLocalPlayerTeleport TANPA hostId (confirmed v41)
+                -- hostId menyebabkan server treat player sebagai host, bukan peserta
+                -- -> count/timer/reward hilang karena tidak terdaftar sebagai participant
                 local stpRe = _RE:FindFirstChild("StartLocalPlayerTeleport")
-                if stpRe then pcall(function() stpRe:FireServer({mapId=d.tpMapId, hostId=LP.UserId}) end) end
+                if stpRe then pcall(function() stpRe:FireServer({mapId=d.tpMapId}) end) end
                 task.wait(0.5)
                 -- Step 4: EquipHeroWithData
                 local eqRe = _RE:FindFirstChild("EquipHeroWithData")
