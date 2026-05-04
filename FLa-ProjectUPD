@@ -9716,8 +9716,8 @@ local function ResolveEntry()
  RaidStatusUpdate("[~] Waiting...", Color3.fromRGB(180,100,255))
  local _tpOk = false
  local _tpWait = 0
- while not _tpOk and _tpWait < 10 and RAID.running do
-  task.wait(0.3); _tpWait = _tpWait + 0.3
+ while not _tpOk and _tpWait < 5 and RAID.running do
+  task.wait(1); _tpWait = _tpWait + 1
   pcall(function()
    local wMapId = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
    if wMapId then
@@ -9830,7 +9830,7 @@ local function ResolveEntry()
   return IsBossEarly(name)
  end
 
- while _loadWait < 8 and RAID.running and not _raidDone do
+ while _loadWait < 5 and RAID.running and not _raidDone do
       task.wait(0.5); _loadWait = _loadWait + 0.5
       if _loadWait >= 1 and not _earlyBoss then
        -- [GODMODE FIX] Paksa refresh fresh tiap iterasi — tidak ada stale data
@@ -9842,20 +9842,6 @@ local function ResolveEntry()
     _earlyBoss = e; break
    end
   end
- end
- -- [FIX] Jangan break hanya karena boss terdeteksi - validasi posisinya juga
- -- Boss yang baru spawn sering punya posisi Y tidak valid (masih falling/loading)
- if _earlyBoss then
-  local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
-  -- Posisi valid: Y > -200, magnitude > 1 (bukan 0,0,0), dan sudah stabil (>= 1.5s)
-  if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then
-   break -- Boss terdeteksi DAN posisinya sudah valid
-  end
-  -- Belum valid: reset earlyBoss agar dicari ulang di iterasi berikut
-  if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then
-   _earlyBoss = nil -- posisi buruk, cari ulang
-  end
- end
  end
 
  if RAID.running and not RAID._raidDone and RAID.autoKillBoss then
@@ -9944,7 +9930,7 @@ local function ResolveEntry()
  end
  end))
 
- while RAID.running and not boss and waitBoss < 30 and not RAID._raidDone do
+ while RAID.running and not boss and waitBoss < 5 and not RAID._raidDone do
  _freshCacheTime = 0  -- [GODMODE FIX] paksa refresh tiap iterasi
  for _, e in ipairs(GetFreshEnemies()) do
  if IsBossWithHint(e.model.Name) then boss = e; break end
@@ -12528,9 +12514,6 @@ StartSiegeLoop = function()
                     local tpWait = 0
                     while tpWait < 1 and SIEGE.running do
                         task.wait(0.5); tpWait = tpWait + 0.5
-                        local curMap = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
-                        if curMap == baseMapId then break end
-                    end
                     local curMapNow = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
                     if curMapNow == baseMapId then
                         SiegeStatus(("[OK] TP %d sukses, stabilize..."):format(baseMapId), Color3.fromRGB(80,220,80))
