@@ -12271,7 +12271,7 @@ local function GetSiegeEnemies()
 end
 
 local function SiegeBlindFire()
-    local targets = {30}
+    local targets = {}
     pcall(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
             if obj:IsA("Model") then
@@ -12458,7 +12458,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
         -- Ambil musuh hidup dari workspace (sama persis logika MA Kill All)
         local rawEnemies = GetSiegeEnemies()
         local alive = 0
-        local targets = {30}
+        local targets = {}
         for _, e in ipairs(rawEnemies) do
             if not _deadG_Siege[e.guid] then
                 alive = alive + 1
@@ -12502,7 +12502,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
             lastKill = SIEGE.killed
             stuckT   = 0
         else
-            stuckT = stuckT + 0.01
+            stuckT = stuckT + 0.08
             -- -- Kondisi B: tidak bisa bunuh 1 musuh dalam STUCK_LIMIT detik -> skip --
             if stuckT >= STUCK_LIMIT then
                 if onStatus then onStatus("[!] Stuck "..STUCK_LIMIT.."s - Force exit Siege") end
@@ -12528,7 +12528,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
             end
         end
 
-        task.wait(0.01)
+        task.wait(0.08)
     end
 
     cleanup()
@@ -13153,7 +13153,7 @@ local function DungeonAttackLoop(onStatus)
 
         -- Ambil semua musuh hidup (SAMA PERSIS dengan GetEnemies() Mass Attack)
         local alive   = 0
-        local targets = {30}
+        local targets = {}
         for _, e in ipairs(GetEnemies()) do
             if not _deadG_D[e.guid] then
                 if e.model and e.model.Parent then
