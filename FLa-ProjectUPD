@@ -9843,6 +9843,20 @@ local function ResolveEntry()
    end
   end
  end
+ -- [FIX] Jangan break hanya karena boss terdeteksi - validasi posisinya juga
+ -- Boss yang baru spawn sering punya posisi Y tidak valid (masih falling/loading)
+ if _earlyBoss then
+  local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
+  -- Posisi valid: Y > -200, magnitude > 1 (bukan 0,0,0), dan sudah stabil (>= 1.5s)
+  if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then
+   break -- Boss terdeteksi DAN posisinya sudah valid
+  end
+  -- Belum valid: reset earlyBoss agar dicari ulang di iterasi berikut
+  if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then
+   _earlyBoss = nil -- posisi buruk, cari ulang
+  end
+ end
+ end
 
  if RAID.running and not RAID._raidDone and RAID.autoKillBoss then
  local BOSS_KEYS = {
