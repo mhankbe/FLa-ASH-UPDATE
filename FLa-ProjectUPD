@@ -1423,8 +1423,7 @@ end
 -- Cache 0.5 detik agar tidak spam GetChildren() terlalu sering.
 -- Dipakai oleh SEMUA fitur: MA, RAID, ASC, SIEGE, Dungeon, ST2.
 -- ============================================================
-local ENEMY_FOLDERS_ALL = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy",
-                           "Bosses","Boss","RaidBoss","RaidEnemys","Monsters","Monster"}
+local ENEMY_FOLDERS_ALL = {"Enemys"}
 local _freshCache      = {}
 local _freshCacheTime  = 0
 local FRESH_CACHE_TTL  = 0.5  -- detik; refresh tiap 0.5s
@@ -1641,7 +1640,7 @@ local _heroAtkTick = 0 -- [PERBAIKAN 1] Mencegah nil error pada siklus attack
 -- [v256-FIX] Helper: validasi enemy guid masih punya HumanoidRootPart yang valid
 local function IsEnemyGuidValid(g)
  if not g then return false end
- local ENEMY_FOLDERS = {"Enemys", "EnemyCityRaid", "CityRaidEnemys", "Enemies", "Enemy"}
+ local ENEMY_FOLDERS = {"Enemys", "CityRaidEnemys"}
  for _, folderName in ipairs(ENEMY_FOLDERS) do
   local f = workspace:FindFirstChild(folderName)
   if f then
@@ -2895,7 +2894,7 @@ PGR100.Loop = function(msi)
     end
 
     if #stopIds == 0 then
-      setStatus100("[!] TARGET UNSELECT PLEASE!", Color3.fromRGB(255,100,60))
+      setStatus100("[!] TARGET UNSELECT!", Color3.fromRGB(255,100,60))
       setOff100()
       return
     end
@@ -8419,7 +8418,7 @@ function StartAscensionLoop()
       end
      end
      -- Pasang ChildAdded di semua folder enemy + scan existing children sekarang
-     for _, fname in ipairs({"Bosses","Boss","RaidBoss","Enemys","Enemy","Enemies","RaidEnemys","Monsters","Monster"}) do
+     for _, fname in ipairs({"Enemys"}) do
       local folder = workspace:FindFirstChild(fname)
       if folder then
        table.insert(_bossEventConns, folder.ChildAdded:Connect(_tryAddBoss))
@@ -8441,7 +8440,7 @@ function StartAscensionLoop()
      -- [FIX v50] Cari boss - max 40s (Tower butuh lebih lama dari RAID)
      -- Pakai GetFreshEnemies() (paksa refresh) tiap iterasi — tidak ada stale data
      local waitBoss = 0
-     while ASC.running and not boss and waitBoss < 40 and not _ascDone do
+     while ASC.running and not boss and waitBoss < 5 and not _ascDone do
       -- Paksa refresh cache tiap iterasi
       _freshCacheTime = 0
       local _bList = GetFreshEnemies()
@@ -8449,7 +8448,7 @@ function StartAscensionLoop()
        if IsBossAscWithHint(e.model.Name) then boss = e; break end
       end
       -- Fallback terakhir: scan workspace:GetDescendants() setelah 15s
-      if not boss and waitBoss >= 15 and waitBoss % 5 < 0.4 then
+      if not boss and waitBoss >= 5 and waitBoss % 5 < 0.4 then
        pcall(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
          if obj:IsA("Model") and IsBossAscWithHint(obj.Name) then
@@ -9926,7 +9925,7 @@ local function ResolveEntry()
  end
  end
  end
- for _, fname in ipairs({"Bosses","Boss","RaidBoss","Enemys","Enemy","Enemies","RaidEnemys","Monsters"}) do
+ for _, fname in ipairs({"Enemys"}) do
  local folder = workspace:FindFirstChild(fname)
  if folder then
  table.insert(_bossEventConns, folder.ChildAdded:Connect(_tryAddBossFromObj))
@@ -13534,7 +13533,7 @@ local function ST2IsInMap()
     end
     -- Sumber 3 hanya aktif jika ST2.running dan MapId tidak bisa dibaca / tidak dikenali
     if ST2 and ST2.running then
-        local FOLDERS = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy"}
+        local FOLDERS = {"Enemys"}
         for _, fname in ipairs(FOLDERS) do
             local f = workspace:FindFirstChild(fname)
             if f then
@@ -13738,7 +13737,7 @@ function StartST2Loop()
                 -- Fungsi pembantu
                 local function ST2GetCurrentEnemyGuids()
                     local guids = {}
-                    local FOLDERS = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy","Heros"}
+                    local FOLDERS = {"Enemys"}
                     for _, fname in ipairs(FOLDERS) do
                         local f = workspace:FindFirstChild(fname)
                         if f then
@@ -13753,7 +13752,7 @@ function StartST2Loop()
 
                 local function ST2GetTargets()
                     local targets = {}
-                    local FOLDERS = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy","Heros"}
+                    local FOLDERS = {"Enemys"}
                     local seen = {}
                     for _, fname in ipairs(FOLDERS) do
                         local f = workspace:FindFirstChild(fname)
@@ -15590,7 +15589,7 @@ do
  local hasTarget = false
  for _ in pairs(targets) do hasTarget = true; break end
  if not hasTarget then
- setSlot("[!] TARGET UNSELECT PLEASE!", Color3.fromRGB(255,100,60))
+ setSlot("[!] TARGET UNSELECT!", Color3.fromRGB(255,100,60))
  task.wait(1); break
  end
 
@@ -15950,7 +15949,7 @@ do
  local hasTarget = false
  for _ in pairs(PGR.targets[si]) do hasTarget = true; break end
  if not hasTarget then
- setStatus("[!] TARGET UNSELECT PLEASE!", Color3.fromRGB(255,100,60))
+ setStatus("[!] TARGET UNSELECT!", Color3.fromRGB(255,100,60))
  task.wait(1); break
  end
 
@@ -16048,7 +16047,7 @@ do
  for _ in pairs(PGR.targets[si]) do hasTarget = true; break end
  if not hasTarget then
  if PGR.statLbls[si] then
- PGR.statLbls[si].Text = "TARGET UNSELECT PLEASE!"
+ PGR.statLbls[si].Text = "TARGET UNSELECT!"
  PGR.statLbls[si].TextColor3 = Color3.fromRGB(255,100,60)
  end
  -- Tetap jalankan slot, dia akan loop tunggu target
