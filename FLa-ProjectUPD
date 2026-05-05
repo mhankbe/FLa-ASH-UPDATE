@@ -12178,9 +12178,6 @@ do
  local apmDescLbl = Label(ascInner, APM_DESC[curAPM], 10, C.TXT3, Enum.Font.GothamBold)
  apmDescLbl.LayoutOrder = 14; apmDescLbl.Size = UDim2.new(1,0,0,14)
 
- -- Manual-only cards (Grade filter + Rune Map) - tersembunyi kecuali manual
- local _ascManualSection -- forward declare
-
  apmDDBtn.MouseButton1Click:Connect(function()
   CloseActiveDD()
   local aP = apmDDBtn.AbsolutePosition; local aS = apmDDBtn.AbsoluteSize; local IH = 28
@@ -12210,7 +12207,6 @@ do
     curAPM = ii; ASC.pickMode = APM_KEYS[ii]
     apmDDLbl.Text = " "..APM_OPTS[ii]; apmDDLbl.TextColor3 = APM_COLORS[ii]
     apmDescLbl.Text = APM_DESC[ii]
-    if _ascManualSection then _ascManualSection.Visible = (APM_KEYS[ii] == "manual") end
     task.defer(ResizeAscBody)
    end)
   end
@@ -12218,151 +12214,6 @@ do
   _activeDDClose = function() popup:Destroy(); DDLayer.Visible=false end
  end)
 
- -- MANUAL SECTION: Grade filter + Rune Map (tersembunyi kecuali manual)
- _ascManualSection = Frame(ascInner, C.BLACK, UDim2.new(1,0,0,0))
- _ascManualSection.BackgroundTransparency = 1; _ascManualSection.AutomaticSize = Enum.AutomaticSize.Y
- _ascManualSection.LayoutOrder = 15; _ascManualSection.Visible = false
- local _ascManLayout = New("UIListLayout",{Parent=_ascManualSection, SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,6)})
-
- -- Grade Filter (Manual)
- local aGrHdr = Label(_ascManualSection,"FILTER GRADE",10,C.TXT3,Enum.Font.GothamBold)
- aGrHdr.LayoutOrder = 1; aGrHdr.Size = UDim2.new(1,0,0,14)
- local aGrCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
- aGrCard.LayoutOrder = 2; Corner(aGrCard,10); Stroke(aGrCard,C.BORD,1.5,0.3); Padding(aGrCard,6,6,10,10)
- local aGrRow = Frame(aGrCard,C.BLACK,UDim2.new(1,0,1,0)); aGrRow.BackgroundTransparency=1
- local aGrKeyL = Label(aGrRow,"Grade",11,C.TXT2,Enum.Font.GothamBold)
- aGrKeyL.Size = UDim2.new(0,72,1,0)
- local aGrDDBtn = Btn(aGrRow,C.BG3,UDim2.new(1,-82,1,0))
- aGrDDBtn.Position = UDim2.new(0,80,0,0); Corner(aGrDDBtn,6); Stroke(aGrDDBtn,C.BORD,1.5,0.25)
- local aGrDDVal = Label(aGrDDBtn," -- ANY GRADE --",11,C.TXT3,Enum.Font.GothamBold)
- aGrDDVal.Size = UDim2.new(1,-20,1,0); aGrDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local aGrArr = Label(aGrDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- aGrArr.Size = UDim2.new(0,18,1,0); aGrArr.Position = UDim2.new(1,-20,0,0)
-
- local function RefreshAscGradeLabel()
-  local ns={}
-  for _,g in ipairs(GRADE_LIST or {}) do
-   if ASC.runeGrades[g] then table.insert(ns,"["..g.."]") end
-  end
-  if #ns==0 then aGrDDVal.Text=" -- ANY GRADE --"; aGrDDVal.TextColor3=C.TXT3
-  else aGrDDVal.Text=" "..table.concat(ns," "); aGrDDVal.TextColor3=Color3.fromRGB(200,120,255) end
- end
-
- aGrDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local IH=30
-  local gl = GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
-  local SFH=math.min(#gl*(IH+4)+44,260)
-  local ab=aGrDDBtn.AbsolutePosition; local sz=aGrDDBtn.AbsoluteSize
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
-  popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4)
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
-  local sf=Instance.new("ScrollingFrame",popup)
-  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
-  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
-  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
-  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
-  local rb=Instance.new("TextButton",sf); rb.Size=UDim2.new(1,-8,0,IH); rb.LayoutOrder=0
-  rb.BackgroundColor3=C.RED; rb.BackgroundTransparency=0.55; rb.BorderSizePixel=0; rb.Text=""; rb.AutoButtonColor=false; rb.ZIndex=9999
-  Instance.new("UICorner",rb).CornerRadius=UDim.new(0,6)
-  local rl=Instance.new("TextLabel",rb); rl.Size=UDim2.new(1,-8,1,0); rl.Position=UDim2.new(0,8,0,0)
-  rl.BackgroundTransparency=1; rl.Text="x Reset ALL"; rl.TextSize=10
-  rl.Font=Enum.Font.GothamBold; rl.TextColor3=C.RED; rl.TextXAlignment=Enum.TextXAlignment.Left; rl.ZIndex=9999
-  rb.MouseButton1Click:Connect(function()
-   for _,g in ipairs(gl) do ASC.runeGrades[g]=nil end
-   CloseActiveDD(); RefreshAscGradeLabel()
-  end)
-  for i,grade in ipairs(gl) do
-   local gc=grade; local col=GRADE_COLORS_ASC[grade] or C.ACC; local isSel=ASC.runeGrades[gc]==true
-   local item=Instance.new("TextButton",sf)
-   item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
-   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local ck=Instance.new("TextLabel",item); ck.Size=UDim2.new(0,20,1,0); ck.Position=UDim2.new(0,4,0,0)
-   ck.BackgroundTransparency=1; ck.Text=isSel and "v" or ""; ck.TextSize=11
-   ck.Font=Enum.Font.GothamBold; ck.TextColor3=col; ck.TextXAlignment=Enum.TextXAlignment.Center; ck.ZIndex=9999
-   local nl=Instance.new("TextLabel",item); nl.Size=UDim2.new(1,-28,1,0); nl.Position=UDim2.new(0,26,0,0)
-   nl.BackgroundTransparency=1; nl.Text="Rank "..grade; nl.TextSize=11
-   nl.Font=Enum.Font.GothamBold; nl.TextColor3=isSel and Color3.fromRGB(255,255,255) or col
-   nl.TextXAlignment=Enum.TextXAlignment.Left; nl.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    local ns=not ASC.runeGrades[gc]; ASC.runeGrades[gc]=ns and true or nil
-    item.BackgroundColor3=ns and C.SURFACE or C.DD_BG; item.BackgroundTransparency=ns and 0.18 or 0.42
-    ck.Text=ns and "v" or ""; nl.TextColor3=ns and Color3.fromRGB(255,255,255) or col
-    RefreshAscGradeLabel()
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- Rune Map (Manual)
- local aRnHdr = Label(_ascManualSection,"RUNE MAP (Manual)",10,C.TXT3,Enum.Font.GothamBold)
- aRnHdr.LayoutOrder = 3; aRnHdr.Size = UDim2.new(1,0,0,14)
- local aRnCard = Frame(_ascManualSection, C.SURFACE, UDim2.new(1,0,0,40))
- aRnCard.LayoutOrder = 4; Corner(aRnCard,10); Stroke(aRnCard,C.BORD,1.5,0.3); Padding(aRnCard,6,6,10,10)
- local aRnRow = Frame(aRnCard,C.BLACK,UDim2.new(1,0,1,0)); aRnRow.BackgroundTransparency=1
- local aRnKeyL = Label(aRnRow,"Auto Item",11,C.TXT2,Enum.Font.GothamBold)
- aRnKeyL.Size = UDim2.new(0,72,1,0)
- local aRnDDBtn = Btn(aRnRow,C.BG3,UDim2.new(1,-82,1,0))
- aRnDDBtn.Position = UDim2.new(0,80,0,0); Corner(aRnDDBtn,6); Stroke(aRnDDBtn,C.BORD,1.5,0.25)
- local aRnDDVal = Label(aRnDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
- aRnDDVal.Size = UDim2.new(1,-20,1,0); aRnDDVal.TextTruncate = Enum.TextTruncate.AtEnd
- local aRnArr = Label(aRnDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- aRnArr.Size = UDim2.new(0,18,1,0); aRnArr.Position = UDim2.new(1,-20,0,0)
-
- aRnDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local aP=aRnDDBtn.AbsolutePosition; local aS=aRnDDBtn.AbsoluteSize; local IH=28
-  local popH=(21*(IH+2)+8); local cam=workspace.CurrentCamera
-  local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(aP.Y+popH > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
-  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
-  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
-  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
-  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
-  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=C.ACC
-  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,21*(IH+2)+8)
-  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
-  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
-  local s0=(ASC.runeMapTarget==0)
-  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
-  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
-  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
-  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
-  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
-  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and C.ACC2 or C.TXT3
-  l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
-  i0.MouseButton1Click:Connect(function()
-   CloseActiveDD(); ASC.runeMapTarget=0; ASC.runeEnabled=false
-   aRnDDVal.Text=" -- NOT SELECTED --"; aRnDDVal.TextColor3=C.TXT3
-  end)
-  -- [v55] Tower 1-26 (mapId 50301-50326)
-  for mn=1,26 do
-   local ml=mn
-   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
-   local iS=(ASC.runeMapTarget==mn)
-   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
-   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
-   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
-   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
-   il.BackgroundTransparency=1; il.Text="Tower "..mn.." (MapId: "..(50300+mn)..")"; il.TextSize=10; il.Font=Enum.Font.GothamBold
-   il.TextColor3=iS and C.ACC2 or C.TXT; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
-   it.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.runeMapTarget=ml; ASC.runeEnabled=true
-    aRnDDVal.Text=" Tower "..ml; aRnDDVal.TextColor3=C.ACC2
-   end)
-  end
-  DDLayer.Visible=true
-  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
 
  task.defer(ResizeAscBody)
 end -- end Auto Ascension do block
