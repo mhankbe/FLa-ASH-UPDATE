@@ -7926,11 +7926,10 @@ function StopAscension()
  ASC.running = false
  ASC.inMap   = false
  _ascBusy    = false
- _eventOwner = nil  -- [v62] reset penentu siklus
- -- [v56 DEPRECATED] _ascDominatedThisEvent tidak dipakai lagi
- ReleaseMapLock("asc") -- [v52 FIX] pastikan lock terlepas saat stop paksa
- -- [v56 FIX] Wakeup RAID segera saat ASC di-OFF
- -- Supaya RAID tidak perlu nunggu 1s cycle polling habis, langsung cek ResolveEntry()
+ _eventOwner = nil
+ ReleaseMapLock("asc")
+ -- [v62 FIX] Reset status label agar tidak nyantol di "Dalam Tower x"
+ AscStatusUpdate("OFF", Color3.fromRGB(120,120,120))
  if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
  if ASC.thread then
   pcall(function() task.cancel(ASC.thread) end)
@@ -8511,7 +8510,7 @@ function StartAscensionLoop()
      -- [FIX v50] Cari boss - max 40s (Tower butuh lebih lama dari RAID)
      -- Pakai GetRaidEnemies() + fallback GetEnemiesLocal() tiap iterasi
      local waitBoss = 0
-     while ASC.running and not boss and waitBoss < 40 and not _ascDone do
+     while ASC.running and not boss and waitBoss < 5 and not _ascDone do
       -- Coba GetRaidEnemies() dulu
       local _bList = GetRaidEnemies()
       -- Fallback: kalau kosong (mapId belum update), pakai GetEnemiesLocal()
@@ -8535,7 +8534,7 @@ function StartAscensionLoop()
        end)
       end
       if not boss then
-       AscStatusUpdate("Find Boss... ("..math.floor(waitBoss).."s/40s)", Color3.fromRGB(160,148,135))
+       AscStatusUpdate("Find Boss... ("..math.floor(waitBoss).."s/5s)", Color3.fromRGB(160,148,135))
        task.wait(0.3); waitBoss = waitBoss + 0.3
       end
      end
@@ -8787,8 +8786,8 @@ function StartAscensionLoop()
 
     ASC.inMap = false
     ReleaseMapLock("asc") -- [v52 FIX] Pastikan lock selalu dilepas saat keluar map
-
-    -- [v48] STEP 6: Cooldown 14s (sama persis dengan RAID, scan tetap jalan)
+    -- [v62 FIX] Reset status agar tidak nyantol di "Dalam Tower x" saat sudah di Lobby
+    AscStatusUpdate("[>>] Keluar Tower - cooldown...", Color3.fromRGB(160,148,135))
     for cd = 14, 1, -1 do
      if not ASC.running then break end
      AscStatusUpdate("[..] Cooldown "..cd.."s...", Color3.fromRGB(160,148,135))
@@ -9890,11 +9889,12 @@ local function ResolveEntry()
  RAID._raidDone = true
  end) end
 
- -- [GODMODE FIX] Perpanjang loading wait: 3s->6s, gunakan IsBoss yang sama untuk early detect
- -- Ini mencegah boss belum spawn saat pertama kali dicari
+ -- [v62 FIX] Loading wait: tunggu sampai minimal ada 1 enemy di workspace ATAU boss early detect
+ -- Ini mencegah script menyerang map kosong (musuh belum spawn dari server)
  RaidStatusUpdate("[..] Enter Map - loading...", Color3.fromRGB(160,148,135))
  local _loadWait = 0
  local _earlyBoss = nil
+ local _mapHasEnemies = false
 
  -- Definisi BOSS_KEYS lebih awal agar bisa dipakai di early detection juga
  local BOSS_KEYS_EARLY = {
@@ -9921,32 +9921,31 @@ local function ResolveEntry()
   return IsBossEarly(name)
  end
 
- while _loadWait < 8 and RAID.running and not _raidDone do
+ while _loadWait < 12 and RAID.running and not _raidDone do
       task.wait(0.5); _loadWait = _loadWait + 0.5
-      if _loadWait >= 1 and not _earlyBoss then
-       -- [GUARD v50] Fallback GetEnemiesLocal() jika mapId belum update saat baru masuk raid
-       local _bList = GetRaidEnemies()
-       if #_bList == 0 then _bList = GetEnemiesLocal() end
+      -- Cek apakah sudah ada enemy di workspace (map sudah populated)
+      local _bList = GetRaidEnemies()
+      if #_bList == 0 then _bList = GetEnemiesLocal() end
+      if #_bList > 0 then _mapHasEnemies = true end
+      if _loadWait >= 1 and not _earlyBoss and _mapHasEnemies then
        for _, e in ipairs(_bList) do
-   -- [FIX] Gunakan IsBossEarlyWithHint - sadar hint nama boss Ascension Tower
    if IsBossEarlyWithHint(e.model.Name) then
     _earlyBoss = e; break
    end
   end
  end
- -- [FIX] Jangan break hanya karena boss terdeteksi - validasi posisinya juga
- -- Boss yang baru spawn sering punya posisi Y tidak valid (masih falling/loading)
+ -- Break jika boss sudah ada dan posisi valid
  if _earlyBoss then
   local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
-  -- Posisi valid: Y > -200, magnitude > 1 (bukan 0,0,0), dan sudah stabil (>= 1.5s)
   if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then
-   break -- Boss terdeteksi DAN posisinya sudah valid
+   break
   end
-  -- Belum valid: reset earlyBoss agar dicari ulang di iterasi berikut
   if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then
-   _earlyBoss = nil -- posisi buruk, cari ulang
+   _earlyBoss = nil
   end
  end
+ -- [v62 FIX] Break awal jika enemies sudah ada (min 2s loading) - tidak perlu tunggu boss untuk mode tanpa autoKillBoss
+ if _mapHasEnemies and _loadWait >= 2 and not RAID.autoKillBoss then break end
  end
 
  if RAID.running and not RAID._raidDone and RAID.autoKillBoss then
@@ -10035,12 +10034,12 @@ local function ResolveEntry()
  end
  end))
 
- while RAID.running and not boss and waitBoss < 30 and not RAID._raidDone do
+ while RAID.running and not boss and waitBoss < 5 and not RAID._raidDone do
  for _, e in ipairs(GetRaidEnemies()) do
  if IsBossWithHint(e.model.Name) then boss = e; break end
  end
  if not boss then
- RaidStatusUpdate("Find Boss... (" .. math.floor(waitBoss) .. "s/30s)", Color3.fromRGB(160,148,135))
+ RaidStatusUpdate("Find Boss... (" .. math.floor(waitBoss) .. "s/5s)", Color3.fromRGB(160,148,135))
  task.wait(0.3); waitBoss = waitBoss + 0.3
  end
  end
@@ -13739,6 +13738,19 @@ function StartST2Loop()
         pcall(function()
             while ST2.running do
                 repeat
+                -- [v62 FIX] Jika running di-OFF saat loop sedang berjalan, langsung stop
+                if not ST2.running then return end
+
+                -- [v62 FIX] Jika Attack OFF, standby di luar map (bukan di dalam)
+                -- Waiting di dalam map -> IsAnyMapActive() true -> semua fitur freeze
+                if not ST2.attackEnabled then
+                    ST2Status("[||] Attack OFF - standby...", Color3.fromRGB(180,100,60))
+                    while ST2.running and not ST2.attackEnabled do
+                        task.wait(0.5)
+                    end
+                    if not ST2.running then return end
+                end
+
                 -- -- STEP 0: Delay 2 detik sebelum masuk ------------------
                 ST2Status("[..] Delay 2s Before Enter Single Tower...", Color3.fromRGB(160,148,135))
                 for _i = 1, 20 do
@@ -13783,12 +13795,20 @@ function StartST2Loop()
                 if not ST2.running then return end
 
                 -- -- STEP 2: Cek toggle Attack ------------------------------------
+                -- [v62 FIX] Jika Attack OFF, keluar dari Tower dulu (tidak tunggu di dalam)
+                -- Waiting di dalam map menyebabkan IsAnyMapActive() = true -> semua fitur lain freeze
                 if not ST2.attackEnabled then
-                    ST2Status("[||] Attack OFF - Waiting...", Color3.fromRGB(255,140,0))
-                    while ST2.running and not ST2.attackEnabled do
-                        task.wait(0.3)
-                    end
-                    if not ST2.running then return end
+                    ST2Status("[||] Attack OFF - keluar Tower...", Color3.fromRGB(255,140,0))
+                    -- Keluar map segera
+                    pcall(function()
+                        local _exitRe = Remotes:FindFirstChild("ExitChallengeRaid") or Remotes:FindFirstChild("LeaveDungeon")
+                        if _exitRe then _exitRe:FireServer({ currentSlotIndex=2, toMapId=50001 }) end
+                    end)
+                    pcall(function() RE.LocalTp:FireServer({ mapId=50001 }) end)
+                    ST2.inMap = false
+                    ReleaseMapLock("st2")
+                    task.wait(2)
+                    break -- kembali ke atas loop, tunggu sampai Attack ON
                 end
 
                 -- -- STEP 3: SCAN HERO_GUIDS --
