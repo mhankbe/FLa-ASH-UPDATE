@@ -11970,9 +11970,7 @@ do
 
  local ascGradeDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(1,-120,0,26))
  ascGradeDDBtn.LayoutOrder=2; Corner(ascGradeDDBtn,6); Stroke(ascGradeDDBtn,C.BORD,1.5,0.25)
- local ascGradeDDLbl = Label(ascGradeDDBtn,
-  ASC.updownTargetGrade and (" Target: ["..ASC.updownTargetGrade.."]") or " -- SELECT TARGET --",
-  11,ASC.updownTargetGrade and C.ACC2 or C.TXT3,Enum.Font.GothamBold)
+ local ascGradeDDLbl = Label(ascGradeDDBtn, ASC.updownTargetGrade and (" Target: ["..ASC.updownTargetGrade.."]") or " -- SELECT TARGET --", 11, ASC.updownTargetGrade and C.ACC2 or C.TXT3, Enum.Font.GothamBold)
  ascGradeDDLbl.Size=UDim2.new(1,-20,1,0)
  local ascGradeArr = Label(ascGradeDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
  ascGradeArr.Size=UDim2.new(0,18,1,0); ascGradeArr.Position=UDim2.new(1,-20,0,0)
