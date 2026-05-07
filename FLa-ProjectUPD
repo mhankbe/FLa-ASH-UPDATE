@@ -10076,8 +10076,40 @@ local function ResolveEntry()
   [50120] = "Goku[Super4]",
  }
 
- -- Nama boss target berdasarkan mapId aktual (activeMapId = 50101-50120)
- local _targetBossName = activeMapId and RAID_BOSS_BY_MAP[activeMapId] or nil
+ -- [FIX v69b] activeMapId: fallback chain agar tidak nil di Delta
+ -- 1. RAID.serverMapId (dari event server)
+ -- 2. GetCurrentMapId() (workspace attribute realtime)
+ -- 3. raidEntry.mapId + 100 (lobby range -> in-map range)
+ local _resolvedMapId = RAID.serverMapId
+  or GetCurrentMapId()
+  or (raidEntry and raidEntry.mapId and (raidEntry.mapId + 100))
+  or nil
+ -- Normalize: pastikan di range in-map 50101-50120
+ if _resolvedMapId and not (_resolvedMapId >= 50101 and _resolvedMapId <= 50120) then
+  _resolvedMapId = nil
+ end
+ local _targetBossName = (_resolvedMapId and RAID_BOSS_BY_MAP[_resolvedMapId]) or nil
+
+ -- [FIX v69b] Jika masih nil (serverMapId belum datang), scan workspace.Enemys tanpa filter nama
+ -- Ambil model pertama yang cocok dengan salah satu nama di RAID_BOSS_BY_MAP
+ local function _getBossNameFallback()
+  local ef = workspace:FindFirstChild("Enemys")
+  if not ef then return nil end
+  local allBossNames = {}
+  for _, v in pairs(RAID_BOSS_BY_MAP) do allBossNames[v:lower()] = v end
+  for _, obj in ipairs(ef:GetChildren()) do
+   if obj:IsA("Model") then
+    local n = obj.Name:lower()
+    for low, orig in pairs(allBossNames) do
+     if n:find(low, 1, true) then return orig end
+    end
+   end
+  end
+  return nil
+ end
+ if not _targetBossName then
+  _targetBossName = _getBossNameFallback()
+ end
 
  -- [FIX v69] ScanEnemysFolder: cari model di workspace.Enemys yang namanya MENGANDUNG targetName
  -- Tidak perlu GUID/Health check - langsung ambil HRP dan TP ke sana
