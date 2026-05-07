@@ -8533,7 +8533,8 @@ function StartAscensionLoop()
        if wm >= 50301 and wm <= 50326 then _tpOk = true end
       end
      end)
-     if not _tpOk and #GetRaidEnemies() > 0 then _tpOk = true end
+     -- [v72 FIX] Hapus fallback GetRaidEnemies() - musuh sisa map sebelumnya bisa false-trigger
+     -- _tpOk ASC hanya boleh true jika workspace.MapId sudah di range ASC (50301-50326)
     end
 
     if not _tpOk and ASC.running then
@@ -8638,9 +8639,16 @@ function StartAscensionLoop()
 
      -- [FIX v50] Early boss detection ASC - scan agresif semua sumber
      local _earlyBoss = nil
+     -- [v72 FIX] Helper: pastikan workspace.MapId sudah di range ASC sebelum terima musuh
+     local function _isInAscMap()
+      local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+      return type(wm) == "number" and wm >= 50301 and wm <= 50326
+     end
+
      -- [v71 FAST] Deteksi boss ASC REAKTIF via ChildAdded workspace.Enemys
-     local _earlyBoss = nil
      local function _scanExistingAscEnemies()
+      -- [v72 FIX] Hanya scan jika sudah benar-benar di dalam ASC map
+      if not _isInAscMap() then return end
       local eF = workspace:FindFirstChild("Enemys")
       if not eF then return end
       for _, obj in ipairs(eF:GetChildren()) do
@@ -8663,6 +8671,8 @@ function StartAscensionLoop()
        if _earlyBoss or not obj:IsA("Model") then return end
        task.defer(function()
         if _earlyBoss then return end
+        -- [v72 FIX] Validasi MapId di dalam defer
+        if not _isInAscMap() then return end
         local hum = obj:FindFirstChildOfClass("Humanoid") or obj:WaitForChild("Humanoid", 1)
         if hum and hum.Health > 0 and IsBossAscWithHint(obj.Name) then
          local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
@@ -10065,8 +10075,8 @@ local function ResolveEntry()
     end
    end
   end)
-  -- Fallback: kalau enemy sudah ada, berarti sudah di dalam map
-  if not _tpOk and #GetRaidEnemies() > 0 then _tpOk = true end
+  -- [v72 FIX] Hapus fallback GetRaidEnemies() - musuh sisa map sebelumnya bisa false-trigger
+  -- _tpOk hanya boleh true jika workspace.MapId sudah di range Raid (50101-50120)
  end
 
  if not _tpOk and RAID.running then
@@ -10161,9 +10171,18 @@ local function ResolveEntry()
   return IsBossEarly(name)
  end
 
+ -- [v72 FIX] Helper: pastikan workspace.MapId sudah di range Raid sebelum terima musuh
+ -- Ini cegah musuh sisa map sebelumnya (MA/Farm) terbaca sebagai musuh Raid
+ local function _isInRaidMap()
+  local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
+  return type(wm) == "number" and wm >= 50101 and wm <= 50120
+ end
+
  -- [v71] Cek apakah musuh sudah ada di workspace.Enemys SEBELUM pasang listener
  -- (race: musuh mungkin sudah spawn sebelum kita pasang ChildAdded)
  local function _scanExistingRaidEnemies()
+  -- [v72 FIX] Hanya scan jika sudah benar-benar di dalam Raid map
+  if not _isInRaidMap() then return end
   local eFolder = workspace:FindFirstChild("Enemys")
   if not eFolder then return end
   for _, obj in ipairs(eFolder:GetChildren()) do
@@ -10190,6 +10209,8 @@ local function ResolveEntry()
    if not obj:IsA("Model") then return end
    -- Tunggu Humanoid ready (kadang child ditambah sebelum Humanoid ada)
    task.defer(function()
+    -- [v72 FIX] Double-check MapId di dalam defer - workspace.MapId mungkin belum update saat event fire
+    if not _isInRaidMap() then return end
     local hum = obj:FindFirstChildOfClass("Humanoid") or obj:WaitForChild("Humanoid", 1)
     if hum and hum.Health > 0 then
      _mapHasEnemies = true
@@ -10219,7 +10240,7 @@ local function ResolveEntry()
    local _evConn; _evConn = _raidSpawnEvent.Event:Connect(function() end)
    task.wait(0.5); _waitT = _waitT + 0.5
    _evConn:Disconnect()
-   -- Safety net poll juga
+   -- Safety net poll juga (sudah ada guard _isInRaidMap di dalam)
    _scanExistingRaidEnemies()
   end
 
