@@ -6784,6 +6784,79 @@ RAID_SPAWN_POS = {
  [50119] = Vector3.new(0, 10.0, 0), -- Map 19 Dragon Ball City (update posisi jika perlu)
  [50120] = Vector3.new(0, 10.0, 0), -- Map 20 Dragon Ball Wasteland (update posisi jika perlu)
 }
+
+-- [v73] BOSS_NAME_MAP: Nama EXACT boss di Workspace.Enemys per mapId (RAID Normal)
+-- Dipakai FindBossByExactName() - scan Enemys.xxxx langsung
+-- Key = tpMapId (raidMapId + 100), Value = nama EXACT child di workspace.Enemys
+BOSS_NAME_MAP = {
+ [50101] = "Goblin King",               -- Map 1
+ [50102] = "Giant Arachnid Buryura",    -- Map 2
+ [50103] = "igris",                     -- Map 3
+ [50104] = "The leader of the polar Bears", -- Map 4
+ [50105] = "arch lich",                 -- Map 5
+ [50106] = "kargalgan",                 -- Map 6
+ [50107] = "baran",                     -- Map 7
+ [50108] = "beru",                      -- Map 8
+ [50109] = "grendal",                   -- Map 9
+ [50110] = "monarch plague",            -- Map 10
+ [50111] = "frostborne",                -- Map 11
+ [50112] = "legia",                     -- Map 12
+ [50113] = "silas",                     -- Map 13
+ [50114] = "yogumunt",                  -- Map 14
+ [50115] = "antares",                   -- Map 15
+ [50116] = "ashborn",                   -- Map 16
+ [50117] = "dominion",                  -- Map 17
+ [50118] = "absolute",                  -- Map 18
+ [50119] = "legendary super saiyan",    -- Map 19
+ [50120] = "goku[super4]",              -- Map 20
+}
+
+-- [v73] ASC_BOSS_NAME_MAP: Nama EXACT boss di Workspace.Enemys per Tower number (ASC)
+-- Key = mapNum (tower 1-20), Value = nama EXACT child di workspace.Enemys
+ASC_BOSS_NAME_MAP = {
+ [1]  = "Goblin King",
+ [2]  = "Giant Arachnid Buryura",
+ [3]  = "igris",
+ [4]  = "The leader of the polar Bears",
+ [5]  = "arch lich",
+ [6]  = "kargalgan",
+ [7]  = "baran",
+ [8]  = "beru",
+ [9]  = "grendal",
+ [10] = "monarch plague",
+ [11] = "frostborne",
+ [12] = "legia",
+ [13] = "silas",
+ [14] = "yogumunt",
+ [15] = "antares",
+ [16] = "ashborn",
+ [17] = "dominion",
+ [18] = "absolute",
+ [19] = "legendary super saiyan",
+ [20] = "goku[super4]",
+}
+
+-- [v73] FindBossByExactName: Cari boss di Workspace.Enemys dengan exact match nama
+-- exactName = string nama boss (case-insensitive exact), bukan substring
+-- Return: {guid, hrp, model} atau nil
+local function FindBossByExactName(exactName)
+ if not exactName then return nil end
+ local lowerTarget = exactName:lower()
+ local eFolder = workspace:FindFirstChild("Enemys")
+ if not eFolder then return nil end
+ for _, obj in ipairs(eFolder:GetChildren()) do
+  if obj:IsA("Model") and obj.Name:lower() == lowerTarget then
+   local hum = obj:FindFirstChildOfClass("Humanoid")
+   if hum and hum.Health > 0 then
+    local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
+    local hrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+    if g and hrp then return {guid=g, hrp=hrp, model=obj} end
+   end
+  end
+ end
+ return nil
+end
+
 end -- chat listener + grade cache
 
 -- ============================================================
@@ -8548,6 +8621,28 @@ function StartAscensionLoop()
      task.wait(1); break
     end
 
+    -- [v73] STEP 2b ASC: TP Player ke RAID_SPAWN_POS sesegera mungkin setelah masuk Tower
+    -- Pakai mapId = 50300 + mn (Tower number), mapping ke RAID_SPAWN_POS jika ada
+    -- Untuk Tower, spawn pos dipakai RAID_SPAWN_POS[50100+mn] (boss area Map normal yg sama)
+    do
+     local _ascSpawnKey = 50100 + mn -- map normal yang setara tower ini
+     local _ascSpawnVec = RAID_SPAWN_POS and RAID_SPAWN_POS[_ascSpawnKey]
+     if _ascSpawnVec and _ascSpawnVec.Magnitude > 1 then
+      pcall(function()
+       local char = LP.Character
+       local hrp = char and char:FindFirstChild("HumanoidRootPart")
+       if hrp then
+        hrp.CFrame = CFrame.new(_ascSpawnVec + Vector3.new(0, 3, 0))
+        AscStatusUpdate("[v73] TP Spawn -> Tower "..mn, Color3.fromRGB(100,200,255))
+       end
+      end)
+      task.wait(0.3)
+     end
+    end
+
+    -- [v73] Exact boss name untuk Tower ini (ASC_BOSS_NAME_MAP)
+    local _ascExactBossName = ASC_BOSS_NAME_MAP and ASC_BOSS_NAME_MAP[mn] or nil
+
     -- Setup event listener boss/done
     local _ascDone = false
     local _ascSuccess = false
@@ -8613,8 +8708,8 @@ function StartAscensionLoop()
 
     -- [v48] AUTO BOSS KILL - sama persis dengan AUTO RAID
     if ASC.autoKillBoss then
-     -- BOSS_KEYS untuk Ascension Tower (semua boss AT + boss normal)
-     local BOSS_KEYS_ASC = {
+     -- [v73] BOSS_KEYS_ASC: fallback keyword jika mapNum tidak ada di ASC_BOSS_NAME_MAP
+     local BOSS_KEYS_ASC_FB = {
       "goblin king","giant arachnid","buryura","igris",
       "leader of the polar","arch lich","kargalgan","baran",
       "beru","grendal","monarch plague","frostborne","legia",
@@ -8626,13 +8721,16 @@ function StartAscensionLoop()
      }
      local function IsBossAsc(name)
       local n = name:lower()
-      for _, k in ipairs(BOSS_KEYS_ASC) do if n:find(k,1,true) then return true end end
+      -- [v73] Exact match prioritas utama
+      if _ascExactBossName and n == _ascExactBossName:lower() then return true end
+      for _, k in ipairs(BOSS_KEYS_ASC_FB) do if n:find(k,1,true) then return true end end
       return false
      end
-     -- Prioritaskan nama boss dari entry jika ada
+     -- Hint nama boss dari entry ASC (dari chat parser)
      local _ascHintName = raidEntry.bossName and raidEntry.bossName:lower() or nil
      local function IsBossAscWithHint(name)
       local n = name:lower()
+      if _ascExactBossName and n == _ascExactBossName:lower() then return true end
       if _ascHintName and n:find(_ascHintName,1,true) then return true end
       return IsBossAsc(name)
      end
@@ -8645,10 +8743,24 @@ function StartAscensionLoop()
       return type(wm) == "number" and wm >= 50301 and wm <= 50326
      end
 
+     -- [v73] Cek exact match dulu sebelum scan loop
+     if _ascExactBossName and _isInAscMap() then
+      local _ex = FindBossByExactName(_ascExactBossName)
+      if _ex then
+       _earlyBoss = _ex
+       AscStatusUpdate("[v73] Boss EXACT: ".._ex.model.Name, Color3.fromRGB(100,255,180))
+      end
+     end
+
      -- [v71 FAST] Deteksi boss ASC REAKTIF via ChildAdded workspace.Enemys
      local function _scanExistingAscEnemies()
       -- [v72 FIX] Hanya scan jika sudah benar-benar di dalam ASC map
       if not _isInAscMap() then return end
+      -- [v73] Exact match dulu
+      if _ascExactBossName and not _earlyBoss then
+       local _ex = FindBossByExactName(_ascExactBossName)
+       if _ex then _earlyBoss = _ex; return end
+      end
       local eF = workspace:FindFirstChild("Enemys")
       if not eF then return end
       for _, obj in ipairs(eF:GetChildren()) do
@@ -8703,9 +8815,21 @@ function StartAscensionLoop()
       pcall(function() _ascSpawnEvent:Destroy() end)
      end
 
-     -- [FIX v50] Event-based boss detection - identik dengan RAID
-     -- Tambah _bossFoundViaEvent flag + scan existing children tiap folder
-     local boss = (_earlyBoss and IsBossAscWithHint(_earlyBoss.model.Name)) and _earlyBoss or nil
+     -- [v73] Terima earlyBoss: exact match dulu, lalu IsBossAscWithHint
+     local boss = nil
+     if _earlyBoss then
+      local n = _earlyBoss.model.Name:lower()
+      if (_ascExactBossName and n == _ascExactBossName:lower())
+       or (_ascHintName and n:find(_ascHintName,1,true))
+       or IsBossAsc(_earlyBoss.model.Name) then
+       boss = _earlyBoss
+      end
+     end
+     -- Retry exact match jika earlyBoss ditolak
+     if not boss and _ascExactBossName and _isInAscMap() then
+      boss = FindBossByExactName(_ascExactBossName)
+      if boss then AscStatusUpdate("[v73] Boss EXACT (retry): "..boss.model.Name, Color3.fromRGB(100,255,180)) end
+     end
      local _bossEventConns = {}
      local _bossFoundViaEvent = false
      local function _tryAddBoss(obj)
@@ -8740,34 +8864,23 @@ function StartAscensionLoop()
       end
      end))
 
-     -- [FIX v50] Cari boss - max 40s (Tower butuh lebih lama dari RAID)
-     -- Pakai GetRaidEnemies() + fallback GetEnemiesLocal() tiap iterasi
+     -- [v73] Cari boss - max 5s, exact match dulu via FindBossByExactName
      local waitBoss = 0
      while ASC.running and not boss and waitBoss < 5 and not _ascDone do
-      -- Coba GetRaidEnemies() dulu
-      local _bList = GetRaidEnemies()
-      -- Fallback: kalau kosong (mapId belum update), pakai GetEnemiesLocal()
-      if #_bList == 0 then _bList = GetEnemiesLocal() end
-      for _, e in ipairs(_bList) do
-       if IsBossAscWithHint(e.model.Name) then boss = e; break end
+      -- [v73] Prioritas 1: exact match via Workspace.Enemys langsung
+      if _ascExactBossName and _isInAscMap() then
+       boss = FindBossByExactName(_ascExactBossName)
       end
-      -- Fallback terakhir: scan workspace:GetDescendants() setelah 15s
-      if not boss and waitBoss >= 15 and waitBoss % 5 < 0.4 then
-       pcall(function()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-         if obj:IsA("Model") and IsBossAscWithHint(obj.Name) then
-          local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
-          local hrp = obj:FindFirstChild("HumanoidRootPart")
-          local hum = obj:FindFirstChildOfClass("Humanoid")
-          if g and hrp and hum and hum.Health > 0 then
-           boss = {guid=g, hrp=hrp, model=obj}; break
-          end
-         end
-        end
-       end)
+      -- Prioritas 2: GetRaidEnemies() + fallback GetEnemiesLocal() dengan IsBossAscWithHint
+      if not boss then
+       local _bList = GetRaidEnemies()
+       if #_bList == 0 then _bList = GetEnemiesLocal() end
+       for _, e in ipairs(_bList) do
+        if IsBossAscWithHint(e.model.Name) then boss = e; break end
+       end
       end
       if not boss then
-       AscStatusUpdate("Find Boss... ("..math.floor(waitBoss).."s/5s)", Color3.fromRGB(160,148,135))
+       AscStatusUpdate("[v73] Scan Enemys... ("..math.floor(waitBoss).."s/5s)", Color3.fromRGB(160,148,135))
        task.wait(0.3); waitBoss = waitBoss + 0.3
       end
      end
@@ -10086,6 +10199,24 @@ local function ResolveEntry()
   task.wait(1); break
  end
 
+ -- [v73] STEP 2b: TP Player ke RAID_SPAWN_POS setelah masuk map
+ -- Dilakukan sesegera mungkin setelah workspace.MapId konfirmasi player di dalam RAID
+ do
+  local _spawnMapId = RAID.serverMapId or (RAID.raidMapId and (RAID.raidMapId + 100)) or nil
+  local _spawnVec = _spawnMapId and RAID_SPAWN_POS and RAID_SPAWN_POS[_spawnMapId]
+  if _spawnVec and _spawnVec.Magnitude > 1 then
+   pcall(function()
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+     hrp.CFrame = CFrame.new(_spawnVec + Vector3.new(0, 3, 0))
+     RaidStatusUpdate("[v73] TP Spawn -> Map "..(_spawnMapId - 50100), Color3.fromRGB(100,200,255))
+    end
+   end)
+   task.wait(0.3)
+  end
+ end
+
  -- [FIX] Equip hero ke map ini agar hero spawn di sebelah player
  -- Tanpa ini hero tidak muncul di map raid meski GUID sudah ada
  if #HERO_GUIDS > 0 then
@@ -10149,7 +10280,12 @@ local function ResolveEntry()
  local _earlyBoss = nil
  local _mapHasEnemies = false
 
- local BOSS_KEYS_EARLY = {
+ -- [v73] Exact match: ambil nama boss berdasarkan mapId aktual dari BOSS_NAME_MAP
+ local _raidActualMapId = RAID.serverMapId or (RAID.raidMapId and (RAID.raidMapId + 100)) or nil
+ local _exactBossName   = _raidActualMapId and BOSS_NAME_MAP and BOSS_NAME_MAP[_raidActualMapId] or nil
+
+ -- [v73] IsBossEarly: exact match dulu (lowercase), fallback keyword lama jika tidak ada entry map
+ local BOSS_KEYS_FALLBACK = {
   "goblin king","giant arachnid","buryura","igris",
   "leader of the polar","arch lich","kargalgan","baran",
   "beru","grendal","monarch plague","frostborne","legia",
@@ -10161,13 +10297,19 @@ local function ResolveEntry()
  }
  local function IsBossEarly(name)
   local n = name:lower()
-  for _, k in ipairs(BOSS_KEYS_EARLY) do if n:find(k,1,true) then return true end end
+  if _exactBossName and n == _exactBossName:lower() then return true end
+  for _, k in ipairs(BOSS_KEYS_FALLBACK) do if n:find(k,1,true) then return true end end
   return false
  end
  local _earlyAscHint = (raidEntry and raidEntry.isAscension and raidEntry.bossName) or nil
+ -- [v73] IsBossEarlyWithHint: exact match via _exactBossName prioritas tertinggi
  local function IsBossEarlyWithHint(name)
   local n = name:lower()
+  -- Prioritas 1: exact match nama boss per map (BOSS_NAME_MAP)
+  if _exactBossName and n == _exactBossName:lower() then return true end
+  -- Prioritas 2: hint nama dari ASC entry (jika Ascension)
   if _earlyAscHint and n:find(_earlyAscHint, 1, true) then return true end
+  -- Fallback: IsBossEarly (keyword lama)
   return IsBossEarly(name)
  end
 
@@ -10178,11 +10320,26 @@ local function ResolveEntry()
   return type(wm) == "number" and wm >= 50101 and wm <= 50120
  end
 
+ -- [v73] Cek dulu via exact match FindBossByExactName sebelum fallback ke scan loop
+ if _exactBossName and _isInRaidMap() then
+  local _exactResult = FindBossByExactName(_exactBossName)
+  if _exactResult then
+   _earlyBoss = _exactResult
+   _mapHasEnemies = true
+   RaidStatusUpdate("[v73] Boss EXACT: "..(_exactResult.model.Name), Color3.fromRGB(100,255,180))
+  end
+ end
+
  -- [v71] Cek apakah musuh sudah ada di workspace.Enemys SEBELUM pasang listener
  -- (race: musuh mungkin sudah spawn sebelum kita pasang ChildAdded)
  local function _scanExistingRaidEnemies()
   -- [v72 FIX] Hanya scan jika sudah benar-benar di dalam Raid map
   if not _isInRaidMap() then return end
+  -- [v73] Coba exact match dulu
+  if _exactBossName and not _earlyBoss then
+   local _ex = FindBossByExactName(_exactBossName)
+   if _ex then _earlyBoss = _ex; _mapHasEnemies = true; return end
+  end
   local eFolder = workspace:FindFirstChild("Enemys")
   if not eFolder then return end
   for _, obj in ipairs(eFolder:GetChildren()) do
@@ -10249,47 +10406,59 @@ local function ResolveEntry()
  end
 
  if RAID.running and not RAID._raidDone and RAID.autoKillBoss then
- local BOSS_KEYS = {
- "goblin king","giant arachnid","buryura","igris",
- "leader of the polar","arch lich","kargalgan","baran",
- "beru","grendal","monarch plague","frostborne","legia",
- "monarch beastly","beastly fangs","silas","unbreakable monarch",
- "yogumunt","monarch of transfiguration","transfiguration",
- "antares","ashborn","dominion","absolute","monarch","fragment","boss",
- -- Map 19 Dragon Ball City
- "legendary super saiyan","broly",
- -- Goku Super Saiyan 4
- "goku[super4]","goku super4","goku super 4",
+ -- [v73] BOSS_NAME_MAP exact match: gunakan nama persis dari tabel per mapId
+ -- Fallback ke keyword lama jika mapId tidak dikenal
+ local _mainExactBoss = _exactBossName -- sudah dihitung di atas (IsBossEarly section)
+ local BOSS_KEYS_MAIN = {
+  "goblin king","giant arachnid","buryura","igris",
+  "leader of the polar","arch lich","kargalgan","baran",
+  "beru","grendal","monarch plague","frostborne","legia",
+  "monarch beastly","beastly fangs","silas","unbreakable monarch",
+  "yogumunt","monarch of transfiguration","transfiguration",
+  "antares","ashborn","dominion","absolute","monarch","fragment","boss",
+  -- Map 19 Dragon Ball City
+  "legendary super saiyan","broly",
+  -- Goku Super Saiyan 4
+  "goku[super4]","goku super4","goku super 4",
  }
  local function IsBoss(name)
- local n = name:lower()
- for _, k in ipairs(BOSS_KEYS) do if n:find(k,1,true) then return true end end
- return false
+  local n = name:lower()
+  -- [v73] Exact match prioritas utama
+  if _mainExactBoss and n == _mainExactBoss:lower() then return true end
+  for _, k in ipairs(BOSS_KEYS_MAIN) do if n:find(k,1,true) then return true end end
+  return false
  end
 
  -- [FIX Ascension] Ambil bossName hint dari raidEntry jika Ascension Tower
- -- Nama boss sudah diketahui dari teks notifikasi -> pakai sebagai filter prioritas tertinggi
  local _ascHintName = nil
  if raidEntry and raidEntry.isAscension and raidEntry.bossName then
   _ascHintName = raidEntry.bossName -- lowercase, misal "frostborne"
  end
 
- -- Helper IsBoss yang sadar Ascension hint
+ -- [v73] IsBossWithHint: exact match tertinggi, lalu hint ASC, lalu fallback keyword
  local function IsBossWithHint(name)
   local n = name:lower()
-  -- Jika ada hint nama boss Ascension, prioritaskan kecocokan tepat
+  if _mainExactBoss and n == _mainExactBoss:lower() then return true end
   if _ascHintName then
    if n:find(_ascHintName, 1, true) then return true end
   end
   return IsBoss(name)
  end
 
- -- Pakai boss dari early detection kalau sudah ada DAN valid
- local boss = (_earlyBoss and IsBossWithHint(_earlyBoss.model.Name)) and _earlyBoss or nil
- -- Juga retry dengan IsBossWithHint jika early boss ditolak IsBoss tapi cocok dengan hint
- if not boss and _earlyBoss and _ascHintName then
+ -- [v73] Pakai boss dari early detection - terima langsung jika nama exact match
+ local boss = nil
+ if _earlyBoss then
   local n = _earlyBoss.model.Name:lower()
-  if n:find(_ascHintName, 1, true) then boss = _earlyBoss end
+  if (_mainExactBoss and n == _mainExactBoss:lower())
+   or (_ascHintName and n:find(_ascHintName, 1, true))
+   or IsBoss(_earlyBoss.model.Name) then
+   boss = _earlyBoss
+  end
+ end
+ -- Jika earlyBoss ditolak tapi ada exact name, coba sekali lagi via FindBossByExactName
+ if not boss and _mainExactBoss and _isInRaidMap() then
+  boss = FindBossByExactName(_mainExactBoss)
+  if boss then RaidStatusUpdate("[v73] Boss EXACT (retry): "..boss.model.Name, Color3.fromRGB(100,255,180)) end
  end
 
  -- [GODMODE FIX] Tingkatkan timeout: 15s -> 30s, scan lebih agresif tiap 0.3s
@@ -10335,13 +10504,20 @@ local function ResolveEntry()
  end))
 
  while RAID.running and not boss and waitBoss < 5 and not RAID._raidDone do
- for _, e in ipairs(GetRaidEnemies()) do
- if IsBossWithHint(e.model.Name) then boss = e; break end
- end
- if not boss then
- RaidStatusUpdate("Find Boss... (" .. math.floor(waitBoss) .. "s/5s)", Color3.fromRGB(160,148,135))
- task.wait(0.3); waitBoss = waitBoss + 0.3
- end
+  -- [v73] Prioritas: exact match via Workspace.Enemys langsung
+  if _mainExactBoss and _isInRaidMap() then
+   boss = FindBossByExactName(_mainExactBoss)
+  end
+  -- Fallback: scan GetRaidEnemies() dengan IsBossWithHint
+  if not boss then
+   for _, e in ipairs(GetRaidEnemies()) do
+    if IsBossWithHint(e.model.Name) then boss = e; break end
+   end
+  end
+  if not boss then
+   RaidStatusUpdate("[v73] Scan Enemys... (" .. math.floor(waitBoss) .. "s/5s)", Color3.fromRGB(160,148,135))
+   task.wait(0.3); waitBoss = waitBoss + 0.3
+  end
  end
 
  -- Lepaskan semua event listener boss
