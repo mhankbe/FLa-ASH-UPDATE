@@ -447,7 +447,8 @@ do
      if not logo.IsLoaded or logo.ContentImageSize == Vector2.new(0,0) then
          -- Fallback: Gunakan Headshot pemain jika ID tetap gagal (agar tidak blank hitam)
          local content, isReady = Players:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
-         if isReady then  
+         if isReady then
+             logo.Image = content -- [FIX v69] Gunakan headshot sebagai fallback jika logo gagal load
          end
      end
  end)
@@ -1428,46 +1429,18 @@ end
 -- Setiap fitur baca musuh SENDIRI dari workspace.Enemys
 -- Tidak ada shared state antar fitur
 -- ============================================================
-local ENEMY_FOLDERS_ALL = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy"}
+-- [FIX v69] GetEnemiesLocal: hanya baca workspace.Enemys - tidak perlu folder lain / fallback
 function GetEnemiesLocal()
  local list = {}
- local seen = {}
- for _, fname in ipairs(ENEMY_FOLDERS_ALL) do
-  local f = workspace:FindFirstChild(fname)
-  if f then
-   for _, e in ipairs(f:GetChildren()) do
-    if e:IsA("Model") then
-     local g = e:GetAttribute("EnemyGuid") or e:GetAttribute("BossGuid") or e:GetAttribute("Guid") or e:GetAttribute("GUID")
-     local h = e:FindFirstChild("HumanoidRootPart")
-           or e.PrimaryPart
-           or e:FindFirstChild("Torso")
-           or e:FindFirstChild("UpperTorso")
-           or e:FindFirstChildWhichIsA("BasePart")
-     local hum = e:FindFirstChildOfClass("Humanoid")
-     if g and h and hum and hum.Health > 0 and not seen[g] then
-      seen[g] = true
-      table.insert(list, {model=e, guid=g, hrp=h})
-     end
-    end
-   end
-  end
- end
- -- Fallback: scan workspace langsung kalau folder kosong
- if #list == 0 then
-  for _, obj in ipairs(workspace:GetChildren()) do
-   if obj:IsA("Model") then
-    local g = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid") or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
-    local h = obj:FindFirstChild("HumanoidRootPart")
-          or obj.PrimaryPart
-          or obj:FindFirstChild("Torso")
-          or obj:FindFirstChild("UpperTorso")
-          or obj:FindFirstChildWhichIsA("BasePart")
-    local hum = obj:FindFirstChildOfClass("Humanoid")
-    if g and h and hum and hum.Health > 0 and not seen[g] then
-     seen[g] = true
-     table.insert(list, {model=obj, guid=g, hrp=h})
-    end
-   end
+ local ef = workspace:FindFirstChild("Enemys")
+ if not ef then return list end
+ for _, e in ipairs(ef:GetChildren()) do
+  if e:IsA("Model") then
+   local h = e:FindFirstChild("HumanoidRootPart")
+         or e.PrimaryPart
+         or e:FindFirstChild("Torso")
+         or e:FindFirstChildWhichIsA("BasePart")
+   if h then table.insert(list, {model=e, hrp=h}) end
   end
  end
  return list
@@ -1593,30 +1566,19 @@ end)
 -- ============================================================
 -- ENEMY HELPERS
 -- ============================================================
+-- [FIX v69] GetEnemies: hanya baca workspace.Enemys - tidak perlu folder lain / fallback
 function GetEnemies()
  local list = {}
- -- [v51-FIX] Tambah "Enemy" ke folder list (konsisten dengan GetEnemiesLocal)
- local ENEMY_FOLDERS = {"Enemys", "EnemyCityRaid", "CityRaidEnemys", "Enemies", "Enemy"}
- local seen = {}
- local function _addEnemy(e)
-  if not e:IsA("Model") then return end
-  local g = e:GetAttribute("EnemyGuid") or e:GetAttribute("BossGuid") or e:GetAttribute("Guid") or e:GetAttribute("GUID")
-  local h = e:FindFirstChild("HumanoidRootPart")
-  local hum = e:FindFirstChildOfClass("Humanoid")
-  if g and h and hum and hum.Health > 0 and not seen[g] then
-   seen[g] = true
-   table.insert(list, {model=e, guid=g, hrp=h})
+ local ef = workspace:FindFirstChild("Enemys")
+ if not ef then return list end
+ for _, e in ipairs(ef:GetChildren()) do
+  if e:IsA("Model") then
+   local h = e:FindFirstChild("HumanoidRootPart")
+         or e.PrimaryPart
+         or e:FindFirstChild("Torso")
+         or e:FindFirstChildWhichIsA("BasePart")
+   if h then table.insert(list, {model=e, hrp=h}) end
   end
- end
- for _, folderName in ipairs(ENEMY_FOLDERS) do
-  local f = workspace:FindFirstChild(folderName)
-  if f then
-   for _, e in ipairs(f:GetChildren()) do _addEnemy(e) end
-  end
- end
- -- [v51-FIX] Fallback: scan workspace:GetChildren() jika semua folder kosong
- if #list == 0 then
-  for _, obj in ipairs(workspace:GetChildren()) do _addEnemy(obj) end
  end
  return list
 end
@@ -1648,42 +1610,11 @@ local _heroAtkTarget = nil -- guid target hero saat ini
 local _heroAtkThread = nil -- thread hero attack
 local _heroAtkTick = 0 -- [PERBAIKAN 1] Mencegah nil error pada siklus attack
 
--- [v256-FIX] Helper: validasi enemy guid masih punya HumanoidRootPart yang valid
+-- [FIX v69] IsEnemyGuidValid: disederhanakan - hanya cek workspace.Enemys, tanpa GUID / Health check
+-- Fungsi ini masih dipakai di FireAllDamage & EnsureHeroAtkThread
+-- Karena RAID/ASC sudah pakai name:find(), cukup pastikan folder Enemys ada
 local function IsEnemyGuidValid(g)
- if not g then return false end
- local ENEMY_FOLDERS = {"Enemys", "EnemyCityRaid", "CityRaidEnemys", "Enemies", "Enemy"}
- for _, folderName in ipairs(ENEMY_FOLDERS) do
-  local f = workspace:FindFirstChild(folderName)
-  if f then
-   for _, e in ipairs(f:GetChildren()) do
-    if e:IsA("Model") and e:GetAttribute("EnemyGuid") == g then
-     local hrp = e:FindFirstChild("HumanoidRootPart")
-     local hum = e:FindFirstChildOfClass("Humanoid")
-     if hrp and hum and hum.Health > 0 then
-      return true
-     end
-     return false
-    end
-   end
-  end
- end
- -- Fallback: cek CityRaidEnter (enemy Siege nested di sini)
- pcall(function()
-  local mapF = workspace:FindFirstChild("Map")
-  local cre = mapF and mapF:FindFirstChild("CityRaidEnter")
-  if cre then
-   for _, e in ipairs(cre:GetDescendants()) do
-    if e:IsA("Model") and e:GetAttribute("EnemyGuid") == g then
-     local hrp = e:FindFirstChild("HumanoidRootPart")
-     local hum = e:FindFirstChildOfClass("Humanoid")
-     if hrp and hum and hum.Health > 0 then
-      return true
-     end
-    end
-   end
-  end
- end)
- return false
+ return workspace:FindFirstChild("Enemys") ~= nil
 end
 
 local function EnsureHeroAtkThread()
@@ -7922,11 +7853,7 @@ function StopRaid()
  RAID_LIVE = {}
  _defaultRRIdx = 0 -- reset RR saat RAID habis
  RAID_ID_LIST = {}
- if _runeGradeCache then
-  -- Reset semua cache grade saat sesi RAID baru dimulai (StopRaid dipanggil sebelum StartRaid)
-  -- Ini memastikan batch notif lama tidak mencemari sesi baru
-  for k in pairs(_runeGradeCache) do _runeGradeCache[k] = nil end
- end
+ -- [FIX v69] _runeGradeCache tidak direset di StopRaid agar ASC grade cache (key negatif) survive saat RAID restart
  if RebuildRaidList then pcall(RebuildRaidList) end
  -- [FIX] JANGAN reset setting user (difficulty/rune/grades/preferMaps) di sini!
  -- StopRaid dipanggil oleh StartRaidLoop setiap kali Start ditekan
@@ -7961,12 +7888,8 @@ end
 function StopAscension()
  ASC.running = false
  ASC.inMap   = false
- _ascBusy    = false
- _eventOwner = nil
- ReleaseMapLock("asc")
- -- [v62 FIX] Reset status label agar tidak nyantol di "Dalam Tower x"
- AscStatusUpdate("OFF", Color3.fromRGB(120,120,120))
- if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+ -- [FIX v69] Cancel thread DULU sebelum reset _ascBusy
+ -- agar ASC loop tidak sempat set _ascBusy=true lagi setelah kita reset
  if ASC.thread then
   pcall(function() task.cancel(ASC.thread) end)
   ASC.thread = nil
@@ -7975,6 +7898,14 @@ function StopAscension()
   pcall(function() _ascWakeup:Destroy() end)
   _ascWakeup = nil
  end
+ -- Baru reset flag setelah thread pasti mati
+ _ascBusy    = false
+ _eventOwner = nil
+ ReleaseMapLock("asc")
+ -- [v62 FIX] Reset status label agar tidak nyantol di "Dalam Tower x"
+ AscStatusUpdate("OFF", Color3.fromRGB(120,120,120))
+ -- [FIX v69] Fire _raidWakeup TERAKHIR agar RAID guard membaca _ascBusy=false yang sudah benar
+ if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
 end
 
 function AscStatusUpdate(msg, color)
@@ -8647,29 +8578,28 @@ function StartAscensionLoop()
       _ascTargetBossName = raidEntry.bossName
      end
 
-     -- [GODMODE v2] Helper: FindFirstChild EKSAK di Workspace.Enemys
+     -- [FIX v69] ScanAscEnemysFolder: cari model di workspace.Enemys yang namanya MENGANDUNG targetName
+     -- Tidak perlu GUID/Health check - langsung ambil HRP dan TP ke sana
      local function ScanAscEnemysFolder(targetName)
       local ef2 = workspace:FindFirstChild("Enemys")
       if not ef2 or not targetName then return nil end
-      local obj = ef2:FindFirstChild(targetName) -- nama EKSAK, case-sensitive
-      if obj and obj:IsA("Model") then
-       local g   = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid")
-                 or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
-       local hrp = obj:FindFirstChild("HumanoidRootPart")
-                or obj.PrimaryPart
-                or obj:FindFirstChild("Torso")
-                or obj:FindFirstChildWhichIsA("BasePart")
-       local hum = obj:FindFirstChildOfClass("Humanoid")
-       if g and hrp and hum and hum.Health > 0 then
-        return {guid=g, hrp=hrp, model=obj}
+      local tLower = targetName:lower()
+      for _, obj in ipairs(ef2:GetChildren()) do
+       if obj:IsA("Model") and obj.Name:lower():find(tLower, 1, true) then
+        local hrp = obj:FindFirstChild("HumanoidRootPart")
+                 or obj.PrimaryPart
+                 or obj:FindFirstChild("Torso")
+                 or obj:FindFirstChildWhichIsA("BasePart")
+        if hrp then return {hrp=hrp, model=obj} end
        end
       end
       return nil
      end
 
+     -- [FIX v69] IsBossAscWithHint: partial match sudah cukup
      local function IsBossAscWithHint(name)
       if not _ascTargetBossName then return false end
-      return name == _ascTargetBossName
+      return name:lower():find(_ascTargetBossName:lower(), 1, true) ~= nil
      end
 
      -- [GODMODE v2] Early boss detection ASC - scan HANYA Workspace.Enemys
@@ -8680,48 +8610,32 @@ function StartAscensionLoop()
       if _loadWait >= 1 and not _earlyBoss and _ascTargetBossName then
        _earlyBoss = ScanAscEnemysFolder(_ascTargetBossName)
       end
-      if _earlyBoss then
-       local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
-       if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then break end
-       if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then _earlyBoss = nil end
-      end
+      if _earlyBoss and _loadWait >= 1.5 then break end -- [FIX v69] Tidak perlu validasi Y/Magnitude
      end
 
-     -- [GODMODE v2] Set boss dari early detection atau scan ulang
+     -- [FIX v69] Set boss dari early detection atau scan ulang
      local boss = (_earlyBoss and IsBossAscWithHint(_earlyBoss.model.Name)) and _earlyBoss or nil
      if not boss and _ascTargetBossName then
       boss = ScanAscEnemysFolder(_ascTargetBossName)
      end
 
      -- Event-based: listen HANYA Workspace.Enemys ChildAdded
+     -- [FIX v69] _tryAddBoss: cukup IsBossAscWithHint + ambil HRP, tanpa GUID/Health check
      local _bossEventConns = {}
      local function _tryAddBoss(obj)
       if boss or not obj:IsA("Model") then return end
       if IsBossAscWithHint(obj.Name) then
-       local g   = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid")
-                 or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
        local hrp = obj:FindFirstChild("HumanoidRootPart")
                 or obj.PrimaryPart or obj:FindFirstChild("Torso")
                 or obj:FindFirstChildWhichIsA("BasePart")
-       local hum = obj:FindFirstChildOfClass("Humanoid")
-       if g and hrp and hum and hum.Health > 0 then
-        boss = {guid=g, hrp=hrp, model=obj}
-       end
+       if hrp then boss = {hrp=hrp, model=obj} end
       end
      end
+     -- [FIX v69] Pasang listener HANYA di workspace.Enemys
      local _ascEnemysF = workspace:FindFirstChild("Enemys")
      if _ascEnemysF then
       table.insert(_bossEventConns, _ascEnemysF.ChildAdded:Connect(_tryAddBoss))
       for _, child in ipairs(_ascEnemysF:GetChildren()) do _tryAddBoss(child) end
-     else
-      table.insert(_bossEventConns, workspace.ChildAdded:Connect(function(obj)
-       if obj.Name == "Enemys" then
-        task.spawn(function()
-         table.insert(_bossEventConns, obj.ChildAdded:Connect(_tryAddBoss))
-         for _, child in ipairs(obj:GetChildren()) do _tryAddBoss(child) end
-        end)
-       end
-      end))
      end
 
      -- [GODMODE v2] Cari boss dari Workspace.Enemys - max 15s
@@ -8738,28 +8652,19 @@ function StartAscensionLoop()
      for _, c in ipairs(_bossEventConns) do pcall(function() c:Disconnect() end) end
      _bossEventConns = {}
 
-     -- [GODMODE v2] GetSafeAscBossPos: selalu fresh dari Workspace.Enemys
+     -- [FIX v69] GetSafeAscBossPos: langsung dari workspace.Enemys, fresh setiap saat, tanpa fallback
      local function GetSafeAscBossPos()
       local ef3 = workspace:FindFirstChild("Enemys")
-      if ef3 and boss then
-       local obj = ef3:FindFirstChild(boss.model.Name)
-       if obj then
+      if not ef3 or not boss then return nil end
+      local tLower = _ascTargetBossName and _ascTargetBossName:lower() or boss.model.Name:lower()
+      for _, obj in ipairs(ef3:GetChildren()) do
+       if obj:IsA("Model") and obj.Name:lower():find(tLower, 1, true) then
         local hrp3 = obj:FindFirstChild("HumanoidRootPart")
                   or obj.PrimaryPart
                   or obj:FindFirstChild("Torso")
                   or obj:FindFirstChildWhichIsA("BasePart")
-        if hrp3 and hrp3.Parent then
-         local p = hrp3.Position
-         if p.Y > -200 then
-          boss.hrp = hrp3; boss.model = obj
-          return p
-         end
-        end
+        if hrp3 then boss.hrp = hrp3; boss.model = obj; return hrp3.Position end
        end
-      end
-      if boss and boss.hrp and boss.hrp.Parent then
-       local p = boss.hrp.Position
-       if p.Y > -200 then return p end
       end
       return nil
      end
@@ -10137,16 +10042,8 @@ local function ResolveEntry()
    end
   end
  end
- -- Break jika boss sudah ada dan posisi valid
- if _earlyBoss then
-  local _ep = _earlyBoss.hrp and _earlyBoss.hrp.Parent and _earlyBoss.hrp.Position
-  if _ep and _ep.Y > -200 and _ep.Magnitude > 1 and _loadWait >= 1.5 then
-   break
-  end
-  if _ep and (_ep.Y <= -200 or _ep.Magnitude <= 1) then
-   _earlyBoss = nil
-  end
- end
+ -- [FIX v69] Break jika boss sudah ada - tidak perlu validasi Y/Magnitude
+ if _earlyBoss and _loadWait >= 1.5 then break end
  -- [v62 FIX] Break awal jika enemies sudah ada (min 2s loading) - tidak perlu tunggu boss untuk mode tanpa autoKillBoss
  if _mapHasEnemies and _loadWait >= 2 and not RAID.autoKillBoss then break end
  end
@@ -10182,30 +10079,28 @@ local function ResolveEntry()
  -- Nama boss target berdasarkan mapId aktual (activeMapId = 50101-50120)
  local _targetBossName = activeMapId and RAID_BOSS_BY_MAP[activeMapId] or nil
 
- -- [GODMODE v2] Helper: FindFirstChild EKSAK di Workspace.Enemys (nama persis sama)
+ -- [FIX v69] ScanEnemysFolder: cari model di workspace.Enemys yang namanya MENGANDUNG targetName
+ -- Tidak perlu GUID/Health check - langsung ambil HRP dan TP ke sana
  local function ScanEnemysFolder(targetName)
   local ef = workspace:FindFirstChild("Enemys")
   if not ef or not targetName then return nil end
-  local obj = ef:FindFirstChild(targetName) -- nama EKSAK, case-sensitive
-  if obj and obj:IsA("Model") then
-   local g   = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid")
-             or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
-   local hrp = obj:FindFirstChild("HumanoidRootPart")
-            or obj.PrimaryPart
-            or obj:FindFirstChild("Torso")
-            or obj:FindFirstChildWhichIsA("BasePart")
-   local hum = obj:FindFirstChildOfClass("Humanoid")
-   if g and hrp and hum and hum.Health > 0 then
-    return {guid=g, hrp=hrp, model=obj}
+  local tLower = targetName:lower()
+  for _, obj in ipairs(ef:GetChildren()) do
+   if obj:IsA("Model") and obj.Name:lower():find(tLower, 1, true) then
+    local hrp = obj:FindFirstChild("HumanoidRootPart")
+             or obj.PrimaryPart
+             or obj:FindFirstChild("Torso")
+             or obj:FindFirstChildWhichIsA("BasePart")
+    if hrp then return {hrp=hrp, model=obj} end
    end
   end
   return nil
  end
 
- -- Helper IsBoss: nama EKSAK sama dengan target boss map ini
+ -- [FIX v69] IsBossWithHint: cukup name:find() - partial match sudah cukup
  local function IsBossWithHint(name)
   if not _targetBossName then return false end
-  return name == _targetBossName
+  return name:lower():find(_targetBossName:lower(), 1, true) ~= nil
  end
 
  -- [GODMODE] Cari boss dari early detection dulu (sudah di-scan sebelumnya)
@@ -10223,21 +10118,15 @@ local function ResolveEntry()
  local waitBoss = 0
  local _bossEventConns = {}
 
- -- Listen ChildAdded di Workspace.Enemys untuk boss yang muncul belakangan
+ -- [FIX v69] _tryAddBossFromEnemys: cukup name:find() + ambil HRP langsung, tanpa GUID/Health check
  local function _tryAddBossFromEnemys(obj)
   if boss or not obj:IsA("Model") then return end
   if IsBossWithHint(obj.Name) then
-   local g   = obj:GetAttribute("EnemyGuid") or obj:GetAttribute("BossGuid")
-             or obj:GetAttribute("Guid") or obj:GetAttribute("GUID")
    local hrp = obj:FindFirstChild("HumanoidRootPart")
             or obj.PrimaryPart
             or obj:FindFirstChild("Torso")
-            or obj:FindFirstChild("UpperTorso")
             or obj:FindFirstChildWhichIsA("BasePart")
-   local hum = obj:FindFirstChildOfClass("Humanoid")
-   if g and hrp and hum and hum.Health > 0 then
-    boss = {guid=g, hrp=hrp, model=obj}
-   end
+   if hrp then boss = {hrp=hrp, model=obj} end
   end
  end
 
@@ -10286,30 +10175,19 @@ local function ResolveEntry()
  if boss and RAID.running and not RAID._raidDone then
  local bossGuid = boss.guid
 
- -- [GODMODE v2] GetSafeBossPos: ambil langsung dari Workspace.Enemys instance
+ -- [FIX v69] GetSafeBossPos: langsung dari workspace.Enemys, fresh setiap saat, tanpa fallback
  local function GetSafeBossPos()
-  -- Re-resolve dari Workspace.Enemys agar selalu fresh (bukan cache lama)
   local ef = workspace:FindFirstChild("Enemys")
-  if ef then
-   local obj = ef:FindFirstChild(boss.model.Name)
-   if obj then
+  if not ef then return nil end
+  local tLower = _targetBossName and _targetBossName:lower() or boss.model.Name:lower()
+  for _, obj in ipairs(ef:GetChildren()) do
+   if obj:IsA("Model") and obj.Name:lower():find(tLower, 1, true) then
     local hrp2 = obj:FindFirstChild("HumanoidRootPart")
              or obj.PrimaryPart
              or obj:FindFirstChild("Torso")
              or obj:FindFirstChildWhichIsA("BasePart")
-    if hrp2 and hrp2.Parent then
-     local p = hrp2.Position
-     if p.Y > -200 then
-      boss.hrp = hrp2; boss.model = obj -- update reference
-      return p
-     end
-    end
+    if hrp2 then boss.hrp = hrp2; boss.model = obj; return hrp2.Position end
    end
-  end
-  -- Fallback ke hrp yang sudah diketahui
-  if boss.hrp and boss.hrp.Parent then
-   local p = boss.hrp.Position
-   if p.Y > -200 then return p end
   end
   return nil
  end
@@ -16484,10 +16362,7 @@ do
     end
 end
  
- ApplyTheme("Solo Leveling")
- SwitchTab("main")
- RefreshStatus()
- InitAllCaptureLayers()
+ -- [FIX v69] Duplikat eksekusi akhir dihapus - sudah dipanggil di atas dengan guard
 
 -- ============================================================
 
