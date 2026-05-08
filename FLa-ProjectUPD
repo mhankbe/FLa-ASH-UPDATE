@@ -2044,7 +2044,7 @@ function AttackLoop_Mass(onStatus)
    end
   end
 
-  task.wait(0.1) -- [v5] 10x/detik
+  task.wait(0.08)
  end
  return false
 end
@@ -4622,15 +4622,13 @@ do
 
  local function FCharF(g, pos)
   if not g then return end
-  -- [v5] Hanya ClickEnemy + PlayerClickAttackSkill
-  if RE.Click then
-   task.spawn(function()
-    pcall(function() RE.Click:InvokeServer({enemyGuid=g, enemyPos=pos}) end)
-   end)
-  end
-  if RE.Atk then
-   pcall(function() RE.Atk:FireServer({attackEnemyGUID=g}) end)
-  end
+  -- [vDewaS] Logika ST2: Serang Player + Hero Skill All-in-One
+  FireAttack(g, pos)
+  FireAllDamage(g, pos)
+  FireHeroRemotes(g, pos)
+  FireAttack(g, pos)
+  FireAllDamage(g, pos)
+  FireHeroRemotes(g, pos)
  end
 
  local function FHeroF(g)
@@ -4686,8 +4684,8 @@ do
    end
    if RA.cur and not IsDeadF(RA.cur) and RA.cur.model.Parent then
     FCharF(RA.cur.guid, RA.cur.hrp.Position)
-    tpT = tpT + task.wait(0.1) -- [v5] 10x/detik, bukan unlimited
-    if tpT>=1 and not TA.running then tpT=0; TpToF(RA.cur) end -- [v5] tpT direset ke 0
+    tpT = tpT + task.wait(0)
+    if tpT>=1 and not TA.running then tpT=1; TpToF(RA.cur) end
    else
     task.wait(0.5)
    end
@@ -4722,13 +4720,13 @@ do
  end
  if tgt and not IsDeadF(tgt) and tgt.model.Parent then
  TA.cur = tgt
- if tgt.guid~=lastGuid then lastGuid=tgt.guid; TpToF(tgt); tpT=0 end
+ if tgt.guid~=lastGuid then lastGuid=tgt.guid; TpToF(tgt); tpT=1 end
  FCharF(tgt.guid, tgt.hrp.Position)
- tpT = tpT + task.wait(0.1) -- [v5] 10x/detik
- if tpT>=1 then tpT=0; TpToF(tgt) end -- [v5] TP tiap 1 detik, bukan tiap loop
+ tpT = tpT + task.wait()
+ if tpT>=0 then tpT=0; TpToF(tgt) end
  if onStatus then onStatus(">> ["..targetName.."] Kill: "..TA.killed) end
  else
- task.wait(0.1) -- [v5] 10x/detik
+ task.wait()
  end
  end
  end)
