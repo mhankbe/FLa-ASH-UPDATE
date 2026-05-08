@@ -1310,7 +1310,7 @@ MODE = {
  current = "idle", -- "idle"|"ma"|"raid"|"siege"|"dungeon"|"asc"|"st2"
  -- PRIORITY: dungeon > siege > raid > asc > st2 > ma > idle
  -- Fitur HANYA boleh masuk jika MODE.current == "idle"
- -- (tidak ada override priority — setiap fitur harus tunggu giliran)
+ -- (tidak ada override priority -- setiap fitur harus tunggu giliran)
  priority = { dungeon=6, siege=5, raid=4, asc=3, st2=2, ma=1, idle=0 },
  _prev = {}, -- stack: simpan mode yang diinterrupt, untuk resume
 }
@@ -8326,8 +8326,8 @@ function StartAscensionLoop()
     ReleaseMapLock("asc")
 
     -- Entry ASC = identik RAID normal, beda hanya mapId dan RUNE_IDS:
-    -- RAID: StartChallengeRaidMap({mapId = raidEntry.mapId + 100}) → 50101-50120
-    -- ASC : StartChallengeRaidMap({mapId = 50300+mn})              → Tower X = 50301-50326
+    -- RAID: StartChallengeRaidMap({mapId = raidEntry.mapId + 100}) -> 50101-50120
+    -- ASC : StartChallengeRaidMap({mapId = 50300+mn})              -> Tower X = 50301-50326
     -- Pakai ResolveAscTargetMapId(mn) agar selalu 50300+mn
 
     local targetMapId = ResolveAscTargetMapId(mn)  -- 50300+mn, confirmed formula
@@ -9046,9 +9046,15 @@ function StartAscensionLoop()
          AscStatusUpdate("[||] Menunggu siklus event habis - RAID standby (".._fw.."s)", Color3.fromRGB(180,100,255))
         else
          -- ASC tidak pernah match di siklus ini -> lepas _ascBusy, RAID boleh fallback
-         -- [v72] _ascBusy removed / _raidFallbackActive removed / _eventOwner removed
-         -- [v72] tidak perlu cek RAID.running
-         AscStatusUpdate("[Standby] Fallback ke Auto Raid (".._fw.."s)", Color3.fromRGB(140,100,200))
+         -- [v72] _ascBusy removed
+         -- [v72] _raidFallbackActive removed
+         -- [v72] _eventOwner removed
+          -- [v72] tidak perlu cek RAID.running
+          AscStatusUpdate("[Standby] Fallback ke Auto Raid (".._fw.."s)", Color3.fromRGB(140,100,200))
+         else
+          -- RAID OFF -> diam saja sampai event baru
+          AscStatusUpdate("[FLa] Waiting Ascension Tower... (".._fw.."s)", Color3.fromRGB(160,120,60))
+         end
         end
        end
       end
@@ -9147,14 +9153,14 @@ function GetRaidEnemies()
  local list = {}
  local seen = {}
 
- -- [v51-FIX] Hapus hard early-return berdasarkan MapId — terlalu agresif.
+ -- [v51-FIX] Hapus hard early-return berdasarkan MapId -- terlalu agresif.
  -- Guard lama menyebabkan scan gagal saat MapId belum update (race condition Delta Android)
  -- atau saat workspace.MapId pakai attribute name berbeda dari yang di-read.
  -- Sekarang: tetap scan workspace, hanya matikan distFilter jika mapId tidak dikenali.
  local currentMapId = GetCurrentMapId()
  local _inNormalRaid = currentMapId and (currentMapId >= 50101 and currentMapId <= 50120)
  local _inAscTower  = currentMapId and (currentMapId >= 50301 and currentMapId <= 50326)
- -- (tidak ada early return di sini — biarkan scan tetap berjalan)
+ -- (tidak ada early return di sini -- biarkan scan tetap berjalan)
 
  -- spawnPos hanya relevan untuk Normal Raid (Ascension Tower tidak pakai RAID_SPAWN_POS)
  local activeMapId = (_inNormalRaid and RAID and RAID.serverMapId) or nil
@@ -9214,14 +9220,14 @@ function GetAscEnemies()
  local list = {}
  local seen = {}
 
- -- [v51-FIX] Hapus hard early-return berdasarkan MapId — terlalu agresif.
+ -- [v51-FIX] Hapus hard early-return berdasarkan MapId -- terlalu agresif.
  -- Guard lama menyebabkan scan gagal saat MapId belum update (race condition Delta Android)
  -- atau saat workspace.MapId pakai attribute name berbeda dari yang di-read.
  -- Sekarang: tetap scan workspace, hanya matikan distFilter jika mapId tidak dikenali.
  local currentMapId = GetCurrentMapId()
  local _inNormalRaid = currentMapId and (currentMapId >= 50101 and currentMapId <= 50120)
  local _inAscTower  = currentMapId and (currentMapId >= 50301 and currentMapId <= 50326)
- -- (tidak ada early return di sini — biarkan scan tetap berjalan)
+ -- (tidak ada early return di sini -- biarkan scan tetap berjalan)
 
  -- spawnPos hanya relevan untuk Normal Raid (Ascension Tower tidak pakai RAID_SPAWN_POS)
  local activeMapId = (_inNormalRaid and RAID and RAID.serverMapId) or nil
