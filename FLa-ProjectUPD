@@ -8879,8 +8879,9 @@ function StartAscensionLoop()
         local hum = boss.model:FindFirstChildOfClass("Humanoid")
         if hum and hum.Health <= 0 then break end
         local p = GetSafeAscBossPos()
-        if not p then task.wait(0.08); continue end
+        if p then
         task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
+        end
         task.wait(0.08)
        end
 
@@ -9500,15 +9501,14 @@ function StartRaidLoop()
    if ASC and ASC.running and _ascBusy then
     RaidStatusUpdate("[||] ASC aktif - RAID standby...", Color3.fromRGB(180,100,255))
     task.wait(0.5); _rGuard = _rGuard + 0.5
-    continue
-   end
+   else
    -- Cek fitur lain (Siege, Dungeon)
    local _busy, _who = IsAnyMapActive()
    local _selfBusy = (_who == "raid")
    if not _busy or _selfBusy then break end
    RaidStatusUpdate("[||] Tunggu "..(_who or "?").." selesai dulu...", Color3.fromRGB(255,140,0))
    task.wait(0.5); _rGuard = _rGuard + 0.5
-  end
+   end
   if not RAID.running then break end
  end
 
@@ -10527,8 +10527,9 @@ local function ResolveEntry()
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
  if hum and hum.Health <= 0 then break end
  local p = GetSafeBossPos()
- if not p then task.wait(0.08); continue end
+ if p then
  task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
+ end
  task.wait(0.08)
  end
 
