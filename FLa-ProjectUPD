@@ -1687,7 +1687,7 @@ local function EnsureHeroAtkThread()
   local _lastFire = {}
   while ScreenGui and ScreenGui.Parent do
    local g = _heroAtkTarget
-   if g and #HERO_GUIDS > 0 and (tick() - _heroAtkTick) >= 0.1 and IsEnemyGuidValid(g) then -- [v5-FIX] 10x/detik
+   if g and #HERO_GUIDS > 0 and (tick() - _heroAtkTick) >= 0.5 and IsEnemyGuidValid(g) then
     _heroAtkTick = tick()
     for _, hGuid in ipairs(HERO_GUIDS) do
      local last = _lastFire[hGuid] or 0 -- [PERBAIKAN 2] Tambahkan 'or 0'
@@ -1720,7 +1720,7 @@ function FireAttack(g, pos)
  if RE.HeroUseSkill and #HERO_GUIDS > 0 then
   local now = tick()
   local last = _heroFireTick[g] or 0 -- [PERBAIKAN 4 UTAMA] Menyembuhkan error baris 1383
-  if now - last >= 0.1 then -- [v5-FIX] 10x/detik
+  if now - last >= 0.04 then
    _heroFireTick[g] = now
    for _, hGuid in ipairs(HERO_GUIDS) do
     pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g}) end)
@@ -2044,7 +2044,7 @@ function AttackLoop_Mass(onStatus)
    end
   end
 
-  task.wait(0.1) -- [v5-FIX] 10x per detik
+  task.wait(0.1) -- [v5] 10x/detik
  end
  return false
 end
@@ -4620,15 +4620,9 @@ do
  hrp.CFrame = CFrame.new(safePos or nearPos+Vector3.new(0,3,0))
  end
 
- -- [v5-FIX] Rate limiter per-guid: max 10x per detik (0.1s)
- local _fCharLastFire = {}
  local function FCharF(g, pos)
   if not g then return end
-  local now = tick()
-  local last = _fCharLastFire[g] or 0
-  if (now - last) < 0.1 then return end  -- 10x per detik max
-  _fCharLastFire[g] = now
-  -- [v5-FIX] Hanya ClickEnemy + PlayerClickAttackSkill (sesuai permintaan)
+  -- [v5] Hanya ClickEnemy + PlayerClickAttackSkill
   if RE.Click then
    task.spawn(function()
     pcall(function() RE.Click:InvokeServer({enemyGuid=g, enemyPos=pos}) end)
@@ -4640,7 +4634,7 @@ do
  end
 
  local function FHeroF(g)
-  -- Tidak dipakai (kosong intentional)
+  -- Logic dipindah ke FCharF untuk efisiensi "Tingkat Dewa" (seperti ST2)
  end
 
  local function StartCollectF(checkFn)
@@ -4666,45 +4660,41 @@ do
 
  -- Random Attack
  local function StartRA()
+  -- Pastikan HERO_GUIDS terisi sebelum attack
+  if #HERO_GUIDS == 0 then
+   pcall(function()
+    for _, obj in ipairs(LP.PlayerGui:GetChildren()) do
+     local g = obj:GetAttribute("heroGuid") or obj:GetAttribute("guid")
+     if type(g)=="string" and IsValidUUID(g) then
+      local dup=false
+      for _,ex in ipairs(HERO_GUIDS) do if ex==g then dup=true; break end end
+      if not dup then table.insert(HERO_GUIDS, g) end
+     end
+    end
+   end)
+  end
   RA.running=true; RA.killed=0; RA.cur=nil; RA.threads={}
-
-  -- [v5-FIX] Thread attack: 10x/detik, hanya ClickEnemy + PlayerClickAttackSkill
-  local tChar = task.spawn(function()
-   while RA.running do
-    -- Cari musuh baru jika target mati/hilang
-    if not RA.cur or IsDeadF(RA.cur) or not RA.cur.model.Parent then
-     _deadG_F={}; RA.cur=nil
-     for _,e in ipairs(GetEnemiesF()) do
-      if not IsDeadF(e) then RA.cur=e; break end
-     end
-     -- [v5-FIX] TP 1x ke musuh baru yang ditemukan
-     if RA.cur then TpToF(RA.cur) end
+ local tChar = task.spawn(function()
+  local tpT = 1
+  while RA.running do
+   if not RA.cur or IsDeadF(RA.cur) or not RA.cur.model.Parent then
+    _deadG_F={}; RA.cur=nil
+    for _,e in ipairs(GetEnemiesF()) do
+     if not IsDeadF(e) then RA.cur=e; break end
     end
-
-    if RA.cur and not IsDeadF(RA.cur) and RA.cur.model.Parent then
-     local pos = RA.cur.hrp and RA.cur.hrp.Position
-     if pos then
-      -- [v5-FIX] Sticky: paksa player HRP menempel di samping musuh setiap tick
-      -- Ini mencegah player "jalan bebas" dan memastikan server anggap kita dekat
-      local char = LP.Character
-      local pHRP = char and char:FindFirstChild("HumanoidRootPart")
-      if pHRP then
-       -- Tempel di samping musuh (offset 3 studs), ikuti posisi musuh real-time
-       local stickyPos = pos + Vector3.new(3, 0, 0)
-       pHRP.CFrame = CFrame.new(stickyPos)
-      end
-      -- Fire remote ke musuh
-      FCharF(RA.cur.guid, pos)
-     end
-     task.wait(0.1) -- [v5-FIX] 10x per detik
-    else
-     task.wait(0.3) -- nunggu musuh spawn, tidak perlu cepat
-    end
+    if RA.cur and not TA.running then TpToF(RA.cur); tpT=1 end
    end
-  end)
-
-  RA.threads = {tChar}
-  StartCollectF(function() return RA.running end)
+   if RA.cur and not IsDeadF(RA.cur) and RA.cur.model.Parent then
+    FCharF(RA.cur.guid, RA.cur.hrp.Position)
+    tpT = tpT + task.wait(0.1) -- [v5] 10x/detik, bukan unlimited
+    if tpT>=1 and not TA.running then tpT=0; TpToF(RA.cur) end -- [v5] tpT direset ke 0
+   else
+    task.wait(0.5)
+   end
+  end
+ end)
+ RA.threads = {tChar}
+ StartCollectF(function() return RA.running end)
  end
 
  local function StopRA()
@@ -4717,51 +4707,30 @@ do
  local function StartTA(targetName, onStatus)
  TA.running=true; TA.killed=0; TA.targetName=targetName; TA.cur=nil; TA.threads={}
  local tChar = task.spawn(function()
-  local lastGuid = nil
-  while TA.running do
-   local tgt = FindByNameF(targetName)
-
-   -- Musuh tidak ditemukan / mati -> tunggu respawn
-   if not tgt or IsDeadF(tgt) or not tgt.model.Parent then
-    TA.cur = nil
-    if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
-    while TA.running do
-     task.wait(0.1); tgt = FindByNameF(targetName)
-     if tgt and not IsDeadF(tgt) and tgt.model.Parent then break end
-    end
-    if not TA.running then break end
-    _deadG_F={}; lastGuid=nil
-   end
-
-   -- Musuh ditemukan
-   if tgt and not IsDeadF(tgt) and tgt.model.Parent then
-    TA.cur = tgt
-
-    -- [v5-FIX] TP 1x saat ganti target baru (bukan tiap loop)
-    if tgt.guid ~= lastGuid then
-     lastGuid = tgt.guid
-     TpToF(tgt)
-    end
-
-    local pos = tgt.hrp and tgt.hrp.Position
-    if pos then
-     -- [v5-FIX] Sticky: tempel player di samping musuh tiap tick
-     local char = LP.Character
-     local pHRP = char and char:FindFirstChild("HumanoidRootPart")
-     if pHRP then
-      local stickyPos = pos + Vector3.new(3, 0, 0)
-      pHRP.CFrame = CFrame.new(stickyPos)
-     end
-     -- [v5-FIX] Hanya ClickEnemy + PlayerClickAttackSkill, 10x/detik
-     FCharF(tgt.guid, pos)
-    end
-
-    if onStatus then onStatus(">> ["..targetName.."] Kill: "..TA.killed) end
-    task.wait(0.1) -- [v5-FIX] 10x per detik
-   else
-    task.wait(0.1)
-   end
-  end
+ local lastGuid=nil; local tpT=0
+ while TA.running do
+ local tgt = FindByNameF(targetName)
+ if not tgt then
+ TA.cur = nil
+ if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
+ while TA.running do
+ task.wait(); tgt=FindByNameF(targetName)
+ if tgt then break end
+ end
+ if not TA.running then break end
+ _deadG_F={}; lastGuid=nil
+ end
+ if tgt and not IsDeadF(tgt) and tgt.model.Parent then
+ TA.cur = tgt
+ if tgt.guid~=lastGuid then lastGuid=tgt.guid; TpToF(tgt); tpT=0 end
+ FCharF(tgt.guid, tgt.hrp.Position)
+ tpT = tpT + task.wait(0.1) -- [v5] 10x/detik
+ if tpT>=1 then tpT=0; TpToF(tgt) end -- [v5] TP tiap 1 detik, bukan tiap loop
+ if onStatus then onStatus(">> ["..targetName.."] Kill: "..TA.killed) end
+ else
+ task.wait(0.1) -- [v5] 10x/detik
+ end
+ end
  end)
  TA.threads = {tChar}
  StartCollectF(function() return TA.running end)
