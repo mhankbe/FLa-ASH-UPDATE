@@ -1468,6 +1468,7 @@ function GetEnemiesLocal()
 end
 
 _raidInterrupt = false -- true saat raid muncul & Mass Attack harus pause
+_ascInterrupt  = false -- true sesaat sebelum ASC masuk tower -> MA pause (mirip _raidInterrupt)
 local _lastBossGuid = nil -- guid boss terakhir untuk ExtraReward auto-claim
 _siegeInterrupt = false -- true saat siege pakai remote -> raid pause
 local _gainRaidsLock = false -- flag cegah infinite loop di hook GainRaidsRewards
@@ -2048,26 +2049,6 @@ function AttackLoop_Mass(onStatus)
  return false
 end
 
--- Cari musuh terdekat dari posisi karakter utama
-function GetRandomEnemy()
- local char = LP.Character
- if not char then return nil end
- local hrp = char:FindFirstChild("HumanoidRootPart")
- if not hrp then return nil end
- local myPos = hrp.Position
- local randomDist = nil
- for _, e in ipairs(GetEnemies()) do
- if not IsDead(e) and e.hrp then
- local d = (e.hrp.Position - myPos)
- if d < randomDist then
- randomtDist = d
- random = e
- end
- end
- end
- return random
-end
-
 -- Pilih musuh secara random dari daftar yang masih hidup
 function GetRandomEnemy()
  local alive = {}
@@ -2316,10 +2297,11 @@ function WaitRaidDone()
             end
         end
 
-        -- 4. Auto Ascension Tower - pause MA HANYA saat player benar-benar di dalam Tower
+        -- 4. Auto Ascension Tower - pause MA saat di dalam Tower ATAU sesaat sebelum masuk
         -- [FIX] _ascBusy tidak dipakai di sini - itu untuk RAID biar tidak rebutan masuk
-        -- MA boleh jalan saat ASC cooldown, sama seperti MA + AUTO RAID (RAID.inMap saja yang block)
-        if ASC and ASC.inMap then
+        -- _ascInterrupt mirip _raidInterrupt: di-set sesaat sebelum masuk, clear setelah inMap=true
+        -- MA boleh jalan bebas saat ASC cooldown, pause hanya saat _ascInterrupt atau ASC.inMap
+        if ASC and (_ascInterrupt or ASC.inMap) then
             return true, "Auto Ascension"
         end
 
@@ -2352,100 +2334,6 @@ function WaitRaidDone()
         _maStatusLbl.TextColor3 = C.ACC3
     end
 end
-function DoMassAttack(on)
- if on then
- _mOn = true
- MA.running = true
- MA.killed = 0
- MA.collected = 0
- StopGoldMagnet() -- [v258] Reset magnet sebelum start
- StartInstantGoldCollector(true) -- [v258] Instant collect (fix: listen ke folder)
- StartDestroyWorker(function() return MA.running end)
- StartGoldMagnet(function() return MA.running end) -- [v258] Super magnet
- MA.thread = task.spawn(function()
- local _maStart = os.time()
- local function maStatus(msg, col)
- if _maStatusLbl then
- local dur = os.time() - _maStart
- local ts = string.format("%02d:%02d:%02d", math.floor(dur/3600), math.floor(dur/60)%60, dur%60)
- _maStatusLbl.Text = "["..ts.."] "..msg
- _maStatusLbl.TextColor3 = col or C.ACC2
- end
- end
- while MA.running do
- -- [v252] Pause kalau ada fitur prioritas lebih tinggi aktif
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
-
- local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
-
- if #mapsToUse == 0 then
- local cont = AttackLoop_Mass(function(msg)
- maStatus(msg)
- end)
- if cont == "interrupted" then
- WaitRaidDone()
- elseif not cont or not MA.running then
- break
- end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- task.wait(MR.nextMapDelay)
- else
- -- [FIX] while+index manual: loop balik ke map pertama setelah map terakhir
- -- Rebuild _fresh tiap iterasi dari MR.selected terbaru
- -- -> langsung respon kalau user ubah selection di tengah jalan
- local _mapIdx = 1
- while MA.running do
- repeat
- local _fresh = {}
- for i = 1, 20 do
- if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
- end
- if #_fresh == 0 then mapsToUse = {}; break end
- if _mapIdx > #_fresh then _mapIdx = 1 end
- local m = _fresh[_mapIdx]
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
- if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
- maStatus("-> TP ke "..m.name.."...", Color3.fromRGB(180,220,255))
- TpMap(m)
- task.wait(MR.teleportDelay)
- if not MA.running then break end
- local cont = AttackLoop_Mass(function(msg)
- maStatus("["..m.name.."] "..msg)
- end)
- if cont == "interrupted" then
- WaitRaidDone()
- elseif not cont or not MA.running then
- break
- end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
- maStatus("[OK] SUCCES "..m.name.." - Go to...", Color3.fromRGB(100,255,150))
- task.wait(MR.nextMapDelay)
- _mapIdx = _mapIdx + 1
- if _mapIdx > #_fresh then
- _mapIdx = 1
- end
- until true
- end
- end
- end
- _mOn = false
- MA.running = false
- if _maStatusLbl then
- _maStatusLbl.Text = "[.] SUCCES"
- _maStatusLbl.TextColor3 = C.DIM
- end
- end)
- else
- _mOn = false; MA.running = false
- if MA.thread then pcall(function() task.cancel(MA.thread) end); MA.thread = nil end
- if _maStatusLbl then _maStatusLbl.Text = "Idle" end
- end
-end
-
 -- ============================================================
 function WaitSiegeDone()
     local waited = 0
@@ -2499,7 +2387,7 @@ function DoMassAttack(on)
  end
  while MA.running do
  -- [v252] Pause kalau ada fitur prioritas lebih tinggi aktif
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  if not MA.running then break end
 
  local mapsToUse = {}
@@ -2514,7 +2402,7 @@ function DoMassAttack(on)
  elseif not cont or not MA.running then
  break
  end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  task.wait(MR.nextMapDelay)
  else
  -- [FIX] while+index manual: loop balik ke map pertama setelah map terakhir
@@ -2530,7 +2418,7 @@ function DoMassAttack(on)
  if #_fresh == 0 then mapsToUse = {}; break end
  if _mapIdx > #_fresh then _mapIdx = 1 end
  local m = _fresh[_mapIdx]
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  if not MA.running then break end
  if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
  maStatus("-> TP ke "..m.name.."...", Color3.fromRGB(180,220,255))
@@ -2545,7 +2433,7 @@ function DoMassAttack(on)
  elseif not cont or not MA.running then
  break
  end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  if not MA.running then break end
  maStatus("[OK] SUCCES "..m.name.." - Go to...", Color3.fromRGB(100,255,150))
  task.wait(MR.nextMapDelay)
@@ -8423,7 +8311,16 @@ function StartAscensionLoop()
     local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
     AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
 
+    -- [FIX] Set _ascInterrupt dulu -> MA pause segera (mirip _raidInterrupt di RAID)
+    -- Lalu tunggu sebentar biar MA sempat pause sebelum kita masuk tower
+    _ascInterrupt = true
+    if MA.running then
+        local _wma = 0
+        while MA.running and _ascInterrupt and _wma < 1 do task.wait(0.05); _wma = _wma + 0.05 end
+    end
+
     ASC.inMap = true
+    _ascInterrupt = false  -- inMap=true sudah aktif, WaitRaidDone cek ASC.inMap langsung
     _ascBusy  = true  -- RAID harus pause total selama ASC aktif (inMap+cooldown)
     _ascMatchedThisCycle = true   -- [v61 CYCLEFIX] ASC sudah match di siklus ini
     _raidFallbackActive  = false  -- [v61 CYCLEFIX] RAID tidak boleh fallback di siklus ini
@@ -8566,6 +8463,7 @@ function StartAscensionLoop()
       ASC.inMap = false; ReleaseMapLock("asc")
       -- [v64 FIX] Jangan biarkan _ascBusy=true saat gagal masuk -> RAID/MA akan stuck pause
       _ascBusy = false
+      _ascInterrupt = false  -- [FIX] reset jika gagal masuk
       AscStatusUpdate("[!] Server reject (ChallengeRaidsFail) - retry...", Color3.fromRGB(255,80,80))
       task.wait(1); break
      end
@@ -8593,6 +8491,7 @@ function StartAscensionLoop()
      ASC.inMap = false; ReleaseMapLock("asc")
      -- [v64 FIX] Reset _ascBusy agar RAID/MA tidak stuck pause selamanya saat gagal TP
      _ascBusy = false
+     _ascInterrupt = false  -- [FIX] reset pada gagal TP
      AscStatusUpdate("[!] Gagal masuk Tower - retry...", Color3.fromRGB(255,80,80))
      task.wait(1); break
     end
@@ -8650,6 +8549,7 @@ function StartAscensionLoop()
          AscStatusUpdate("[!] Watchdog: Player keluar Tower paksa - reset state", Color3.fromRGB(255,80,80))
          ASC.inMap = false
          _ascBusy = false
+         _ascInterrupt = false  -- [FIX] reset pada watchdog exit
          ReleaseMapLock("asc")
          break
         end
@@ -9087,7 +8987,10 @@ function StartAscensionLoop()
       else
        local nextEntry = ResolveAscEntry()
        if nextEntry then
-        _ascBusy = true  -- ada Tower baru -> RAID harus pause lagi
+        -- [FIX] Jangan set _ascBusy di sini -> MA bebas jalan selama cooldown
+        -- _ascBusy di-set nanti saat ASC benar-benar masuk tower (setelah _ascInterrupt)
+        -- Tapi RAID tetap perlu pause -> set _ascBusy agar RAID tidak rebutan masuk
+        _ascBusy = true  -- RAID pause (tapi MA boleh jalan, MA cek ASC.inMap/_ascInterrupt)
         break
        end
        -- Tidak ada Tower yang cocok
@@ -9152,6 +9055,7 @@ function StartAscensionLoop()
   ASC.running = false
   ASC.inMap   = false
   _ascBusy    = false
+  _ascInterrupt = false  -- [FIX] reset cleanup
   _ascOn      = false
   _ascDominatedThisEvent = false -- [v56 DEPRECATED] tidak dipakai lagi
   _ascMatchedThisCycle  = false  -- [v61 CYCLEFIX] reset saat ASC stop
