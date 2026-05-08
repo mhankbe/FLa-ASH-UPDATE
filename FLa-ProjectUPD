@@ -1,3 +1,5 @@
+-- [v72 DIAG] Wrap untuk catch error asli
+local _ok, _err = pcall(function()
 -- ASH Auto Farm - by FLa Project
 do
  local _RS2 = game:GetService("ReplicatedStorage")
@@ -16608,3 +16610,24 @@ task.spawn(function()
         end) 
     end 
 end)
+
+end)
+if not _ok then
+    warn("[FLa v72 ERROR] " .. tostring(_err))
+    -- Tampilkan di game juga
+    pcall(function()
+        local sg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+        if sg then
+            local s = Instance.new("ScreenGui", sg)
+            s.ResetOnSpawn = false
+            local t = Instance.new("TextLabel", s)
+            t.Size = UDim2.new(1,0,0.1,0)
+            t.Position = UDim2.new(0,0,0.45,0)
+            t.BackgroundColor3 = Color3.fromRGB(200,0,0)
+            t.TextColor3 = Color3.fromRGB(255,255,255)
+            t.TextScaled = true
+            t.Text = "[FLa ERROR] " .. tostring(_err)
+            t.ZIndex = 999
+        end
+    end)
+end
