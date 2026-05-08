@@ -6890,8 +6890,7 @@ function ParseChatLine(text)
      _ent.grade = grade
      local _bn = _ent.bossName or (_ascBossName) or nil
      if _bn then _ent.bossName = _bn end
-     _ent.label = "Ascension Tower ".._mn2..(_ent.bossName and (" - "..(_ent.bossName:gsub("^%l",string.upper))) or "").." ["..grade.."]\r
-"
+     _ent.label = "Ascension Tower ".._mn2..(_ent.bossName and (" - "..(_ent.bossName:gsub("^%l",string.upper))) or "").." ["..grade.."]"
     end
    end
   end
