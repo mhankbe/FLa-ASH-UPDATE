@@ -6911,7 +6911,6 @@ local function _processMsg(raw)
     if type(raw) ~= "string" or #raw < 5 then return end
     local txt = raw:gsub("<[^>]+>",""):gsub("[\r\n]+"," "):match("^%s*(.-)%s*$") or raw
 
-    -- Strip prefix system jika ada
     local function hasKW(s)
         return s:find("MaFissure",1,true) or s:find("appeared in",1,true)
     end
@@ -6925,11 +6924,7 @@ local function _processMsg(raw)
     local key = txt:sub(1,200)
     if _chatSeen[key] and (now - _chatSeen[key]) < 180 then return end
     _chatSeen[key] = now
-
-    -- Simpan ke _RAID_LINES untuk webhook
     _RAID_LINES[key] = now
-
-    -- Tetap parse untuk RAID_LIVE dan grade cache
     ParseChatLine(txt)
 
     -- Cleanup
