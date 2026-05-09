@@ -5559,53 +5559,107 @@ do
     StopX100(); return
    end
    local attempt = 0
+   -- [FIX] Track slot yang sudah DONE agar tidak di-roll ulang
+   local slotDone = {false, false, false}
+
+   -- [FIX] Helper: scan seluruh table (flat + nested + array) cari quirkId yang cocok target
+   local function ScanResForTarget(res, targets)
+    if type(res) ~= "table" then return nil, nil end
+    local gotId, rawId = nil, nil
+    local PRIO = {"finalResultId","quirkId","resultId","id","Id","result","Result"}
+    -- Pass 1: key prioritas di root
+    for _, key in ipairs(PRIO) do
+     local v = res[key]
+     if type(v) == "number" and v > 0 then
+      rawId = rawId or v
+      if QUIRK_MAP[v] then gotId = gotId or v end
+      if targets[v] then return v, v end -- langsung hit target
+     end
+    end
+    -- Pass 2: scan flat seluruh root (termasuk array index)
+    for k, v in pairs(res) do
+     if type(v) == "number" and v > 0 then
+      rawId = rawId or v
+      if QUIRK_MAP[v] then gotId = gotId or v end
+      if targets[v] then return v, v end
+     elseif type(v) == "table" then
+      -- Pass 3: scan array/nested 1 level (cover {results={...}, data={...}})
+      for _, vv in pairs(v) do
+       if type(vv) == "number" and vv > 0 then
+        rawId = rawId or vv
+        if QUIRK_MAP[vv] then gotId = gotId or vv end
+        if targets[vv] then return vv, vv end
+       elseif type(vv) == "table" then
+        -- Pass 4: nested 2 level (cover array of {quirkId=...} objects)
+        for _, vvv in pairs(vv) do
+         if type(vvv) == "number" and vvv > 0 then
+          rawId = rawId or vvv
+          if QUIRK_MAP[vvv] then gotId = gotId or vvv end
+          if targets[vvv] then return vvv, vvv end
+         end
+        end
+       end
+      end
+     end
+    end
+    return gotId, rawId
+   end
+
    while _HR_RPT.x100 do
+    -- [FIX] Cek apakah semua slot sudah DONE
     local allDone = true
     for si = 1, 3 do
      local list = QUIRK_LIST_PER_SLOT[si]
      local targets = _HR_RPT.slotTarget[si]
-     local drawId = ({920001,920002,920003})[si]
-     -- Cek target dipilih
      local stopIds = {}
      for _, q in ipairs(list) do
       if targets[q.id] then table.insert(stopIds, q.id) end
      end
-     if #stopIds == 0 then
-      _HR_RPT.SetSlot(si,"[!] SELECT TARGET!",Color3.fromRGB(255,100,60))
+     if #stopIds > 0 and not slotDone[si] then allDone = false; break end
+    end
+    if allDone then StopX100(); break end
+
+    for si = 1, 3 do
+     -- [FIX] Skip slot yang sudah DONE, jangan di-roll lagi
+     if slotDone[si] then
+      -- Slot ini sudah selesai, tampilkan status DONE (no action)
      else
-      attempt = attempt + 1
-      _HR_RPT.SetSlot(si,"[x100] Slot"..si.." #"..attempt.."..",Color3.fromRGB(100,200,255))
-      _ourCall = true
-      local ok, res = pcall(function()
-       return RE.AutoHeroQuirk:InvokeServer({
-        heroGuid = _HR_RPT.guid,
-        drawId = drawId,
-        stopQuirkIds = stopIds,
-       })
-      end)
-      _ourCall = false
-      if not ok then
-       _HR_RPT.SetSlot(si,"[!] Error",Color3.fromRGB(255,100,60))
+      local list = QUIRK_LIST_PER_SLOT[si]
+      local targets = _HR_RPT.slotTarget[si]
+      local drawId = ({920001,920002,920003})[si]
+      -- Kumpulkan stopIds
+      local stopIds = {}
+      for _, q in ipairs(list) do
+       if targets[q.id] then table.insert(stopIds, q.id) end
+      end
+      if #stopIds == 0 then
+       _HR_RPT.SetSlot(si,"[!] SELECT TARGET!",Color3.fromRGB(255,100,60))
       else
-       -- Parse result
-       local gotId, rawId = nil, nil
-       if type(res) == "table" then
-        for _, key in ipairs({"finalResultId","quirkId","resultId","id","result"}) do
-         local v = res[key]
-         if type(v)=="number" and v>0 then rawId=rawId or v; if QUIRK_MAP[v] then gotId=v; break end end
-        end
-        if not gotId then for _,v in pairs(res) do if type(v)=="number" and v>0 then rawId=rawId or v; if QUIRK_MAP[v] then gotId=v; break end end end end
-       end
-       local hit = gotId and targets[gotId] == true
-       if hit then
-        local gn = QUIRK_MAP[gotId] or "ID:"..tostring(gotId)
-        _HR_RPT.SetSlot(si,"DONE: "..gn.." (#"..attempt..")",Color3.fromRGB(80,220,80))
-        -- slot ini selesai, tidak perlu stop semua
-        allDone = false -- tetap loop slot lain
+       attempt = attempt + 1
+       _HR_RPT.SetSlot(si,"[x100] Slot"..si.." #"..attempt.."..",Color3.fromRGB(100,200,255))
+       _ourCall = true
+       local ok, res = pcall(function()
+        return RE.AutoHeroQuirk:InvokeServer({
+         heroGuid = _HR_RPT.guid,
+         drawId = drawId,
+         stopQuirkIds = stopIds,
+        })
+       end)
+       _ourCall = false
+       if not ok then
+        _HR_RPT.SetSlot(si,"[!] Error - retry",Color3.fromRGB(255,100,60))
        else
-        local gn = (gotId and QUIRK_MAP[gotId]) or (rawId and "ID:"..tostring(rawId)) or "?"
-        _HR_RPT.SetSlot(si,"[x100] #"..attempt.." Last: "..gn,Color3.fromRGB(80,180,255))
-        allDone = false
+        -- [FIX] Scan SELURUH response (flat+nested+array) cari target
+        local gotId, rawId = ScanResForTarget(res, targets)
+        local hit = gotId ~= nil and targets[gotId] == true
+        if hit then
+         local gn = QUIRK_MAP[gotId] or "ID:"..tostring(gotId)
+         _HR_RPT.SetSlot(si,"[DONE] "..gn.." (#"..attempt..")",Color3.fromRGB(80,220,80))
+         slotDone[si] = true -- [FIX] Tandai slot ini selesai, tidak di-roll lagi
+        else
+         local gn = (gotId and QUIRK_MAP[gotId]) or (rawId and "ID:"..tostring(rawId)) or "?"
+         _HR_RPT.SetSlot(si,"[x100] #"..attempt.." Last: "..gn,Color3.fromRGB(80,180,255))
+        end
        end
       end
      end
@@ -15229,17 +15283,40 @@ do
    setSlot("[!] x100 Error - retry", Color3.fromRGB(255,100,60))
    task.wait(1); break
   end
-  -- Parse result x100 (sama seperti 1x)
+  -- [FIX] Parse result x100: scan DEEP (flat+nested+array) agar tidak kelewatan
   local gotId100, rawId100 = nil, nil
+  local hit100 = false
   if type(res100) == "table" then
-   local PRIO = {"finalResultId","quirkId","resultId","id","Id","result","Result"}
-   for _, key in ipairs(PRIO) do
-    local v = res100[key]
-    if type(v) == "number" and v > 0 then rawId100 = rawId100 or v; if QUIRK_MAP[v] then gotId100=v; break end end
+   -- Fungsi scan rekursif sampai 3 level
+   local function DeepScan(t, depth)
+    if type(t) ~= "table" or depth > 3 then return nil, nil end
+    local foundHit, foundRaw = nil, nil
+    local PRIO = {"finalResultId","quirkId","resultId","id","Id","result","Result"}
+    for _, key in ipairs(PRIO) do
+     local v = t[key]
+     if type(v) == "number" and v > 0 then
+      foundRaw = foundRaw or v
+      if QUIRK_MAP[v] then foundHit = foundHit or v end
+      if targets[v] then return v, v end -- target ketemu, berhenti
+     end
+    end
+    for _, v in pairs(t) do
+     if type(v) == "number" and v > 0 then
+      foundRaw = foundRaw or v
+      if QUIRK_MAP[v] then foundHit = foundHit or v end
+      if targets[v] then return v, v end
+     elseif type(v) == "table" then
+      local h, r = DeepScan(v, depth + 1)
+      if h and targets[h] then return h, h end
+      foundHit = foundHit or h
+      foundRaw = foundRaw or r
+     end
+    end
+    return foundHit, foundRaw
    end
-   if not gotId100 then for _, v in pairs(res100) do if type(v)=="number" and v>0 then rawId100=rawId100 or v; if QUIRK_MAP[v] then gotId100=v; break end end end end
+   gotId100, rawId100 = DeepScan(res100, 1)
   end
-  local hit100 = gotId100 and targets[gotId100] == true
+  hit100 = gotId100 ~= nil and targets[gotId100] == true
   if hit100 then
    local gn = QUIRK_MAP[gotId100] or "ID:"..tostring(gotId100)
    setSlot("DONE: "..gn.." (#"..attempt..")", Color3.fromRGB(80,220,80))
