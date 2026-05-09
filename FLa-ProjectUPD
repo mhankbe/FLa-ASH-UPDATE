@@ -6924,7 +6924,8 @@ local function _processMsg(raw)
     local key = txt:sub(1,200)
     if _chatSeen[key] and (now - _chatSeen[key]) < 180 then return end
     _chatSeen[key] = now
-    _RAID_LINES[key] = now
+    -- Saat silent (scan history awal): parse tapi jangan masuk _RAID_LINES
+    if not _whSilent then _RAID_LINES[key] = now end
     ParseChatLine(txt)
 
     -- Cleanup
@@ -15019,7 +15020,7 @@ do
  local mode = _webhookMode or "both"
  local url = _webhookUrl
  local sent = false
- local hasRaid = next(RAID_LIVE or {}) ~= nil
+ local hasRaid = (_RAID_LINES and next(_RAID_LINES) ~= nil) or next(RAID_LIVE or {}) ~= nil
  local hasSiege = SIEGE and SIEGE.live and next(SIEGE.live) ~= nil
  if (mode == "raid" or mode == "both") and hasRaid then
  if _WH.SendRaid then _WH.SendRaid(url) end; sent = true
