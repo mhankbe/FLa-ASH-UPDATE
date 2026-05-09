@@ -66,7 +66,7 @@ RE = {
  ExtraReward = Remotes:WaitForChild("ExtraReward", 10), -- [v112-FIX] WaitForChild agar tidak nil
  ShowReward = Remotes:FindFirstChild("ShowReward"),
  DropItems = Remotes:FindFirstChild("DropItems"),
- AutoHeroQuirk = Remotes:FindFirstChild("AutoRandomHeroQuirk"),
+ AutoHeroQuirk = Remotes:WaitForChild("AutoRandomHeroQuirk", 10),
  RandomHeroQuirk = Remotes:WaitForChild("RandomHeroQuirk", 10),
  Click = Remotes:FindFirstChild("ClickEnemy"),
  Atk = Remotes:FindFirstChild("PlayerClickAttackSkill"),
@@ -15102,21 +15102,63 @@ do
  setSlot("[!] Remote RandomHeroQuirk nil", Color3.fromRGB(255,80,80))
  task.wait(2); break
  end
- _ourCall = true
- local ok, res = pcall(function()
-  -- x100 mode: pakai AutoHeroQuirk dengan stopQuirkIds = target yg dipilih
-  if _HR_RPT.x100 and RE.AutoHeroQuirk then
-   local stopIds = {}
-   for _, q in ipairs(list) do
-    if targets[q.id] then table.insert(stopIds, q.id) end
-   end
+ -- x100 path
+ if _HR_RPT.x100 then
+  if not RE.AutoHeroQuirk then
+   setSlot("[!] Remote AutoRandomHeroQuirk nil", Color3.fromRGB(255,80,80))
+   task.wait(2); break
+  end
+  local stopIds = {}
+  for _, q in ipairs(list) do
+   if targets[q.id] then table.insert(stopIds, q.id) end
+  end
+  if #stopIds == 0 then
+   setSlot("[!] SELECT TARGET PLEASE!", Color3.fromRGB(255,100,60))
+   task.wait(1); break
+  end
+  setSlot("[x100] Rolling #"..attempt.."..", Color3.fromRGB(100,200,255))
+  _ourCall = true
+  local ok100, res100 = pcall(function()
    return RE.AutoHeroQuirk:InvokeServer({
     heroGuid = _HR_RPT.guid,
     drawId = drawId[si],
     stopQuirkIds = stopIds,
    })
+  end)
+  _ourCall = false
+  if not ok100 then
+   setSlot("[!] x100 Error - retry", Color3.fromRGB(255,100,60))
+   task.wait(1); break
   end
-  -- Normal 1x roll
+  -- Parse result x100 (sama seperti 1x)
+  local gotId100, rawId100 = nil, nil
+  if type(res100) == "table" then
+   local PRIO = {"finalResultId","quirkId","resultId","id","Id","result","Result"}
+   for _, key in ipairs(PRIO) do
+    local v = res100[key]
+    if type(v) == "number" and v > 0 then rawId100 = rawId100 or v; if QUIRK_MAP[v] then gotId100=v; break end end
+   end
+   if not gotId100 then for _, v in pairs(res100) do if type(v)=="number" and v>0 then rawId100=rawId100 or v; if QUIRK_MAP[v] then gotId100=v; break end end end end
+  end
+  local hit100 = gotId100 and targets[gotId100] == true
+  if hit100 then
+   local gn = QUIRK_MAP[gotId100] or "ID:"..tostring(gotId100)
+   setSlot("DONE: "..gn.." (#"..attempt..")", Color3.fromRGB(80,220,80))
+   StopHeroLoop(si)
+   local allDone = true
+   for i=1,3 do if LOOPS_HR[i] then allDone=false; break end end
+   if allDone and _HR_RPT then _HR_RPT.SetToggleOff() end
+   return
+  else
+   local gn = (gotId100 and QUIRK_MAP[gotId100]) or (rawId100 and "ID:"..tostring(rawId100)) or "?"
+   setSlot("[x100] #"..attempt.." Last: "..gn, Color3.fromRGB(80,180,255))
+  end
+  task.wait(0.05); break
+ end
+
+ -- Normal 1x path
+ _ourCall = true
+ local ok, res = pcall(function()
   return RE.RandomHeroQuirk:InvokeServer({
    heroGuid = _HR_RPT.guid,
    drawId = drawId[si],
@@ -15124,7 +15166,7 @@ do
  end)
  _ourCall = false
  if not ok then
- task.wait(1); break
+  task.wait(1); break
  end
 
  -- [FIX v38] Tangkap hasil quirk - scan luas tanpa filter QUIRK_MAP
