@@ -1195,10 +1195,7 @@ ASC = {
  runeGrades    = {},    -- filter grade (Preferred Rank)
  runeEnabled   = false, -- rune map item aktif (ASC Tower 1-26)
  runeMapTarget = 0,     -- target Tower rune (1-26), 0 = nonaktif
- updownEnabled     = false, -- UP/DOWN Rank toggle
- updownDir         = "up",  -- "up" | "down"
- updownTargetGrade = nil,   -- grade target UP/DOWN
- manualMatchMode   = "none", -- [v48] "primary" | "updown" | "fallback" | "none"
+ manualMatchMode   = "none", -- [v48] "primary" | "fallback" | "none"
  _rrIdx            = 0,      -- [v48] Round-robin index untuk Pick Mode Default
  autoKillBoss = false, -- AUTO BOSS KILL toggle
  bossDelay    = 3,     -- delay sebelum TP ke boss (1-10s)
@@ -1211,7 +1208,6 @@ _ascWakeup = nil -- BindableEvent untuk wakeup loop
 _visAscension = nil -- visual pill toggle
 _ascBusy = false -- true selama ASC inMap ATAU cooldown -> RAID pause total
 _ASC_CHAT_CACHE = {} -- [mapNum] = {grade, bossName} dari chat parser; dipakai ParseRaidEntry
-_RAID_LINES     = {} -- raw text dari TipsFloatingPanel untuk webhook
 -- [v56 DEPRECATED] _ascDominatedThisEvent tidak dipakai lagi
 -- Logika baru: RAID standby selama ASC.running=true DAN ResolveAscEntry()~=nil
 -- RAID boleh jalan HANYA kalau ResolveAscEntry()=nil (tidak ada Tower match di event saat ini)
@@ -1472,6 +1468,7 @@ function GetEnemiesLocal()
 end
 
 _raidInterrupt = false -- true saat raid muncul & Mass Attack harus pause
+_ascInterrupt  = false -- true sesaat sebelum ASC masuk tower -> MA pause (mirip _raidInterrupt)
 local _lastBossGuid = nil -- guid boss terakhir untuk ExtraReward auto-claim
 _siegeInterrupt = false -- true saat siege pakai remote -> raid pause
 local _gainRaidsLock = false -- flag cegah infinite loop di hook GainRaidsRewards
@@ -2052,26 +2049,6 @@ function AttackLoop_Mass(onStatus)
  return false
 end
 
--- Cari musuh terdekat dari posisi karakter utama
-function GetRandomEnemy()
- local char = LP.Character
- if not char then return nil end
- local hrp = char:FindFirstChild("HumanoidRootPart")
- if not hrp then return nil end
- local myPos = hrp.Position
- local randomDist = nil
- for _, e in ipairs(GetEnemies()) do
- if not IsDead(e) and e.hrp then
- local d = (e.hrp.Position - myPos)
- if d < randomDist then
- randomtDist = d
- random = e
- end
- end
- end
- return random
-end
-
 -- Pilih musuh secara random dari daftar yang masih hidup
 function GetRandomEnemy()
  local alive = {}
@@ -2320,14 +2297,12 @@ function WaitRaidDone()
             end
         end
 
-        -- [BUG FIX v49] 4. Auto Ascension Tower - pause MA saat sedang di dalam Tower
-        -- [v64 FIX] Tambahkan cek _ascBusy: MA juga pause saat ASC cooldown dgn Tower tersedia
-        -- Tanpa ini: race condition MA TP vs ASC TP -> player double-TP -> ASC stuck "Dalam Tower"
-        if ASC and ASC.inMap then
+        -- 4. Auto Ascension Tower - pause MA saat di dalam Tower ATAU sesaat sebelum masuk
+        -- [FIX] _ascBusy tidak dipakai di sini - itu untuk RAID biar tidak rebutan masuk
+        -- _ascInterrupt mirip _raidInterrupt: di-set sesaat sebelum masuk, clear setelah inMap=true
+        -- MA boleh jalan bebas saat ASC cooldown, pause hanya saat _ascInterrupt atau ASC.inMap
+        if ASC and (_ascInterrupt or ASC.inMap) then
             return true, "Auto Ascension"
-        end
-        if ASC and ASC.running and _ascBusy then
-            return true, "Auto Ascension (cooldown)"
         end
 
         return false, nil
@@ -2359,100 +2334,6 @@ function WaitRaidDone()
         _maStatusLbl.TextColor3 = C.ACC3
     end
 end
-function DoMassAttack(on)
- if on then
- _mOn = true
- MA.running = true
- MA.killed = 0
- MA.collected = 0
- StopGoldMagnet() -- [v258] Reset magnet sebelum start
- StartInstantGoldCollector(true) -- [v258] Instant collect (fix: listen ke folder)
- StartDestroyWorker(function() return MA.running end)
- StartGoldMagnet(function() return MA.running end) -- [v258] Super magnet
- MA.thread = task.spawn(function()
- local _maStart = os.time()
- local function maStatus(msg, col)
- if _maStatusLbl then
- local dur = os.time() - _maStart
- local ts = string.format("%02d:%02d:%02d", math.floor(dur/3600), math.floor(dur/60)%60, dur%60)
- _maStatusLbl.Text = "["..ts.."] "..msg
- _maStatusLbl.TextColor3 = col or C.ACC2
- end
- end
- while MA.running do
- -- [v252] Pause kalau ada fitur prioritas lebih tinggi aktif
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
-
- local mapsToUse = {}
- for i = 1, 20 do if MR.selected[i] then table.insert(mapsToUse, MAPS[i]) end end
-
- if #mapsToUse == 0 then
- local cont = AttackLoop_Mass(function(msg)
- maStatus(msg)
- end)
- if cont == "interrupted" then
- WaitRaidDone()
- elseif not cont or not MA.running then
- break
- end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- task.wait(MR.nextMapDelay)
- else
- -- [FIX] while+index manual: loop balik ke map pertama setelah map terakhir
- -- Rebuild _fresh tiap iterasi dari MR.selected terbaru
- -- -> langsung respon kalau user ubah selection di tengah jalan
- local _mapIdx = 1
- while MA.running do
- repeat
- local _fresh = {}
- for i = 1, 20 do
- if MR.selected[i] then table.insert(_fresh, MAPS[i]) end
- end
- if #_fresh == 0 then mapsToUse = {}; break end
- if _mapIdx > #_fresh then _mapIdx = 1 end
- local m = _fresh[_mapIdx]
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
- if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
- maStatus("-> TP ke "..m.name.."...", Color3.fromRGB(180,220,255))
- TpMap(m)
- task.wait(MR.teleportDelay)
- if not MA.running then break end
- local cont = AttackLoop_Mass(function(msg)
- maStatus("["..m.name.."] "..msg)
- end)
- if cont == "interrupted" then
- WaitRaidDone()
- elseif not cont or not MA.running then
- break
- end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
- if not MA.running then break end
- maStatus("[OK] SUCCES "..m.name.." - Go to...", Color3.fromRGB(100,255,150))
- task.wait(MR.nextMapDelay)
- _mapIdx = _mapIdx + 1
- if _mapIdx > #_fresh then
- _mapIdx = 1
- end
- until true
- end
- end
- end
- _mOn = false
- MA.running = false
- if _maStatusLbl then
- _maStatusLbl.Text = "[.] SUCCES"
- _maStatusLbl.TextColor3 = C.DIM
- end
- end)
- else
- _mOn = false; MA.running = false
- if MA.thread then pcall(function() task.cancel(MA.thread) end); MA.thread = nil end
- if _maStatusLbl then _maStatusLbl.Text = "Idle" end
- end
-end
-
 -- ============================================================
 function WaitSiegeDone()
     local waited = 0
@@ -2506,7 +2387,7 @@ function DoMassAttack(on)
  end
  while MA.running do
  -- [v252] Pause kalau ada fitur prioritas lebih tinggi aktif
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  if not MA.running then break end
 
  local mapsToUse = {}
@@ -2521,7 +2402,7 @@ function DoMassAttack(on)
  elseif not cont or not MA.running then
  break
  end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  task.wait(MR.nextMapDelay)
  else
  -- [FIX] while+index manual: loop balik ke map pertama setelah map terakhir
@@ -2537,7 +2418,7 @@ function DoMassAttack(on)
  if #_fresh == 0 then mapsToUse = {}; break end
  if _mapIdx > #_fresh then _mapIdx = 1 end
  local m = _fresh[_mapIdx]
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  if not MA.running then break end
  if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
  maStatus("-> TP ke "..m.name.."...", Color3.fromRGB(180,220,255))
@@ -2552,7 +2433,7 @@ function DoMassAttack(on)
  elseif not cont or not MA.running then
  break
  end
- if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
+ if MODE.current ~= "idle" and MODE.current ~= "ma" or _raidInterrupt or _siegeInterrupt or _ascInterrupt or (DUNGEON and DUNGEON.interrupt) or (DUNGEON and DUNGEON.inMap) or (ST2 and ST2.running) then WaitRaidDone() end
  if not MA.running then break end
  maStatus("[OK] SUCCES "..m.name.." - Go to...", Color3.fromRGB(100,255,150))
  task.wait(MR.nextMapDelay)
@@ -2612,7 +2493,7 @@ end
 -- ============================================================
 -- Hero: hanya tampilkan quirk tier tinggi per slot, max pilih 3
 QUIRK_LIST_PER_SLOT = {
- -- Slot 1 (6 pilihan, max 3)
+ -- Slot 1 (9 pilihan, max 3)
  {
  {id=99013,name="Midas Touch"},
  {id=99014,name="Hyper Sprint"},
@@ -2620,8 +2501,11 @@ QUIRK_LIST_PER_SLOT = {
  {id=99016,name="Cosmic Luck"},
  {id=99017,name="Destiny Rewrite"},
  {id=99018,name="Final Judgment"},
+ {id=99109,name="Golden Era"},
+ {id=99110,name="The Chosen Singularity"},
+ {id=99111,name="Axiom of Value"},
  },
- -- Slot 2 (6 pilihan, max 3)
+ -- Slot 2 (9 pilihan, max 3)
  {
  {id=99031,name="Resource Conqueror"},
  {id=99032,name="Elemental Overload"},
@@ -2629,14 +2513,20 @@ QUIRK_LIST_PER_SLOT = {
  {id=99034,name="God's Gift"},
  {id=99035,name="Apocalypse Carnival"},
  {id=99036,name="Divine Judgment"},
+ {id=99112,name="Celestial Benediction"},
+ {id=99113,name="Eclipse Masquerade"},
+ {id=99114,name="Sovereign Verdict"},
  },
- -- Slot 3 (5 pilihan, max 3)
+ -- Slot 3 (8 pilihan, max 3)
  {
  {id=99049,name="Slayer's Instinct"},
  {id=99050,name="Harbinger of Ruin"},
  {id=99052,name="Godslayer's Fury"},
  {id=99053,name="Deicide's Endgame"},
  {id=99054,name="Final Arbiter"},
+ {id=99115,name="Cosmic Cataclysm"},
+ {id=99116,name="Omega Oblivion"},
+ {id=99117,name="Sovereign Axiom"},
  },
 }
 MAX_PER_SLOT = 3
@@ -5618,6 +5508,30 @@ do
  end
  end)
 
+ -- Toggle x100 Reroll Hero
+ local x100Row = Frame(hrInner, C.BG2, UDim2.new(1,0,0,34))
+ x100Row.LayoutOrder = 8; Corner(x100Row, 10); Stroke(x100Row,C.ACC2, 1.5,0.7)
+ local x100Lbl = Label(x100Row,"x100 Reroll",12,C.TXT,Enum.Font.GothamBold)
+ x100Lbl.Size=UDim2.new(0.55,0,1,0); x100Lbl.Position=UDim2.new(0,10,0,0)
+ local x100Sub = Label(x100Row,"ON = 1 roll = 100 result",9,C.TXT3,Enum.Font.GothamBold)
+ x100Sub.Size=UDim2.new(0.55,0,0,12); x100Sub.Position=UDim2.new(0,10,1,-14)
+ local x100Pill = Btn(x100Row,C.BG3,UDim2.new(0,40,0,22))
+ x100Pill.Position=UDim2.new(1,-50,0.5,-11); Corner(x100Pill,11)
+ local x100Knob = Frame(x100Pill,C.TXT,UDim2.new(0,18,0,18))
+ x100Knob.Position=UDim2.new(0,2,0.5,-9); Corner(x100Knob,9)
+ _HR_RPT.x100 = false
+ local function SetX100UI(on)
+  TweenService:Create(x100Pill,TweenInfo.new(0.15),{BackgroundColor3=on and C.PILL_ON or C.BG3}):Play()
+  TweenService:Create(x100Knob,TweenInfo.new(0.15),{
+   Position=on and UDim2.new(1,-20,0.5,-9) or UDim2.new(0,2,0.5,-9),
+   BackgroundColor3=on and Color3.fromRGB(255,255,255) or C.TXT,
+  }):Play()
+ end
+ x100Pill.MouseButton1Click:Connect(function()
+  _HR_RPT.x100 = not _HR_RPT.x100
+  SetX100UI(_HR_RPT.x100)
+ end)
+
  hrHeader.MouseButton1Click:Connect(function()
  hrOpen = not hrOpen
  hrBody.Visible = hrOpen
@@ -6871,18 +6785,31 @@ function ParseChatLine(text)
  -- Entry RAID_LIVE akan dibuat saat server kirim data via EnterRaidsUpdateInfo/ParseRaidEntry
  -- dengan raidId asli (935001+), sama persis seperti sistem RAID normal
  if not _ASC_CHAT_CACHE then _ASC_CHAT_CACHE = {} end
- -- Cari raw text AT dari text asli: strip prefix 'The MaFissure appeared in '
- local _atRaw = text:match("appeared in (Ascension Tower .+)$") or text
  _ASC_CHAT_CACHE[mapNum] = {
   grade = grade,
   bossName = _ascBossName,
-  rawText = _atRaw,
   time = os.time(),
  }
  -- Update grade cache (key negatif agar tidak bentrok dengan RAID normal)
  -- dipakai ParseRaidEntry saat server data datang
  if _runeGradeCache and grade and grade ~= "?" then
   _runeGradeCache[-mapNum] = grade
+ end
+ -- [FIX TIMING] Jika RAID_LIVE sudah punya entry AT ini dengan grade "?",
+ -- update langsung sekarang (server data datang lebih dulu dari chat)
+ if grade and grade ~= "?" then
+  for _rid, _ent in pairs(RAID_LIVE) do
+   if _ent.isAscension and _ent.mapId then
+    local _mn2 = (_ent.mapId >= 50301 and _ent.mapId <= 50326) and (_ent.mapId - 50300) or nil
+    if _mn2 == mapNum and (_ent.grade == "?" or not _ent.grade) then
+     _ent.grade = grade
+     local _bn = _ent.bossName or (_ascBossName) or nil
+     if _bn then _ent.bossName = _bn end
+     _ent.label = "Ascension Tower ".._mn2..(_ent.bossName and (" - "..(_ent.bossName:gsub("^%l",string.upper))) or "").." ["..grade.."]"
+    end
+   end
+  end
+  if RebuildRaidList then pcall(RebuildRaidList) end
  end
  -- Jangan buat entry RAID_LIVE di sini - tunggu server
  else
@@ -6902,38 +6829,40 @@ function ParseChatLine(text)
  return
  end
 
--- _RAID_LINES: koleksi raw text dari TipsFloatingPanel untuk webhook
--- key = teks itu sendiri (dedup otomatis), value = tick() saat diterima
-_RAID_LINES = {}
-
+--  Deduplicate seen messages (v273 FIX: Short-term memory 3 minutes)
 local _chatSeen = {}
 local function _processMsg(raw)
     if type(raw) ~= "string" or #raw < 5 then return end
     local txt = raw:gsub("<[^>]+>",""):gsub("[\r\n]+"," "):match("^%s*(.-)%s*$") or raw
-
+    
     local function hasKW(s)
-        return s:find("MaFissure",1,true) or s:find("appeared in",1,true)
+        return s:find("MaFissure",1,true) or s:find("appeared in",1,true) or s:find("has begun",1,true)
     end
+    
     if not hasKW(txt) then
         local stripped = txt:match("^[^:]+:%s*(.+)$")
         if stripped and hasKW(stripped) then txt = stripped end
     end
     if not hasKW(txt) then return end
 
-    local now = tick()
+    -- [v273 FIX] Unique key: gunakan seluruh teks (max 200) agar membedakan map/grade
     local key = txt:sub(1,200)
-    if _chatSeen[key] and (now - _chatSeen[key]) < 180 then return end
-    _chatSeen[key] = now
-    -- Saat silent (scan history awal): parse tapi jangan masuk _RAID_LINES
-    if not _whSilent then _RAID_LINES[key] = now end
-    ParseChatLine(txt)
+    local now = tick()
 
-    -- Cleanup
+    -- [v273 FIX] Short-term memory: 3 menit (180 detik)
+    if _chatSeen[key] and (now - _chatSeen[key]) < 180 then 
+        return 
+    end
+    
+    _chatSeen[key] = now
+    ParseChatLine(txt)
+    
+    -- Cleanup cache lama setiap 10 pesan baru (agar memori tidak bocor)
     local count = 0
     for _ in pairs(_chatSeen) do count = count + 1 end
-    if count > 100 then
+    if count > 50 then
         for k, t in pairs(_chatSeen) do
-            if (now - t) > 180 then _chatSeen[k] = nil; _RAID_LINES[k] = nil end
+            if (now - t) > 180 then _chatSeen[k] = nil end
         end
     end
 end
@@ -7070,51 +6999,77 @@ _WH = {}
 
 -- Helper: dapatkan request function (support semua executor)
 local function _getReqFunc()
- -- [FIX] Tambah executor lain yang umum dipakai
- return request or http_request or httprequest or (syn and syn.request) or (http and http.request) or (fluxus and fluxus.request) or (krnl and krnl.request) or (electron and electron.request) or nil
+ -- Support semua executor: Delta, Fluxus, Xeno, Solara, Synapse, KRNL, dll
+ local _r = request or http_request or httprequest
+  or (syn and syn.request)
+  or (http and http.request)
+  or (fluxus and fluxus.request)
+  or (krnl and krnl.request)
+  or (electron and electron.request)
+  or (Drawing and Drawing.request) -- beberapa build custom
+ -- getgenv fallback: executor expose request di env berbeda
+ if not _r then
+  pcall(function()
+   local _env = getgenv and getgenv() or nil
+   if _env then
+    _r = _env.request or _env.http_request or _env.httprequest
+   end
+  end)
+ end
+ return _r or nil
 end
 
 -- Helper: kirim HTTP POST ke Discord atau Telegram
+-- return: true (sukses), false (gagal), string (error message)
 local function _doSend(url, text)
  local reqFunc = _getReqFunc()
  if not reqFunc then
- return false
+  pcall(function() warn("[ASH Webhook] ERROR: Executor tidak support HTTP request!") end)
+  return false, "Executor tidak support HTTP"
  end
  local HS = game:GetService("HttpService")
  local isDiscord = url:find("discord%.com/api/webhooks")
  local isTelegram = url:find("api%.telegram%.org")
- local ok, res = false, nil
- pcall(function()
- if isDiscord then
- res = reqFunc({
- Url = url,
- Method = "POST",
- Headers = { ["Content-Type"] = "application/json" },
- Body = HS:JSONEncode({ content = text }),
- })
- elseif isTelegram then
- local enc = tostring(text):gsub("([^%w%-_%.%~])", function(c)
- return string.format("%%%02X", string.byte(c))
+ local ok, res, errMsg = false, nil, nil
+ local callOk, callErr = pcall(function()
+  if isDiscord then
+   res = reqFunc({
+    Url = url,
+    Method = "POST",
+    Headers = { ["Content-Type"] = "application/json" },
+    Body = HS:JSONEncode({ content = text }),
+   })
+  elseif isTelegram then
+   local enc = tostring(text):gsub("([^%w%-_%.%~])", function(c)
+    return string.format("%%%02X", string.byte(c))
+   end)
+   res = reqFunc({ Url = url .. "&text=" .. enc, Method = "GET" })
+  end
  end)
- res = reqFunc({ Url = url .. "&text=" .. enc, Method = "GET" })
+ if not callOk then
+  errMsg = "HTTP error: "..(tostring(callErr):sub(1,60))
+  pcall(function() warn("[ASH Webhook] "..errMsg) end)
+  return false, errMsg
  end
- end)
  if res and type(res) == "table" then
- local sc = res.StatusCode or res.status or 0
- ok = (sc >= 200 and sc < 300)
- if not ok then
- ok = false -- Status non-2xx
- end
+  local sc = res.StatusCode or res.status or 0
+  ok = (sc >= 200 and sc < 300)
+  if not ok then
+   errMsg = "HTTP "..sc..(res.Body and (" - "..tostring(res.Body):sub(1,40)) or "")
+   pcall(function() warn("[ASH Webhook] Gagal: "..errMsg) end)
+  end
  elseif res ~= nil then
- ok = true
+  ok = true
  else
- ok = false
+  errMsg = "Tidak ada response dari server"
+  ok = false
  end
- return ok
+ return ok, errMsg
 end
 
 -- Kirim notif Raid ke webhook
 _WH.SendRaid = function(url)
+ -- [v272] Grade colors Discord embed
  local GRADE_COLOR = {
  ["E"]=9868950,["D"]=6604900,["C"]=5294200,["B"]=6589695,
  ["A"]=11822335,["S"]=16757810,["SS"]=16768000,["G"]=16742440,
@@ -7123,38 +7078,36 @@ _WH.SendRaid = function(url)
  }
  local GRADE_RANK_W = {["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18}
 
- -- Kumpulkan semua teks raid dari _RAID_LINES, sort by waktu
- if not _RAID_LINES or not next(_RAID_LINES) then return end
+ local raidList = {}
+ for _, entry in pairs(RAID_LIVE or {}) do table.insert(raidList, entry) end
+ table.sort(raidList, function(a,b) return (a.mapId or 0) < (b.mapId or 0) end)
+ if #raidList == 0 then return end
 
- local entries = {}
- for txt, t in pairs(_RAID_LINES) do
-  table.insert(entries, {txt=txt, t=t})
+ local function getGrade(entry)
+ -- [FIX] AT: towerNum dari mapId normalize -> mapId-50300, normal: mn dari mapId-50000
+ local isAT = entry.isAscension == true
+ local _mid = entry.mapId or (isAT and 50301 or 50001)
+ if isAT then
+  if _mid >= 50001 and _mid <= 50026 then _mid = _mid + 300 end
+  if _mid >= 50101 and _mid <= 50126 then _mid = _mid + 200 end
+  if _mid >= 50401 and _mid <= 50426 then _mid = _mid - 100 end
  end
- table.sort(entries, function(a,b) return a.txt < b.txt end)
-
- -- Pisahkan normal raid dan AT
- local lines_normal, lines_at = {}, {}
- local topGrade = "E"
- for _, e in ipairs(entries) do
-  local txt = e.txt
-  -- Strip prefix 'The MaFissure appeared in ' untuk tampilan bersih
-  local display = txt:match("appeared in (.+)$") or txt
-  if txt:find("Ascension Tower",1,true) then
-   table.insert(lines_at, display)
-  else
-   table.insert(lines_normal, display)
-  end
-  -- Ambil grade untuk topGrade
-  local g = txt:match("%[M%+%+%]") and "M++" or txt:match("%[M%+%]") and "M+"
-   or txt:match("%[SS%]") and "SS" or txt:match("%[XM%]") and "XM"
-   or txt:match("%[ULT%]") and "ULT" or txt:match("%[GOD%]") and "GOD"
-   or txt:match("%[([EDCBAGSNMedcbagsn])%]") or nil
-  if g then g = g:upper() end
-  if g and (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
+ local mn = isAT and math.max(1, _mid - 50300) or (_mid - 50000)
+ local g = "?"
+ if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
+ if g == "?" then g = (GetBestGrade and GetBestGrade(mn, isAT)) or "?" end
+ if g == "?" then g = entry.grade or "?" end
+ return g
  end
 
- local totalCount = #lines_normal + #lines_at
- if totalCount == 0 then return end
+ local normalRaids, atRaids = {}, {}
+ for _, entry in ipairs(raidList) do
+ -- [FIX Map 20] Gunakan flag isAscension dari entry, bukan mn >= 20
+ -- Map 20 normal (raidId positif) harus masuk normalRaids, bukan atRaids
+ local isAT = entry.isAscension == true or (entry.raidId and entry.raidId < 0) or (entry.raidId and entry.raidId >= 935001)
+ if isAT then table.insert(atRaids, entry)
+ else table.insert(normalRaids, entry) end
+ end
 
  local isDiscord = url:find("discord%.com/api/webhooks")
  local isTelegram = url:find("api%.telegram%.org")
@@ -7163,23 +7116,67 @@ _WH.SendRaid = function(url)
  if not reqFunc then return end
 
  if isDiscord then
-  local color = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
-  local fields = {}
-  if #lines_normal > 0 then
-   table.insert(fields, {name="[Normal Raid] ("..#lines_normal..")", value=table.concat(lines_normal,"\n"), inline=false})
-  end
-  if #lines_at > 0 then
-   table.insert(fields, {name="[Ascension Tower] ("..#lines_at..")", value=table.concat(lines_at,"\n"), inline=false})
-  end
-  local payload = {embeds={{title="[RAID OPEN] Rank "..topGrade, description="Total: **"..totalCount.."** raid aktif", color=color, fields=fields, footer={text="ASH GUI FLa Project"}}}}
-  pcall(function()
-   reqFunc({Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=HS:JSONEncode(payload)})
-  end)
+ local topGrade = "E"
+ local lines_normal, lines_at = {}, {}
+ for _, entry in ipairs(normalRaids) do
+ local mn = (entry.mapId or 50000) - 50000
+ local name = MAP_NAMES[mn] or ("Map "..mn)
+ local g = getGrade(entry)
+ table.insert(lines_normal, "The MaFissure appeared in "..mn..","..name.." ["..g.."]")
+ if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
+ end
+ for _, entry in ipairs(atRaids) do
+ -- [FIX] Normalize mapId AT ke range 50301-50326 dulu baru hitung towerNum
+ local _atMapId = entry.mapId or 50301
+ if _atMapId >= 50001 and _atMapId <= 50026 then _atMapId = _atMapId + 300 end
+ if _atMapId >= 50101 and _atMapId <= 50126 then _atMapId = _atMapId + 200 end
+ if _atMapId >= 50401 and _atMapId <= 50426 then _atMapId = _atMapId - 100 end
+ local towerNum = math.max(1, _atMapId - 50300)
+ -- [FIX] Grade AT: pakai cacheKey negatif via GetBestGrade(towerNum, true)
+ local g = "?"
+ if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
+ if g == "?" then g = (GetBestGrade and GetBestGrade(towerNum, true)) or "?" end
+ if g == "?" then g = entry.grade or "?" end
+ local _bn = entry.bossName and (entry.bossName:gsub("^%l",string.upper)) or nil
+ local atLabel = "Ascension Tower "..towerNum.." - [Monarch] "..(_bn or "?").." ["..g.."]"
+ table.insert(lines_at, atLabel)
+ if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
+ end
+ local color = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
+ local fields = {}
+ if #lines_normal > 0 then
+ table.insert(fields, {name="[Normal Raid] ("..#lines_normal..")", value=table.concat(lines_normal,"\n"), inline=false})
+ end
+ if #lines_at > 0 then
+ table.insert(fields, {name="[Ascension Tower] ("..#lines_at..")", value=table.concat(lines_at,"\n"), inline=false})
+ end
+ local payload = {embeds={{title="[RAID OPEN] Rank "..topGrade, description="Total: **"..#raidList.."** raid aktif", color=color, fields=fields, footer={text="ASH GUI FLa Project"}}}}
+ pcall(function()
+ reqFunc({Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=HS:JSONEncode(payload)})
+ end)
  elseif isTelegram then
-  local lines = {"[RAID OPEN] Rank "..topGrade}
-  for _, l in ipairs(lines_normal) do table.insert(lines, l) end
-  for _, l in ipairs(lines_at) do table.insert(lines, l) end
-  _doSend(url, table.concat(lines, "\n"))
+ local lines = {"[RAID OPEN]"}
+ for _, entry in ipairs(normalRaids) do
+ local mn = (entry.mapId or 50000) - 50000
+ local g = getGrade(entry)
+ table.insert(lines, "The MaFissure appeared in "..mn..","..(MAP_NAMES[mn] or "Map "..mn).." ["..g.."]")
+ end
+ for _, entry in ipairs(atRaids) do
+ -- [FIX] Normalize mapId AT ke range 50301-50326 dulu baru hitung towerNum
+ local _atMapId = entry.mapId or 50301
+ if _atMapId >= 50001 and _atMapId <= 50026 then _atMapId = _atMapId + 300 end
+ if _atMapId >= 50101 and _atMapId <= 50126 then _atMapId = _atMapId + 200 end
+ if _atMapId >= 50401 and _atMapId <= 50426 then _atMapId = _atMapId - 100 end
+ local towerNum = math.max(1, _atMapId - 50300)
+ -- [FIX] Grade AT: pakai cacheKey negatif
+ local g = "?"
+ if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
+ if g == "?" then g = (GetBestGrade and GetBestGrade(towerNum, true)) or "?" end
+ if g == "?" then g = entry.grade or "?" end
+ local _bn = entry.bossName and (entry.bossName:gsub("^%l",string.upper)) or nil
+ table.insert(lines, "Ascension Tower "..towerNum.." - [Monarch] "..(_bn or "?").." ["..g.."]")
+ end
+ _doSend(url, table.concat(lines, "\n"))
  end
 end
 SendWebhookRaid = function(url) _WH.SendRaid(url) end -- alias internal
@@ -7211,17 +7208,54 @@ local _whLastSent = 0
 
 TriggerWebhookDebounce = function()
     if not _webhookEnabled or not _webhookUrl or _webhookUrl == "" then return end
+    
+    -- ==========================================
+    -- [SISTEM INGATAN ANTI-SPAM DISCORD]
+    -- ==========================================
+    _G.SentRaidIds = _G.SentRaidIds or {}
+    _G.SentSiegeIds = _G.SentSiegeIds or {}
+    
+    local hasNew = false
+    
+    -- 1. Cek apakah ada ID Raid baru yang belum pernah dikirim
+    if RAID_LIVE then
+        for id, _ in pairs(RAID_LIVE) do
+            if not _G.SentRaidIds[id] then
+                _G.SentRaidIds[id] = true
+                hasNew = true
+            end
+        end
+    end
+    
+    -- 2. Cek apakah ada ID Siege baru yang belum pernah dikirim
+    if SIEGE and SIEGE.live then
+        for id, _ in pairs(SIEGE.live) do
+            if not _G.SentSiegeIds[id] then
+                _G.SentSiegeIds[id] = true
+                hasNew = true
+            end
+        end
+    end
+    
+    -- 3. HUKUM MUTLAK: Jika tidak ada ID baru, BATALKAN PENGIRIMAN! (Diam)
+    if not hasNew then return end
+    -- ==========================================
+
     if _whDebounce then pcall(function() task.cancel(_whDebounce) end) end
-    -- Debounce 3 detik: tunggu semua notif raid masuk dulu ke _RAID_LINES
-    _whDebounce = task.delay(3, function()
+
+    -- [v271] Debounce 1 detik (turun dari 3s) agar lebih responsif
+    _whDebounce = task.delay(1, function()
         _whDebounce = nil
+        -- [v271] Cooldown 10 detik (turun dari 30s) agar tidak terlalu lambat
         if (tick() - _whLastSent) < 10 then return end
         _whLastSent = tick()
+
         task.spawn(function()
             local mode = _webhookMode or "both"
             local url = _webhookUrl
-            local hasRaid = _RAID_LINES and next(_RAID_LINES) ~= nil
+            local hasRaid = next(RAID_LIVE or {}) ~= nil
             local hasSiege = SIEGE and SIEGE.live and next(SIEGE.live) ~= nil
+
             if (mode == "raid" or mode == "both") and hasRaid then
                 SendWebhookRaid(url)
             end
@@ -7323,13 +7357,14 @@ _WH.SendCustomMessage = function(url, msg, onDone, onFail)
  if onFail then onFail("Executor tidak support HTTP") end; return
  end
  task.spawn(function()
- local ok = _doSend(url, msg)
- task.wait(0.3)
- if ok then
- if onDone then onDone() end
- else
- if onFail then onFail("Gagal kirim") end
- end
+  local ok, errMsg = _doSend(url, msg)
+  task.wait(0.3)
+  if ok then
+   if onDone then onDone() end
+  else
+   local reason = errMsg or "Gagal kirim"
+   if onFail then onFail(reason) end
+  end
  end)
 end
 
@@ -7438,6 +7473,7 @@ ParseRaidEntry = function(k, info)
  local _ascCacheKey = isAscEntry and (-mapNum) or nil
  local grade = (RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[raidId])
   or (_ascCacheKey and _runeGradeCache and _runeGradeCache[_ascCacheKey])
+  or (isAscEntry and _ASC_CHAT_CACHE and _ASC_CHAT_CACHE[mapNum] and _ASC_CHAT_CACHE[mapNum].grade)
   or (_runeGradeCache and _runeGradeCache[mapNum])
   or "?"
  local rankLbl = grade ~= "?" and ("["..grade.."]") or "[?]"
@@ -7781,11 +7817,17 @@ ConnectRaidListeners = function()
  }
  -- Kalau ada entry temp Ascension dari chat (negatif), replace dengan raidId asli server
  if RAID_LIVE[tempKey] then
+  -- Preserve grade dari temp entry jika entryData masih "?"
+  if grade == "?" and RAID_LIVE[tempKey].grade and RAID_LIVE[tempKey].grade ~= "?" then
+   entryData.grade = RAID_LIVE[tempKey].grade
+   entryData.label = entryData.label:gsub("%[%?%]", "["..RAID_LIVE[tempKey].grade.."]")
+  end
   RAID_LIVE[raidId] = entryData
   RAID_LIVE[tempKey] = nil
  elseif not RAID_LIVE[raidId] then
-  -- Entry baru dari server: ParseRaidEntry handle ini (sudah fix, hanya cek tempKey)
-  ParseRaidEntry(k, info)
+  -- Entry baru dari server: langsung pakai entryData (grade sudah dihitung di atas)
+  -- termasuk fallback _ASC_CHAT_CACHE dan _runeGradeCache
+  RAID_LIVE[raidId] = entryData
  else
   -- Sudah ada entry: update grade/rank/label, preserve isAscension yang sudah true
   RAID_LIVE[raidId].grade = grade
@@ -8030,7 +8072,7 @@ function StartAscensionLoop()
  AscStatusUpdate("Siap. Menunggu Ascension Tower...", Color3.fromRGB(180,180,60))
 
  -- [v48] ResolveAscEntry: Pick Mode logic sama persis dengan AUTO RAID
- -- Mode: default, easy, hard, byrank, bymap, manual (dengan preferMaps, runeGrades, updownEnabled)
+ -- Mode: easy, hard, manual (dengan preferMaps, runeGrades)
  local function ResolveAscEntry()
   local ascList = GetAscensionList()
   if #ascList == 0 then return nil end
@@ -8082,22 +8124,7 @@ function StartAscensionLoop()
     return matched[1]
    end
 
-   -- TAHAP 2: UP/DOWN Target
-   if ASC.updownEnabled and ASC.updownTargetGrade then
-    local udMatched = {}
-    for _, r in ipairs(valid) do
-     if _getGrade(r) == ASC.updownTargetGrade then
-      table.insert(udMatched, r)
-     end
-    end
-    if #udMatched > 0 then
-     sortHighestRank(udMatched)
-     ASC.manualMatchMode = "updown"
-     return udMatched[1]
-    end
-   end
-
-   -- TAHAP 3: Fallback - mapNum terendah
+   -- TAHAP 2: Fallback - mapNum terendah
    ASC.manualMatchMode = "fallback"
    table.sort(valid, function(a,b) return a.mapNum < b.mapNum end)
    return valid[1]
@@ -8150,14 +8177,36 @@ function StartAscensionLoop()
    return low[ASC._rrIdx]
   end
 
-  -- EASY: mapNum terendah
+  -- EASY: Preferred Rank dulu (jika ada), lalu mapNum terendah sebagai fallback
   if pm == "easy" then
+   if next(ASC.runeGrades or {}) ~= nil then
+    local matched = {}
+    for _, r in ipairs(ascList) do
+     if ASC.runeGrades[_getGrade(r)] then table.insert(matched, r) end
+    end
+    if #matched > 0 then
+     table.sort(matched, function(a,b) return a.mapNum < b.mapNum end)
+     return matched[1]
+    end
+   end
+   -- Fallback: tidak ada match Preferred Rank, ambil mapNum terendah
    table.sort(ascList, function(a,b) return a.mapNum < b.mapNum end)
    return ascList[1]
   end
 
-  -- HARD: mapNum tertinggi
+  -- HARD: Preferred Rank dulu (jika ada), lalu mapNum tertinggi sebagai fallback
   if pm == "hard" then
+   if next(ASC.runeGrades or {}) ~= nil then
+    local matched = {}
+    for _, r in ipairs(ascList) do
+     if ASC.runeGrades[_getGrade(r)] then table.insert(matched, r) end
+    end
+    if #matched > 0 then
+     table.sort(matched, function(a,b) return a.mapNum > b.mapNum end)
+     return matched[1]
+    end
+   end
+   -- Fallback: tidak ada match Preferred Rank, ambil mapNum tertinggi
    table.sort(ascList, function(a,b) return a.mapNum > b.mapNum end)
    return ascList[1]
   end
@@ -8224,23 +8273,19 @@ function StartAscensionLoop()
       else
        AscStatusUpdate("Waiting Ascension Tower [".._pm.."]...", Color3.fromRGB(140,140,60))
       end
-     elseif _pm == "byrank" and next(ASC.runeGrades or {}) ~= nil then
+     elseif next(ASC.runeGrades or {}) ~= nil and ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
+      -- Preferred Rank aktif + Preferred Rune aktif
       local _gr = {}
       for _, g in ipairs(GRADE_LIST) do if ASC.runeGrades[g] then table.insert(_gr, g) end end
-      AscStatusUpdate("Waiting Rank: ["..table.concat(_gr,"] [").."]...", Color3.fromRGB(200,120,255))
-     elseif _pm == "bymap" and next(ASC.preferMaps or {}) ~= nil then
-      local _ms = {}
-      for mn in pairs(ASC.preferMaps) do table.insert(_ms, "Tower "..mn) end
-      table.sort(_ms)
-      AscStatusUpdate("Waiting Map: "..table.concat(_ms,", ").."...", Color3.fromRGB(100,200,100))
-     elseif ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 and next(ASC.runeGrades or {}) ~= nil then
-      AscStatusUpdate("Waiting grade cocok -> override Tower "..ASC.runeMapTarget.."...", Color3.fromRGB(200,140,255))
-     elseif ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
-      AscStatusUpdate("Waiting Ascension apapun -> override Tower "..ASC.runeMapTarget.."...", Color3.fromRGB(147,197,253))
+      AscStatusUpdate("Waiting Rank ["..table.concat(_gr,"||").."]->override Tower "..ASC.runeMapTarget.." [".._pm.."]...", Color3.fromRGB(200,140,255))
      elseif next(ASC.runeGrades or {}) ~= nil then
+      -- Preferred Rank aktif saja
       local _gr2 = {}
       for _, g in ipairs(GRADE_LIST) do if ASC.runeGrades[g] then table.insert(_gr2, g) end end
-      AscStatusUpdate("Waiting grade ["..table.concat(_gr2,"] [").."] [".._pm.."]...", Color3.fromRGB(200,255,150))
+      AscStatusUpdate("Waiting Rank ["..table.concat(_gr2,"||").."]-> [".._pm.."]...", Color3.fromRGB(200,255,150))
+     elseif ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
+      -- Preferred Rune aktif saja (tanpa Preferred Rank)
+      AscStatusUpdate("Waiting Tower apapun -> override Tower "..ASC.runeMapTarget.." [".._pm.."]...", Color3.fromRGB(147,197,253))
      else
       AscStatusUpdate("Waiting Ascension Tower [".._pm.."]...", Color3.fromRGB(255,200,60))
      end
@@ -8299,7 +8344,16 @@ function StartAscensionLoop()
     local bossHint = raidEntry.bossName and (" - "..raidEntry.bossName) or ""
     AscStatusUpdate("Masuk: Tower "..mn..bossHint.." ["..raidEntry.grade.."]", Color3.fromRGB(100,200,255))
 
+    -- [FIX] Set _ascInterrupt dulu -> MA pause segera (mirip _raidInterrupt di RAID)
+    -- Lalu tunggu sebentar biar MA sempat pause sebelum kita masuk tower
+    _ascInterrupt = true
+    if MA.running then
+        local _wma = 0
+        while MA.running and _ascInterrupt and _wma < 1 do task.wait(0.05); _wma = _wma + 0.05 end
+    end
+
     ASC.inMap = true
+    _ascInterrupt = false  -- inMap=true sudah aktif, WaitRaidDone cek ASC.inMap langsung
     _ascBusy  = true  -- RAID harus pause total selama ASC aktif (inMap+cooldown)
     _ascMatchedThisCycle = true   -- [v61 CYCLEFIX] ASC sudah match di siklus ini
     _raidFallbackActive  = false  -- [v61 CYCLEFIX] RAID tidak boleh fallback di siklus ini
@@ -8348,56 +8402,25 @@ function StartAscensionLoop()
      [26]=10374, -- Goku Super 4+1
     }
 
-    -- [v64] FUNGSI UP/DOWN RANK (identik RAID)
-    local function DoAscUpDownOverride()
-     if not ASC.updownEnabled or not RE.UseRaidItem then return end
-     local dir = ASC.updownDir or "up"
-     local udId = (dir == "up") and 10270 or 10271
-     AscStatusUpdate("[~] Override: "..dir:upper(), Color3.fromRGB(200,140,255))
-     pcall(function() RE.UseRaidItem:FireServer(udId) end)
-     task.wait(0.3)
-    end
-
-    -- [v64] LOGIKA KEPUTUSAN 4 HUKUM (identik RAID, disesuaikan untuk Tower 1-26)
+    -- [v64] LOGIKA KEPUTUSAN (disesuaikan untuk Tower 1-26)
     local _ascPm = ASC.pickMode or "easy"
-    local useRune  = false
-    local useUpDown = false
+    local useRune = false
 
     if _ascPm == "manual" then
      if ASC.manualMatchMode == "primary" then
-      -- TAHAP 1: MATCH PREFERRED RANK -> HANYA RUNE YANG BOLEH JALAN!
+      -- TAHAP 1: MATCH PREFERRED RANK -> pakai Rune kalau target berbeda
       if ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
-       -- ANTI-MUBAZIR: Tower sudah sama, simpan item-nya!
-       if mn == ASC.runeMapTarget then
-        useRune = false
-       else
-        useRune = true
-       end
-      else
-       useRune = false
+       useRune = (mn ~= ASC.runeMapTarget)
       end
-      useUpDown = false -- MUTLAK MATI di TAHAP 1
-
-     elseif ASC.manualMatchMode == "updown" then
-      -- TAHAP 2: MATCH UP/DOWN TARGET -> Rune Mati, UpDown Jalan!
-      useRune   = false
-      useUpDown = true
-
-     elseif ASC.manualMatchMode == "fallback" then
-      -- TAHAP 3: JANGAN MAKSA! Keduanya mati.
-      useRune   = false
-      useUpDown = false
+     else
+      -- FALLBACK: jangan paksa item apapun
+      useRune = false
      end
     else
-     -- Mode selain Manual (easy, hard, byrank, bymap, default)
+     -- Mode easy / hard
      if ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
-      if mn == ASC.runeMapTarget then
-       useRune = false -- Tower sudah sama, tidak perlu item
-      else
-       useRune = true
-      end
+      useRune = (mn ~= ASC.runeMapTarget)
      end
-     if ASC.updownEnabled then useUpDown = true end
     end
 
     -- [v64] EKSEKUSI (identik RAID - hanya RUNE_IDS dan mapId berbeda)
@@ -8407,9 +8430,6 @@ function StartAscensionLoop()
      AscStatusUpdate("Create Team...", C.ACC2)
      if RE.CreateRaidTeam then pcall(function() RE.CreateRaidTeam:InvokeServer(raidEntry.id) end) end
      task.wait(0.2)
-
-     -- Prioritas: Rune dulu, lalu UpDown
-     if useUpDown then DoAscUpDownOverride() end
 
      AscStatusUpdate("Use Item (Tower "..targetTower..")...", Color3.fromRGB(255,200,60))
      local itemId = ASC_RUNE_IDS[targetTower]
@@ -8451,8 +8471,6 @@ function StartAscensionLoop()
      task.wait(0.2)
      if not ASC.running then ASC.inMap = false; break end
 
-     if useUpDown then DoAscUpDownOverride() end
-
      -- Sama persis RAID: StartChallengeRaidMap({mapId=targetMapId})
      local _cfail = false
      local _cfConn
@@ -8478,6 +8496,7 @@ function StartAscensionLoop()
       ASC.inMap = false; ReleaseMapLock("asc")
       -- [v64 FIX] Jangan biarkan _ascBusy=true saat gagal masuk -> RAID/MA akan stuck pause
       _ascBusy = false
+      _ascInterrupt = false  -- [FIX] reset jika gagal masuk
       AscStatusUpdate("[!] Server reject (ChallengeRaidsFail) - retry...", Color3.fromRGB(255,80,80))
       task.wait(1); break
      end
@@ -8505,6 +8524,7 @@ function StartAscensionLoop()
      ASC.inMap = false; ReleaseMapLock("asc")
      -- [v64 FIX] Reset _ascBusy agar RAID/MA tidak stuck pause selamanya saat gagal TP
      _ascBusy = false
+     _ascInterrupt = false  -- [FIX] reset pada gagal TP
      AscStatusUpdate("[!] Gagal masuk Tower - retry...", Color3.fromRGB(255,80,80))
      task.wait(1); break
     end
@@ -8562,6 +8582,7 @@ function StartAscensionLoop()
          AscStatusUpdate("[!] Watchdog: Player keluar Tower paksa - reset state", Color3.fromRGB(255,80,80))
          ASC.inMap = false
          _ascBusy = false
+         _ascInterrupt = false  -- [FIX] reset pada watchdog exit
          ReleaseMapLock("asc")
          break
         end
@@ -8999,7 +9020,10 @@ function StartAscensionLoop()
       else
        local nextEntry = ResolveAscEntry()
        if nextEntry then
-        _ascBusy = true  -- ada Tower baru -> RAID harus pause lagi
+        -- [FIX] Jangan set _ascBusy di sini -> MA bebas jalan selama cooldown
+        -- _ascBusy di-set nanti saat ASC benar-benar masuk tower (setelah _ascInterrupt)
+        -- Tapi RAID tetap perlu pause -> set _ascBusy agar RAID tidak rebutan masuk
+        _ascBusy = true  -- RAID pause (tapi MA boleh jalan, MA cek ASC.inMap/_ascInterrupt)
         break
        end
        -- Tidak ada Tower yang cocok
@@ -9064,6 +9088,7 @@ function StartAscensionLoop()
   ASC.running = false
   ASC.inMap   = false
   _ascBusy    = false
+  _ascInterrupt = false  -- [FIX] reset cleanup
   _ascOn      = false
   _ascDominatedThisEvent = false -- [v56 DEPRECATED] tidak dipakai lagi
   _ascMatchedThisCycle  = false  -- [v61 CYCLEFIX] reset saat ASC stop
@@ -11811,141 +11836,7 @@ do
   _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
  end)
 
- -- ============================================================
- -- ROW 8: UP/DOWN RANK
- -- ============================================================
- local ascUdHdr = Label(ascInner,"UP/DOWN RANK",10,C.TXT3,Enum.Font.GothamBold)
- ascUdHdr.LayoutOrder = 8; ascUdHdr.Size = UDim2.new(1,0,0,14)
 
- local ascUdCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,76))
- ascUdCard.LayoutOrder = 9; Corner(ascUdCard,10); Stroke(ascUdCard,C.BORD,1.5,0.3)
-
- local ascUdRowTop = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,38))
- ascUdRowTop.BackgroundTransparency=1; ascUdRowTop.Position=UDim2.new(0,0,0,0)
-
- local ascUdPill = Btn(ascUdRowTop,C.PILL_OFF,UDim2.new(0,52,0,30))
- ascUdPill.AnchorPoint=Vector2.new(1,0.5); ascUdPill.Position=UDim2.new(1,-12,0.5,0); Corner(ascUdPill,13)
- local ascUdKnob = Frame(ascUdPill,C.KNOB_OFF,UDim2.new(0,24,0,24))
- ascUdKnob.AnchorPoint=Vector2.new(0,0.5); ascUdKnob.Position=UDim2.new(0,3,0.5,0); Corner(ascUdKnob,10)
- local ascUdLbl = Label(ascUdRowTop,"UP/DOWN Rank",14,C.TXT,Enum.Font.GothamBold)
- ascUdLbl.Size=UDim2.new(1,-68,0,20); ascUdLbl.Position=UDim2.new(0,14,0.5,-10)
-
- -- Dropdown Arah (UP/DOWN)
- if not ASC.updownDir then ASC.updownDir="up" end
- local ascUdRowBot = Frame(ascUdCard,C.BLACK,UDim2.new(1,0,0,36))
- ascUdRowBot.BackgroundTransparency=1; ascUdRowBot.Position=UDim2.new(0,0,0,38)
- New("UIListLayout",{Parent=ascUdRowBot,FillDirection=Enum.FillDirection.Horizontal,
-  SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6),VerticalAlignment=Enum.VerticalAlignment.Center})
- Instance.new("UIPadding",ascUdRowBot).PaddingLeft=UDim.new(0,10)
-
- local ascDirDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(0,100,0,26))
- ascDirDDBtn.LayoutOrder=1; Corner(ascDirDDBtn,6); Stroke(ascDirDDBtn,C.BORD,1.5,0.25)
- local ascDirDDLbl = Label(ascDirDDBtn,ASC.updownDir=="up" and " UP (UP)" or " DOWN (DN)",11,C.ACC,Enum.Font.GothamBold)
- ascDirDDLbl.Size=UDim2.new(1,0,1,0)
-
- local ascGradeDDBtn = Btn(ascUdRowBot,C.BG3,UDim2.new(1,-120,0,26))
- ascGradeDDBtn.LayoutOrder=2; Corner(ascGradeDDBtn,6); Stroke(ascGradeDDBtn,C.BORD,1.5,0.25)
- local ascGradeDDLbl = Label(ascGradeDDBtn, ASC.updownTargetGrade and (" Target: ["..ASC.updownTargetGrade.."]") or " -- SELECT TARGET --", 11, ASC.updownTargetGrade and C.ACC2 or C.TXT3, Enum.Font.GothamBold)
- ascGradeDDLbl.Size=UDim2.new(1,-20,1,0)
- local ascGradeArr = Label(ascGradeDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- ascGradeArr.Size=UDim2.new(0,18,1,0); ascGradeArr.Position=UDim2.new(1,-20,0,0)
-
- local function updateAscUpDownToggle()
-  local on=ASC.updownEnabled
-  TweenService:Create(ascUdPill,TweenInfo.new(0.16),{BackgroundColor3=on and C.PILL_ON or C.PILL_OFF}):Play()
-  TweenService:Create(ascUdKnob,TweenInfo.new(0.16),{
-   Position=on and UDim2.new(1,-27,0.5,0) or UDim2.new(0,3,0.5,0),
-   BackgroundColor3=on and C.KNOB_ON or C.KNOB_OFF,
-  }):Play()
- end
- updateAscUpDownToggle()
-
- ascUdPill.MouseButton1Click:Connect(function()
-  ASC.updownEnabled=not ASC.updownEnabled; updateAscUpDownToggle()
- end)
-
- -- Dropdown arah UP/DOWN
- ascDirDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local dirOpts={
-   {label=" UP (UP)", dir="up", col=Color3.fromRGB(100,220,100)},
-   {label=" DOWN (DN)", dir="down", col=Color3.fromRGB(255,100,100)},
-  }
-  local aP=ascDirDDBtn.AbsolutePosition; local aS=ascDirDDBtn.AbsoluteSize; local IH=28
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,aS.X+10,0,#dirOpts*(IH+2)+12)
-  popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+3)
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.85)
-  local ll=Instance.new("UIListLayout",popup); ll.Padding=UDim.new(0,2); ll.SortOrder=Enum.SortOrder.LayoutOrder
-  Instance.new("UIPadding",popup).PaddingTop=UDim.new(0,4)
-  for _,opt in ipairs(dirOpts) do
-   local d=opt.dir
-   local item=Instance.new("TextButton",popup); item.Size=UDim2.new(1,-8,0,IH)
-   local isSel=ASC.updownDir==d
-   item.BackgroundColor3=isSel and C.SURFACE or C.BG3; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local iL=Instance.new("TextLabel",item); iL.Size=UDim2.new(1,-8,1,0); iL.Position=UDim2.new(0,8,0,0)
-   iL.BackgroundTransparency=1; iL.Text=opt.label; iL.TextSize=11; iL.Font=Enum.Font.GothamBold
-   iL.TextColor3=opt.col; iL.TextXAlignment=Enum.TextXAlignment.Left; iL.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.updownDir=d; ascDirDDLbl.Text=opt.label; ascDirDDLbl.TextColor3=opt.col
-   end)
-  end
-  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
-
- -- Dropdown target grade UP/DOWN
- local ascClearRow = nil -- forward
- ascGradeDDBtn.MouseButton1Click:Connect(function()
-  CloseActiveDD()
-  local gl=GRADE_LIST or {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
-  local IH=28; local SFH=math.min(#gl*(IH+4)+44,260)
-  local ab=ascGradeDDBtn.AbsolutePosition; local sz=ascGradeDDBtn.AbsoluteSize
-  local cam=workspace.CurrentCamera; local vpH=cam and cam.ViewportSize.Y or 800
-  local goUp=(ab.Y+SFH+8 > vpH*0.85)
-  local popup=Instance.new("Frame")
-  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
-  popup.Size=UDim2.new(0,sz.X,0,SFH+8)
-  if goUp then popup.Position=UDim2.new(0,ab.X,0,ab.Y-SFH-12)
-  else popup.Position=UDim2.new(0,ab.X,0,ab.Y+sz.Y+4) end
-  popup.ZIndex=9999; Corner(popup,10); Stroke(popup,C.BORD,1.5,0.3)
-  local sf=Instance.new("ScrollingFrame",popup)
-  sf.Size=UDim2.new(1,0,0,SFH); sf.BackgroundTransparency=1; sf.BorderSizePixel=0
-  sf.ScrollBarThickness=4; sf.CanvasSize=UDim2.new(0,0,0,#gl*(IH+4)+44); sf.ZIndex=9999
-  local sfp=Instance.new("UIPadding",sf); sfp.PaddingTop=UDim.new(0,4); sfp.PaddingLeft=UDim.new(0,4); sfp.PaddingRight=UDim.new(0,4)
-  local sfl=Instance.new("UIListLayout",sf); sfl.SortOrder=Enum.SortOrder.LayoutOrder; sfl.Padding=UDim.new(0,4)
-  -- Clear button
-  local cRow=Instance.new("TextButton",sf); cRow.Size=UDim2.new(1,-8,0,IH); cRow.LayoutOrder=0
-  cRow.BackgroundColor3=not ASC.updownTargetGrade and C.SURFACE or C.DD_BG
-  cRow.BackgroundTransparency=not ASC.updownTargetGrade and 0.18 or 0.42
-  cRow.BorderSizePixel=0; cRow.Text=""; cRow.AutoButtonColor=false; cRow.ZIndex=9999
-  Instance.new("UICorner",cRow).CornerRadius=UDim.new(0,6)
-  local cLbl=Instance.new("TextLabel",cRow); cLbl.Size=UDim2.new(1,-8,1,0); cLbl.Position=UDim2.new(0,8,0,0)
-  cLbl.BackgroundTransparency=1; cLbl.Text="-- CLEAR --"; cLbl.TextSize=10
-  cLbl.Font=Enum.Font.GothamBold; cLbl.TextColor3=not ASC.updownTargetGrade and C.ACC2 or C.TXT3
-  cLbl.TextXAlignment=Enum.TextXAlignment.Left; cLbl.ZIndex=9999
-  cRow.MouseButton1Click:Connect(function()
-   ASC.updownTargetGrade=nil; CloseActiveDD()
-   ascGradeDDLbl.Text=" -- SELECT TARGET --"; ascGradeDDLbl.TextColor3=C.TXT3
-  end)
-  for i,g in ipairs(gl) do
-   local selGrade=g; local col=GRADE_COLORS_ASC[g] or C.ACC; local isSel=(ASC.updownTargetGrade==g)
-   local item=Instance.new("TextButton",sf); item.Size=UDim2.new(1,-8,0,IH); item.LayoutOrder=i
-   item.BackgroundColor3=isSel and C.SURFACE or C.DD_BG; item.BackgroundTransparency=isSel and 0.18 or 0.42
-   item.BorderSizePixel=0; item.Text=""; item.AutoButtonColor=false; item.ZIndex=9999
-   Instance.new("UICorner",item).CornerRadius=UDim.new(0,6)
-   local il=Instance.new("TextLabel",item); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
-   il.BackgroundTransparency=1; il.Text=" ["..g.."] Rank "..g; il.TextSize=11; il.Font=Enum.Font.GothamBold
-   il.TextColor3=isSel and Color3.fromRGB(255,255,255) or col; il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999
-   item.MouseButton1Click:Connect(function()
-    CloseActiveDD(); ASC.updownTargetGrade=selGrade
-    ascGradeDDLbl.Text=" Target: ["..selGrade.."]"; ascGradeDDLbl.TextColor3=C.ACC2
-   end)
-  end
-  DDLayer.Visible=true; _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
- end)
 
  -- ============================================================
  -- ROW 10: AUTO BOSS KILL TOGGLE
@@ -14930,15 +14821,15 @@ do
  testBtn.MouseButton1Click:Connect(function()
  _webhookUrl = urlBox.Text:match("^%s*(.-)%s*$") or ""
  UpdatePlatformLbl()
- local msg = "[FLa]"..(_webhookMode or "both"):upper()
+ local msg = "[OK] **[ASH GUI - FLa Project]** Test Webhook berhasil!\n> Mode: `"..(_webhookMode or "both"):upper().."`\n> Webhook aktif dan siap menerima notifikasi Raid/Siege."
  testLbl.Text="[..] Sending..."; testLbl.TextColor3=Color3.fromRGB(255,220,60)
- -- [FIX] Timeout UI 1s: kalau tidak ada callback dalam 1s, reset label
+ -- [FIX] Timeout UI 10s: HTTP Discord butuh 1-3 detik, jangan timeout terlalu cepat
  local _done = false
- task.delay(1, function()
+ task.delay(10, function()
  if not _done then
  _done = true
- testLbl.Text="[!] Timeout"; testLbl.TextColor3=Color3.fromRGB(255,80,60)
- task.delay(2.5, function() testLbl.Text=" Test Webhook"; testLbl.TextColor3=C.TXT end)
+ testLbl.Text="[!] Timeout/No HTTP"; testLbl.TextColor3=Color3.fromRGB(255,80,60)
+ task.delay(3, function() testLbl.Text=" Test Webhook"; testLbl.TextColor3=C.TXT end)
  end
  end)
  _WH.SendCustomMessage(_webhookUrl, msg,
@@ -15020,7 +14911,7 @@ do
  local mode = _webhookMode or "both"
  local url = _webhookUrl
  local sent = false
- local hasRaid = (_RAID_LINES and next(_RAID_LINES) ~= nil) or next(RAID_LIVE or {}) ~= nil
+ local hasRaid = next(RAID_LIVE or {}) ~= nil
  local hasSiege = SIEGE and SIEGE.live and next(SIEGE.live) ~= nil
  if (mode == "raid" or mode == "both") and hasRaid then
  if _WH.SendRaid then _WH.SendRaid(url) end; sent = true
@@ -15030,11 +14921,11 @@ do
  if _WH.SendSiege then _WH.SendSiege(url) end; sent = true
  end
  if not sent then
- -- Tidak ada data raid/siege - kirim pesan info
- if _WH.SendCustomMessage then
- _WH.SendCustomMessage(url, "[FLa]",
- nil, nil)
- end
+ -- Tidak ada data raid/siege aktif saat tombol ditekan
+ if _snDone then return end; _snDone = true
+ sendNowLbl.Text="[!] No Raid Data"; sendNowLbl.TextColor3=Color3.fromRGB(255,180,60)
+ task.delay(2.5, function() sendNowLbl.Text=" Send Notify Now"; sendNowLbl.TextColor3=C.TXT end)
+ return
  end
  _whLastSent = tick()
  if _snDone then return end; _snDone = true
@@ -15213,10 +15104,23 @@ do
  end
  _ourCall = true
  local ok, res = pcall(function()
- return RE.RandomHeroQuirk:InvokeServer({
- heroGuid = _HR_RPT.guid,
- drawId = drawId[si],
- })
+  -- x100 mode: pakai AutoHeroQuirk dengan stopQuirkIds = target yg dipilih
+  if _HR_RPT.x100 and RE.AutoHeroQuirk then
+   local stopIds = {}
+   for _, q in ipairs(list) do
+    if targets[q.id] then table.insert(stopIds, q.id) end
+   end
+   return RE.AutoHeroQuirk:InvokeServer({
+    heroGuid = _HR_RPT.guid,
+    drawId = drawId[si],
+    stopQuirkIds = stopIds,
+   })
+  end
+  -- Normal 1x roll
+  return RE.RandomHeroQuirk:InvokeServer({
+   heroGuid = _HR_RPT.guid,
+   drawId = drawId[si],
+  })
  end)
  _ourCall = false
  if not ok then
@@ -15262,8 +15166,21 @@ do
  end
 
  local gotName = QUIRK_MAP[gotId] or (gotId and "ID:"..tostring(gotId) or "?")
- -- [FIX] Hanya stop kalau target dipilih DAN hasil cocok
- local hit = gotId and hasTarget and targets[gotId] == true
+ -- x100: server sudah handle stop logic, kalau ok=true dan ada gotId valid = hit
+ local hit
+ if _HR_RPT.x100 then
+  hit = ok and gotId and hasTarget and (targets[gotId] == true)
+  -- Jika x100 dan server return ok tapi gotId tidak dikenal, cek semua target
+  -- (server stop berarti salah satu target tercapai)
+  if ok and not hit and hasTarget and _rawId then
+   for id, _ in pairs(targets) do
+    if _rawId == id then hit = true; gotName = QUIRK_MAP[id] or "ID:"..tostring(id); break end
+   end
+  end
+ else
+  -- [FIX] Hanya stop kalau target dipilih DAN hasil cocok
+  hit = gotId and hasTarget and targets[gotId] == true
+ end
 
  -- [FIX DEBUG] Tampilkan raw ID jika tidak dikenal di QUIRK_MAP
  if not hit and _rawId and not QUIRK_MAP[_rawId] then
