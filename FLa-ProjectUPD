@@ -2804,8 +2804,19 @@ PGR100.Loop = function(msi)
     local attempt = 0
     while PGR100.enOnFlags[msi] do
       repeat
+        -- [FIX] Cek GUID tiap iterasi (bukan sekali di luar)
         if not (PGR.guids[msi] and PGR.guids[msi] ~= "") then
           setStatus100("[..] Click 1x on Reroll Machine", Color3.fromRGB(180,220,255))
+          task.wait(1); break
+        end
+
+        -- [FIX] Rebuild stopIds tiap iterasi agar selalu fresh (antisipasi target berubah)
+        local stopIds = {}
+        for gradeId, isSelected in pairs(PGR.targets[msi]) do
+          if isSelected then table.insert(stopIds, gradeId) end
+        end
+        if #stopIds == 0 then
+          setStatus100("[!] SELECT TARGET PLEASE!", Color3.fromRGB(255,100,60))
           task.wait(1); break
         end
 
@@ -2815,34 +2826,46 @@ PGR100.Loop = function(msi)
         end
         setStatus100("[~] 100x Roll #"..attempt.."...", Color3.fromRGB(100,200,255))
 
+        -- [FIX] Pastikan pakai AutoRandomHeroEquipGrade (100x remote), bukan fallback 1x
+        -- [FIX] Set _ourCall agar spy hook tidak ikut campur
+        local autoRemote = Remotes:FindFirstChild("AutoRandomHeroEquipGrade")
+        if not autoRemote then
+          setStatus100("[!] Remote Auto100x tidak ditemukan!", Color3.fromRGB(255,100,60))
+          task.wait(2); break
+        end
+        _ourCall = true
         local ok, res = pcall(function()
-          local autoRemote = Remotes:FindFirstChild("AutoRandomHeroEquipGrade")
-          local remote = autoRemote or RE.RandomHeroEquipGrade
-          return remote:InvokeServer({
+          return autoRemote:InvokeServer({
             drawId = PG_DRAW_IDS[msi],
             stopGradeIds = stopIds,
             guid = PGR.guids[msi],
           })
         end)
+        _ourCall = false
 
         if not ok then
           setStatus100("[!] Error - retry...", Color3.fromRGB(255,100,60))
           task.wait(0.5); break
         end
 
-        -- Parse gradeId dari response (sama seperti Fastroll)
+        -- [FIX] Parse gradeId rekursif deep scan (sama dengan Hero x100)
         local gotId = nil
         if type(res) == "table" then
+          -- Pass 1: key prioritas root
           gotId = res.gradeId or res.grade or res.id or res.resultId
+          -- Pass 2: res.data nested
           if type(gotId) ~= "number" and type(res.data) == "table" then
             gotId = res.data.grade or res.data.gradeId or res.data.id
           end
+          -- Pass 3: scan rekursif seluruh table (termasuk array hasil 100x)
           if type(gotId) ~= "number" then
             local function FindGradeId100(t, depth)
               if type(t) ~= "table" or depth > 4 then return nil end
+              -- Cek target dulu (bukan hanya range 990000-999999)
               for k, v in pairs(t) do
-                if type(v) == "number" and v >= 990000 and v <= 999999 then
-                  return v
+                if type(v) == "number" and v > 0 then
+                  if PGR.targets[msi][v] then return v end -- langsung hit target
+                  if PG_GRADE_MAP[v] then gotId = gotId or v end -- simpan candidate
                 elseif type(v) == "table" then
                   local found = FindGradeId100(v, depth+1)
                   if found then return found end
@@ -2850,15 +2873,16 @@ PGR100.Loop = function(msi)
               end
               return nil
             end
-            gotId = FindGradeId100(res, 1)
+            local deepHit = FindGradeId100(res, 1)
+            if deepHit then gotId = deepHit end
           end
         end
 
-        local hit = gotId and PGR.targets[msi][gotId] == true
+        local hit = gotId ~= nil and PGR.targets[msi][gotId] == true
 
         if hit then
-          -- TARGET FOUND - notifikasi sama seperti Fastroll
-          setStatus100("[!] Target SUCCES! (100x #"..attempt..")", Color3.fromRGB(80,255,120))
+          -- TARGET FOUND
+          setStatus100("[DONE] Target FOUND! (100x Batch #"..attempt..")", Color3.fromRGB(80,255,120))
           if PGR100.lastLbls[msi] then
             local gradeName = PG_GRADE_MAP[gotId] or "?"
             PGR100.lastLbls[msi].Text = "Last: "..gradeName.." - TARGET!"
@@ -2872,7 +2896,7 @@ PGR100.Loop = function(msi)
             PGR100.lastLbls[msi].Text = "Last: "..gradeName
           end
         end
-        task.wait(0.1)
+        task.wait(0.05)
       until true
     end
     setOff100()
