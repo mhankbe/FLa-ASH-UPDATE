@@ -15983,3 +15983,57 @@ task.spawn(function()
         end) 
     end 
 end)
+
+
+-- ============================================================
+-- CLEANUP: Stop semua loop saat script di-close / ScreenGui destroy
+-- ============================================================
+ScreenGui.AncestryChanged:Connect(function()
+ if ScreenGui.Parent then return end -- hanya saat di-destroy
+ -- Ascension Tower
+ pcall(function() if ASC and ASC.running then StopAscension() end end)
+ -- Auto Raid
+ pcall(function() if RAID and RAID.running then StopRaid() end end)
+ -- Auto Siege
+ pcall(function() if SIEGE and StopSiege then StopSiege() end end)
+ -- Auto Dungeon
+ pcall(function() if DUNGEON and StopDungeon then StopDungeon() end end)
+ -- Auto ST2
+ pcall(function() if ST2 and ST2.running and StartST2Loop then
+  ST2.running = false
+  if ST2.thread then pcall(function() task.cancel(ST2.thread) end); ST2.thread = nil end
+ end end)
+ -- Mass Attack
+ pcall(function() if MA and MA.running then MA.running = false end end)
+ -- Hero Fastroll
+ pcall(function() if _HR_RPT then
+  _HR_RPT.running = false
+  if _HR_RPT.x100 then _HR_RPT.x100 = false end
+  if _HR_RPT.x100Thread then pcall(function() task.cancel(_HR_RPT.x100Thread) end); _HR_RPT.x100Thread = nil end
+ end end)
+ -- Ornament loops
+ pcall(function() if ORN then
+  for i = 1, #_ASH_ORN.MACHINES do
+   ORN.running[i] = false
+   ORN.enOnFlags[i] = false
+  end
+ end end)
+ -- Pet Gear
+ pcall(function() if PGR then
+  for i = 1, 3 do PGR.enOnFlags[i] = false end
+ end end)
+ pcall(function() if PGR100 then
+  for i = 1, 3 do
+   PGR100.running[i] = false
+   PGR100.enOnFlags[i] = false
+   if PGR100.threads[i] then pcall(function() task.cancel(PGR100.threads[i]) end); PGR100.threads[i] = nil end
+  end
+ end end)
+ -- Stop semua loop via LOOPS table
+ pcall(function() if LOOPS then
+  for k, t in pairs(LOOPS) do
+   pcall(function() task.cancel(t) end)
+   LOOPS[k] = nil
+  end
+ end end)
+end)
