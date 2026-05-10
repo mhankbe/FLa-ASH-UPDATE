@@ -1208,13 +1208,6 @@ _ascWakeup = nil -- BindableEvent untuk wakeup loop
 _visAscension = nil -- visual pill toggle
 _ascBusy = false -- true selama ASC inMap ATAU cooldown -> RAID pause total
 _ASC_CHAT_CACHE = {} -- [mapNum] = {grade, bossName} dari chat parser; dipakai ParseRaidEntry
--- [FIX WEBHOOK] Buffer teks mentah dari TipsFloatingPanel
--- Isi: {{text="...", isAsc=bool, time=tick()}, ...}
--- Langsung pakai teks ini untuk webhook Discord, bukan rebuild dari RAID_LIVE
-_TIP_RAW_LINES = {}     -- buffer teks raid/asc dari TipsFloatingPanel
-_TIP_RAW_SENT  = {}     -- dedup: key = teks, value = tick() kapan dikirim
-_TIP_RAW_LAST  = 0      -- tick() terakhir ada teks baru masuk ke buffer
-
 -- [v56 DEPRECATED] _ascDominatedThisEvent tidak dipakai lagi
 -- Logika baru: RAID standby selama ASC.running=true DAN ResolveAscEntry()~=nil
 -- RAID boleh jalan HANYA kalau ResolveAscEntry()=nil (tidak ada Tower match di event saat ini)
@@ -7005,34 +6998,6 @@ function ParseChatLine(text)
  end
  end
 
- -- [FIX WEBHOOK] Simpan teks mentah ke buffer sebelum trigger webhook
- -- Teks ini persis seperti yang tampil di TipsFloatingPanel / console sniffing
- if not _whSilent and text and #text > 5 then
-  local _now = tick()
-  local _dedupKey = text:sub(1, 200)
-  -- Dedup: jangan masukkan teks yang sama dalam 3 menit
-  if not _TIP_RAW_SENT[_dedupKey] or (_now - _TIP_RAW_SENT[_dedupKey]) > 180 then
-   _TIP_RAW_SENT[_dedupKey] = _now
-   table.insert(_TIP_RAW_LINES, {
-    text   = text,
-    isAsc  = isAscension,
-    grade  = grade or "?",
-    mapNum = mapNum,
-    time   = _now,
-   })
-   _TIP_RAW_LAST = _now
-   -- Bersihkan entry lama > 5 menit
-   local _cleaned = {}
-   for _, _e in ipairs(_TIP_RAW_LINES) do
-    if (_now - _e.time) < 300 then table.insert(_cleaned, _e) end
-   end
-   _TIP_RAW_LINES = _cleaned
-   -- Bersihkan dedup lama
-   for _k, _t in pairs(_TIP_RAW_SENT) do
-    if (_now - _t) > 300 then _TIP_RAW_SENT[_k] = nil end
-   end
-  end
- end
  if not _whSilent then TriggerWebhookDebounce() end
  -- [v58] Gunakan debounce terpusat: tunggu 3 detik setelah notif terakhir
  -- baru bangunkan RAID dan ASC bersamaan untuk filter dan masuk
@@ -7068,6 +7033,7 @@ local function _processMsg(raw)
     
     _chatSeen[key] = now
     ParseChatLine(txt)
+    _WH.AddRawNotif(txt)  -- [PATCH v9] kirim raw ke webhook
     
     -- Cleanup cache lama setiap 10 pesan baru (agar memori tidak bocor)
     local count = 0
@@ -7207,284 +7173,404 @@ do -- [FIX] webhook + raid logic wrapped to free top-level locals
 -- WEBHOOK SYSTEM - Bersih, akurat, executor-agnostic
 -- Kirim notif ke Discord/Telegram saat Raid atau Siege OPEN
 -- ============================================================
+-- ============================================================
+-- WEBHOOK PATCH v9 - FLa Project
+-- Metode: Raw text dari TipsFloatingPanel → Discord Embed
+-- Cara pasang: GANTI blok "_WH = {}" s/d "SendWebhookSiege = ..."
+-- di script utama (sekitar baris 7175–7380)
+-- ============================================================
+
+-- ============================================================
+-- RAW NOTIF BUFFER
+-- Semua teks dari TipsFloatingPanel langsung masuk buffer ini.
+-- Tidak ada rekonstruksi dari RAID_LIVE - apa yang muncul di
+-- popup itulah yang dikirim ke Discord.
+-- ============================================================
 _WH = {}
 
--- Helper: dapatkan request function (support semua executor)
+-- Buffer: simpan semua raw line dari TipsFloatingPanel per siklus notif
+-- Format: { text = "The MaFissure appeared in 9,Land of giants [S]", time = tick() }
+local _rawNotifBuffer = {}
+local _rawBufferTimer = nil
+local _rawLastSent    = 0  -- tick() saat terakhir kirim
+local _RAW_COOLDOWN   = 10 -- detik minimum antar pengiriman (anti spam)
+local _RAW_WINDOW     = 3  -- detik tunggu setelah notif terakhir sebelum kirim
+
+-- ============================================================
+-- Helper: executor-agnostic HTTP request
+-- ============================================================
 local function _getReqFunc()
- -- Support semua executor: Delta, Fluxus, Xeno, Solara, Synapse, KRNL, dll
- local _r = request or http_request or httprequest
-  or (syn and syn.request)
-  or (http and http.request)
-  or (fluxus and fluxus.request)
-  or (krnl and krnl.request)
-  or (electron and electron.request)
-  or (Drawing and Drawing.request) -- beberapa build custom
- -- getgenv fallback: executor expose request di env berbeda
- if not _r then
-  pcall(function()
-   local _env = getgenv and getgenv() or nil
-   if _env then
-    _r = _env.request or _env.http_request or _env.httprequest
-   end
-  end)
- end
- return _r or nil
+    local _r = (rawget and rawget(_G,"request"))
+        or request or http_request or httprequest
+        or (syn  and syn.request)
+        or (http and http.request)
+        or (fluxus and fluxus.request)
+        or (krnl and krnl.request)
+        or (electron and electron.request)
+    if not _r then
+        pcall(function()
+            local _env = getgenv and getgenv() or nil
+            if _env then
+                _r = _env.request or _env.http_request or _env.httprequest
+            end
+        end)
+    end
+    return _r or nil
 end
 
+-- ============================================================
 -- Helper: kirim HTTP POST ke Discord atau Telegram
--- return: true (sukses), false (gagal), string (error message)
-local function _doSend(url, text)
- local reqFunc = _getReqFunc()
- if not reqFunc then
-  pcall(function() warn("[ASH Webhook] ERROR: Executor tidak support HTTP request!") end)
-  return false, "Executor tidak support HTTP"
- end
- local HS = game:GetService("HttpService")
- local isDiscord = url:find("discord%.com/api/webhooks")
- local isTelegram = url:find("api%.telegram%.org")
- local ok, res, errMsg = false, nil, nil
- local callOk, callErr = pcall(function()
-  if isDiscord then
-   res = reqFunc({
-    Url = url,
-    Method = "POST",
-    Headers = { ["Content-Type"] = "application/json" },
-    Body = HS:JSONEncode({ content = text }),
-   })
-  elseif isTelegram then
-   local enc = tostring(text):gsub("([^%w%-_%.%~])", function(c)
-    return string.format("%%%02X", string.byte(c))
-   end)
-   res = reqFunc({ Url = url .. "&text=" .. enc, Method = "GET" })
-  end
- end)
- if not callOk then
-  errMsg = "HTTP error: "..(tostring(callErr):sub(1,60))
-  pcall(function() warn("[ASH Webhook] "..errMsg) end)
-  return false, errMsg
- end
- if res and type(res) == "table" then
-  local sc = res.StatusCode or res.status or 0
-  ok = (sc >= 200 and sc < 300)
-  if not ok then
-   errMsg = "HTTP "..sc..(res.Body and (" - "..tostring(res.Body):sub(1,40)) or "")
-   pcall(function() warn("[ASH Webhook] Gagal: "..errMsg) end)
-  end
- elseif res ~= nil then
-  ok = true
- else
-  errMsg = "Tidak ada response dari server"
-  ok = false
- end
- return ok, errMsg
-end
-
--- Kirim notif Raid ke webhook
--- [FIX WEBHOOK] Pakai _TIP_RAW_LINES (teks mentah dari TipsFloatingPanel)
--- bukan rebuild dari RAID_LIVE yang bisa tidak sinkron/grade "?"
-_WH.SendRaid = function(url)
- local rawLines = _TIP_RAW_LINES or {}
-
- local GRADE_COLOR = {
-  ["E"]=9868950,["D"]=6604900,["C"]=5294200,["B"]=6589695,
-  ["A"]=11822335,["S"]=16757810,["SS"]=16768000,["G"]=16742440,
-  ["N"]=16732240,["M"]=16727160,["M+"]=14428340,["M++"]=13115135,
-  ["XM"]=16732360,["ULT"]=16766720,["GOD"]=16777215,
- }
- local GRADE_RANK_W = {
-  ["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,
-  ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18,
- }
-
- local HS       = game:GetService("HttpService")
- local reqFunc  = _getReqFunc()
- if not reqFunc then return end
-
- local isDiscord  = url:find("discord%.com/api/webhooks")
- local isTelegram = url:find("api%.telegram%.org")
-
- -- ============================================================
- -- JALUR UTAMA: teks mentah dari buffer TipsFloatingPanel
- -- ============================================================
- local useRawBuffer = #rawLines > 0
- if useRawBuffer then
-  local lines_normal, lines_at = {}, {}
-  local topGrade = "E"
-  for _, entry in ipairs(rawLines) do
-   if entry.isAsc then
-    table.insert(lines_at, entry.text)
-   else
-    table.insert(lines_normal, entry.text)
-   end
-   local g = entry.grade or "E"
-   if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
-  end
-  local totalRaid = #lines_normal + #lines_at
-  if totalRaid > 0 then
-   if isDiscord then
-    local color  = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
-    local fields = {}
-    if #lines_normal > 0 then
-     table.insert(fields, {
-      name   = "Normal Raid ("..#lines_normal..")",
-      value  = table.concat(lines_normal, "\n"),
-      inline = false,
-     })
+-- ============================================================
+local function _doSend(url, textOrPayload, isJsonPayload)
+    local reqFunc = _getReqFunc()
+    if not reqFunc then
+        pcall(function() warn("[ASH Webhook] ERROR: Executor tidak support HTTP request!") end)
+        return false, "Executor tidak support HTTP"
     end
-    if #lines_at > 0 then
-     table.insert(fields, {
-      name   = "Ascension Tower ("..#lines_at..")",
-      value  = table.concat(lines_at, "\n"),
-      inline = false,
-     })
-    end
-    local payload = {
-     embeds = {{
-      title       = "[RAID OPEN] Grade " .. topGrade,
-      description = "Total **" .. totalRaid .. "** raid aktif | Grade tertinggi: **" .. topGrade .. "**",
-      color       = color,
-      fields      = fields,
-      footer      = { text = "ASH GUI FLa Project" },
-     }}
-    }
-    pcall(function()
-     reqFunc({
-      Url     = url,
-      Method  = "POST",
-      Headers = { ["Content-Type"] = "application/json" },
-      Body    = HS:JSONEncode(payload),
-     })
+    local HS2 = game:GetService("HttpService")
+    local ok, res, errMsg = false, nil, nil
+    local callOk, callErr = pcall(function()
+        if isJsonPayload then
+            -- Sudah berupa table payload JSON (untuk embed Discord)
+            res = reqFunc({
+                Url    = url,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body   = HS2:JSONEncode(textOrPayload),
+            })
+        elseif url:find("discord%.com/api/webhooks") then
+            res = reqFunc({
+                Url    = url,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body   = HS2:JSONEncode({ content = tostring(textOrPayload) }),
+            })
+        elseif url:find("api%.telegram%.org") then
+            local enc = tostring(textOrPayload):gsub("([^%w%-_%.%~])", function(c)
+                return string.format("%%%02X", string.byte(c))
+            end)
+            res = reqFunc({ Url = url .. "&text=" .. enc, Method = "GET" })
+        end
     end)
-   elseif isTelegram then
-    local lines = { "[RAID OPEN] Grade " .. topGrade }
-    for _, t in ipairs(lines_normal) do table.insert(lines, t) end
-    for _, t in ipairs(lines_at)     do table.insert(lines, t) end
-    _doSend(url, table.concat(lines, "\n"))
-   end
-   _TIP_RAW_LINES = {}
-   return
-  end
- end
-
- -- ============================================================
- -- FALLBACK: rebuild dari RAID_LIVE (buffer kosong)
- -- ============================================================
- local raidList = {}
- for _, entry in pairs(RAID_LIVE or {}) do table.insert(raidList, entry) end
- table.sort(raidList, function(a,b) return (a.mapId or 0) < (b.mapId or 0) end)
- if #raidList == 0 then return end
-
- local function getGrade(entry)
-  local isAT = entry.isAscension == true
-  local _mid = entry.mapId or (isAT and 50301 or 50001)
-  if isAT then
-   if _mid >= 50001 and _mid <= 50026 then _mid = _mid + 300 end
-   if _mid >= 50101 and _mid <= 50126 then _mid = _mid + 200 end
-   if _mid >= 50401 and _mid <= 50426 then _mid = _mid - 100 end
-  end
-  local mn = isAT and math.max(1, _mid - 50300) or (_mid - 50000)
-  local g = "?"
-  if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
-  if g == "?" then g = (GetBestGrade and GetBestGrade(mn, isAT)) or "?" end
-  if g == "?" then g = entry.grade or "?" end
-  return g
- end
-
- local normalRaids, atRaids = {}, {}
- for _, entry in ipairs(raidList) do
-  local isAT = entry.isAscension == true or (entry.raidId and entry.raidId >= 935001)
-  if isAT then table.insert(atRaids, entry)
-  else table.insert(normalRaids, entry) end
- end
-
- if isDiscord then
-  local topGrade2 = "E"
-  local lines_normal2, lines_at2 = {}, {}
-  for _, entry in ipairs(normalRaids) do
-   local mn   = (entry.mapId or 50000) - 50000
-   local name = MAP_NAMES[mn] or ("Map "..mn)
-   local g    = getGrade(entry)
-   table.insert(lines_normal2, "The MaFissure appeared in "..mn..","..name.." ["..g.."]")
-   if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade2] or 0) then topGrade2 = g end
-  end
-  for _, entry in ipairs(atRaids) do
-   local _atMapId = entry.mapId or 50301
-   if _atMapId >= 50001 and _atMapId <= 50026 then _atMapId = _atMapId + 300 end
-   if _atMapId >= 50101 and _atMapId <= 50126 then _atMapId = _atMapId + 200 end
-   if _atMapId >= 50401 and _atMapId <= 50426 then _atMapId = _atMapId - 100 end
-   local towerNum = math.max(1, _atMapId - 50300)
-   local g = "?"
-   if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
-   if g == "?" then g = (GetBestGrade and GetBestGrade(towerNum, true)) or "?" end
-   if g == "?" then g = entry.grade or "?" end
-   local _bn    = entry.bossName and (entry.bossName:gsub("^%l", string.upper)) or nil
-   local atLabel = "Ascension Tower "..towerNum.." - [Monarch] "..(_bn or "?").." ["..g.."]"
-   table.insert(lines_at2, atLabel)
-   if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade2] or 0) then topGrade2 = g end
-  end
-  local color2  = GRADE_COLOR[topGrade2] or GRADE_COLOR["E"]
-  local fields2 = {}
-  if #lines_normal2 > 0 then
-   table.insert(fields2, {name="[Normal Raid] ("..#lines_normal2..")", value=table.concat(lines_normal2,"\n"), inline=false})
-  end
-  if #lines_at2 > 0 then
-   table.insert(fields2, {name="[Ascension Tower] ("..#lines_at2..")", value=table.concat(lines_at2,"\n"), inline=false})
-  end
-  local payload2 = {embeds={{
-   title       = "[RAID OPEN] Rank "..topGrade2,
-   description = "Total: **"..#raidList.."** raid aktif",
-   color       = color2,
-   fields      = fields2,
-   footer      = {text="ASH GUI FLa Project"},
-  }}}
-  pcall(function()
-   reqFunc({Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=HS:JSONEncode(payload2)})
-  end)
- elseif isTelegram then
-  local lines3 = {"[RAID OPEN]"}
-  for _, entry in ipairs(normalRaids) do
-   local mn = (entry.mapId or 50000) - 50000
-   local g  = getGrade(entry)
-   table.insert(lines3, "The MaFissure appeared in "..mn..","..(MAP_NAMES[mn] or "Map "..mn).." ["..g.."]")
-  end
-  for _, entry in ipairs(atRaids) do
-   local _atMapId = entry.mapId or 50301
-   if _atMapId >= 50001 and _atMapId <= 50026 then _atMapId = _atMapId + 300 end
-   local towerNum = math.max(1, _atMapId - 50300)
-   local g = "?"
-   if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
-   if g == "?" then g = (GetBestGrade and GetBestGrade(towerNum, true)) or "?" end
-   if g == "?" then g = entry.grade or "?" end
-   local _bn = entry.bossName and (entry.bossName:gsub("^%l", string.upper)) or nil
-   table.insert(lines3, "Ascension Tower "..towerNum.." - [Monarch] "..(_bn or "?").." ["..g.."]")
-  end
-  _doSend(url, table.concat(lines3, "\n"))
- end -- tutup elseif isTelegram
-end -- tutup if isDiscord
-end -- tutup if isDiscord (fallback)
-end -- tutup function _WH.SendRaid
-SendWebhookRaid = function(url) _WH.SendRaid(url) end -- alias internal
-
--- Kirim notif Siege ke webhook
-_WH.SendSiege = function(url)
- local SIEGE_NAMES = {
- [3]="Shadow Castle", [7]="Demon Castle Tier 2",
- [10]="Plagueheart", [13]="Lava Hell", [18]="Golden Throne"
- }
- local lines = { "**SIEGE OPEN**" }
- local found = false
- if SIEGE and SIEGE.live then
- for cid, mn in pairs(SIEGE.live) do
- local name = SIEGE_NAMES[mn] or ("Map " .. mn)
- table.insert(lines, string.format("- Map %d - %s", mn, name))
- found = true
- end
- end
- if not found then return end
- local msg = table.concat(lines, "\n")
- _doSend(url, msg)
+    if not callOk then
+        errMsg = "HTTP error: "..(tostring(callErr):sub(1,60))
+        pcall(function() warn("[ASH Webhook] "..errMsg) end)
+        return false, errMsg
+    end
+    if res and type(res) == "table" then
+        local sc = res.StatusCode or res.status or 0
+        ok = (sc >= 200 and sc < 300)
+        if not ok then
+            errMsg = "HTTP "..sc..(res.Body and (" - "..tostring(res.Body):sub(1,40)) or "")
+            pcall(function() warn("[ASH Webhook] Gagal: "..errMsg) end)
+        end
+    elseif res ~= nil then
+        ok = true
+    else
+        errMsg = "Tidak ada response dari server"
+    end
+    return ok, errMsg
 end
-SendWebhookSiege = function(url) _WH.SendSiege(url) end -- alias internal
+
+-- ============================================================
+-- GRADE → warna embed Discord (integer RGB)
+-- ============================================================
+local GRADE_COLOR_WH = {
+    ["E"]=9868950, ["D"]=6604900,  ["C"]=5294200,  ["B"]=6589695,
+    ["A"]=11822335,["S"]=16757810, ["SS"]=16768000, ["G"]=16742440,
+    ["N"]=16732240,["M"]=16727160, ["M+"]=14428340, ["M++"]=13115135,
+    ["XM"]=16732360,["ULT"]=16766720,["GOD"]=16777215,["?"]=7829367,
+}
+local GRADE_RANK_WH = {
+    ["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,
+    ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18,
+}
+
+-- Ekstrak grade dari satu baris teks notif
+local function _extractGradeFromLine(line)
+    local g = line:match("%[M%+%+%]") and "M++"
+        or line:match("%[M%+%]")  and "M+"
+        or line:match("%[SS%]")   and "SS"
+        or line:match("%[XM%]")   and "XM"
+        or line:match("%[ULT%]")  and "ULT"
+        or line:match("%[GOD%]")  and "GOD"
+        or line:match("%[([EDCBAGSNMedcbagsm])%]")
+        or (line:find("%[M%]") and "M")
+    return g and g:upper() or "?"
+end
+
+-- ============================================================
+-- BUILD & KIRIM EMBED DISCORD dari buffer raw
+-- ============================================================
+local function _flushRawBuffer()
+    if not _webhookEnabled or not _webhookUrl or _webhookUrl == "" then
+        _rawNotifBuffer = {}
+        return
+    end
+    if #_rawNotifBuffer == 0 then return end
+
+    -- Cooldown: jangan spam Discord
+    local now = tick()
+    if (now - _rawLastSent) < _RAW_COOLDOWN then
+        -- Terlalu cepat, tunda lagi sebentar
+        if _rawBufferTimer then pcall(function() task.cancel(_rawBufferTimer) end) end
+        _rawBufferTimer = task.delay(_RAW_COOLDOWN - (now - _rawLastSent) + 0.5, _flushRawBuffer)
+        return
+    end
+    _rawLastSent = now
+
+    -- Ambil snapshot buffer lalu kosongkan
+    local lines = {}
+    for _, entry in ipairs(_rawNotifBuffer) do
+        table.insert(lines, entry.text)
+    end
+    _rawNotifBuffer = {}
+
+    -- Pisahkan Normal Raid vs Ascension Tower
+    local normalLines, atLines, siegeLines = {}, {}, {}
+    for _, line in ipairs(lines) do
+        if line:find("Ascension Tower", 1, true) then
+            table.insert(atLines, line)
+        elseif line:find("SIEGE", 1, true) or line:find("City Raid", 1, true) then
+            table.insert(siegeLines, line)
+        elseif line:find("MaFissure", 1, true) or line:find("appeared in", 1, true) then
+            table.insert(normalLines, line)
+        else
+            -- fallback: masuk normal
+            table.insert(normalLines, line)
+        end
+    end
+
+    -- Filter berdasarkan mode webhook
+    local mode = _webhookMode or "both"
+    if mode == "raid" then
+        siegeLines = {}
+    elseif mode == "siege" then
+        normalLines = {}
+        atLines = {}
+    end
+
+    -- Cek apakah ada yang dikirim
+    local totalLines = #normalLines + #atLines + #siegeLines
+    if totalLines == 0 then return end
+
+    -- Hitung grade tertinggi dari semua line
+    local topGrade = "?"
+    for _, line in ipairs(normalLines) do
+        local g = _extractGradeFromLine(line)
+        if (GRADE_RANK_WH[g] or 0) > (GRADE_RANK_WH[topGrade] or 0) then topGrade = g end
+    end
+    for _, line in ipairs(atLines) do
+        local g = _extractGradeFromLine(line)
+        if (GRADE_RANK_WH[g] or 0) > (GRADE_RANK_WH[topGrade] or 0) then topGrade = g end
+    end
+
+    local url = _webhookUrl
+    local isDiscord = url:find("discord%.com/api/webhooks")
+    local isTelegram = url:find("api%.telegram%.org")
+
+    -- ============================================================
+    -- DISCORD EMBED
+    -- ============================================================
+    if isDiscord then
+        local fields = {}
+
+        if #normalLines > 0 then
+            -- Batasi Discord field value max 1024 char
+            local val = table.concat(normalLines, "\n")
+            if #val > 1020 then val = val:sub(1,1020).."..." end
+            table.insert(fields, {
+                name   = "🗡️ Normal Raid ("..#normalLines..")",
+                value  = val,
+                inline = false,
+            })
+        end
+
+        if #atLines > 0 then
+            local val = table.concat(atLines, "\n")
+            if #val > 1020 then val = val:sub(1,1020).."..." end
+            table.insert(fields, {
+                name   = "👑 Ascension Tower ("..#atLines..")",
+                value  = val,
+                inline = false,
+            })
+        end
+
+        if #siegeLines > 0 then
+            local val = table.concat(siegeLines, "\n")
+            if #val > 1020 then val = val:sub(1,1020).."..." end
+            table.insert(fields, {
+                name   = "🏰 Siege / City Raid ("..#siegeLines..")",
+                value  = val,
+                inline = false,
+            })
+        end
+
+        local color  = GRADE_COLOR_WH[topGrade] or GRADE_COLOR_WH["?"]
+        local title  = "[RAID OPEN] "
+        if topGrade ~= "?" then title = title.."Top Grade: "..topGrade end
+
+        local payload = {
+            embeds = {{
+                title       = title,
+                description = "Total **"..totalLines.."** notifikasi aktif",
+                color       = color,
+                fields      = fields,
+                footer      = { text = "ASH GUI - FLa Project | @"..os.date("%H:%M:%S") },
+            }}
+        }
+
+        task.spawn(function()
+            _doSend(url, payload, true)
+        end)
+
+    -- ============================================================
+    -- TELEGRAM: plain text
+    -- ============================================================
+    elseif isTelegram then
+        local parts = {"[ASH RAID OPEN]"}
+        if #normalLines > 0 then
+            table.insert(parts, "--- Normal Raid ---")
+            for _, l in ipairs(normalLines) do table.insert(parts, l) end
+        end
+        if #atLines > 0 then
+            table.insert(parts, "--- Ascension Tower ---")
+            for _, l in ipairs(atLines) do table.insert(parts, l) end
+        end
+        if #siegeLines > 0 then
+            table.insert(parts, "--- Siege ---")
+            for _, l in ipairs(siegeLines) do table.insert(parts, l) end
+        end
+        task.spawn(function()
+            _doSend(url, table.concat(parts, "\n"))
+        end)
+    end
+end
+
+-- ============================================================
+-- AddRawNotif: dipanggil dari _processMsg setiap ada teks baru
+-- Gantikan / tambahkan panggilan ini di _processMsg (lihat instruksi)
+-- ============================================================
+_WH.AddRawNotif = function(text)
+    if not _webhookEnabled or not _webhookUrl or _webhookUrl == "" then return end
+    if _whSilent then return end -- jangan kirim saat scan history awal
+    if not text or type(text) ~= "string" or #text < 5 then return end
+
+    -- Dedup: jangan tambah baris identik dalam 60 detik
+    for _, entry in ipairs(_rawNotifBuffer) do
+        if entry.text == text and (tick() - entry.time) < 60 then return end
+    end
+
+    table.insert(_rawNotifBuffer, { text = text, time = tick() })
+
+    -- Debounce: tunggu _RAW_WINDOW detik setelah notif terakhir
+    if _rawBufferTimer then
+        pcall(function() task.cancel(_rawBufferTimer) end)
+    end
+    _rawBufferTimer = task.delay(_RAW_WINDOW, function()
+        _rawBufferTimer = nil
+        _flushRawBuffer()
+    end)
+end
+
+-- ============================================================
+-- SendRaid / SendSiege: kompatibilitas dengan kode lama
+-- Sekarang keduanya langsung flush buffer (tidak rebuild dari RAID_LIVE)
+-- ============================================================
+_WH.SendRaid  = function(url) _flushRawBuffer() end
+_WH.SendSiege = function(url)
+    -- Siege masih dari SIEGE.live karena tidak ada teks di TipsFloatingPanel
+    if not SIEGE or not SIEGE.live then return end
+    local SIEGE_NAMES = {
+        [3]="Shadow Castle", [7]="Demon Castle Tier 2",
+        [10]="Plagueheart",  [13]="Lava Hell", [18]="Golden Throne"
+    }
+    local lines = {}
+    local found = false
+    for cid, mn in pairs(SIEGE.live) do
+        local name = SIEGE_NAMES[mn] or ("Map "..mn)
+        table.insert(lines, string.format("City Raid - Map %d - %s", mn, name))
+        found = true
+    end
+    if not found then return end
+    -- Masukkan ke buffer agar ikut embed bersama raid
+    for _, l in ipairs(lines) do
+        table.insert(_rawNotifBuffer, { text = l, time = tick() })
+    end
+    if #_rawNotifBuffer > 0 then
+        if _rawBufferTimer then pcall(function() task.cancel(_rawBufferTimer) end) end
+        _rawBufferTimer = task.delay(0.5, function()
+            _rawBufferTimer = nil
+            _flushRawBuffer()
+        end)
+    end
+end
+
+-- ============================================================
+-- SendCustomMessage: dipakai tombol Test Webhook (tidak berubah)
+-- ============================================================
+_WH.SendCustomMessage = function(url, msg, onDone, onFail)
+    if not url or url == "" then
+        if onFail then onFail("URL kosong") end; return
+    end
+    if not url:find("discord%.com/api/webhooks") and not url:find("api%.telegram%.org") then
+        if onFail then onFail("URL tidak dikenali (bukan Discord/Telegram)") end; return
+    end
+    if not _getReqFunc() then
+        if onFail then onFail("Executor tidak support HTTP") end; return
+    end
+    task.spawn(function()
+        local ok, errMsg = _doSend(url, msg)
+        task.wait(0.3)
+        if ok then
+            if onDone then onDone() end
+        else
+            if onFail then onFail(errMsg or "Gagal") end
+        end
+    end)
+end
+
+-- ============================================================
+-- VerifyWebhookUrl: dipakai tombol Verify Link (tidak berubah)
+-- ============================================================
+_WH.VerifyWebhookUrl = function(url, onValid, onInvalid)
+    if not url or url == "" then
+        if onInvalid then onInvalid("URL kosong") end; return
+    end
+    local isDiscord = url:find("discord%.com/api/webhooks/")
+    if isDiscord then
+        local id, token = url:match("webhooks/(%d+)/([%w_%-]+)")
+        if not id or not token then
+            if onInvalid then onInvalid("Format Discord webhook salah") end; return
+        end
+        task.spawn(function()
+            local reqFunc = _getReqFunc()
+            if not reqFunc then
+                if onInvalid then onInvalid("Executor tidak support HTTP") end; return
+            end
+            local ok2, res2 = pcall(function()
+                return reqFunc({ Url = url, Method = "GET",
+                    Headers = { ["Content-Type"] = "application/json" } })
+            end)
+            if ok2 and res2 and (res2.StatusCode == 200 or res2.StatusCode == 204) then
+                if onValid then onValid() end
+            else
+                if onInvalid then onInvalid("Tidak dapat terhubung ke Discord") end
+            end
+        end)
+    elseif url:find("api%.telegram%.org") then
+        if onValid then onValid() end
+    else
+        if onInvalid then onInvalid("Bukan URL Discord/Telegram valid") end
+    end
+end
+
+-- Alias untuk kompatibilitas internal
+SendWebhookRaid  = function(url) _WH.SendRaid(url) end
+SendWebhookSiege = function(url) _WH.SendSiege(url) end
+
+-- ============================================================
+-- ============================================================
 
 -- Debounce timer: tunggu 3 detik setelah notif terakhir baru kirim
 local _whDebounce = nil
@@ -7630,51 +7716,6 @@ FlushWebhookPending = function()
  TriggerWebhookDebounce()
 end
 
-_WH.SendCustomMessage = function(url, msg, onDone, onFail)
- if not url or url == "" then
- if onFail then onFail("URL kosong") end; return
- end
- if not url:find("discord%.com/api/webhooks") and not url:find("api%.telegram%.org") then
- if onFail then onFail("URL tidak dikenali (bukan Discord/Telegram)") end; return
- end
- if not _getReqFunc() then
- if onFail then onFail("Executor tidak support HTTP") end; return
- end
- task.spawn(function()
-  local ok, errMsg = _doSend(url, msg)
-  task.wait(0.3)
-  if ok then
-   if onDone then onDone() end
-  else
-   local reason = errMsg or "Gagal kirim"
-   if onFail then onFail(reason) end
-  end
- end)
-end
-
-_WH.VerifyWebhookUrl = function(url, onValid, onInvalid)
- if not url or url == "" then
- if onInvalid then onInvalid("URL kosong") end; return
- end
- local isDiscord = url:find("discord%.com/api/webhooks/")
- local isTelegram = url:find("api%.telegram%.org/bot[^/]+/sendMessage")
- if isDiscord then
- local id, token = url:match("webhooks/(%d+)/([%w_%-]+)")
- if id and token and #token > 10 then
- if onValid then onValid() end
- else
- if onInvalid then onInvalid("Format Discord webhook salah") end
- end
- elseif isTelegram then
- if url:find("chat_id=") then
- if onValid then onValid() end
- else
- if onInvalid then onInvalid("Telegram URL butuh chat_id=...") end
- end
- else
- if onInvalid then onInvalid("Bukan URL Discord/Telegram valid") end
- end
-end
 
 -- Koneksi raid listeners
 _WH.raidConns = {}
