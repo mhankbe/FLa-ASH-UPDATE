@@ -6769,7 +6769,7 @@ end
 
 
 -- ============================================================
-do -- [FIX] AutoRaid+Webhook: isolated scope
+do -- AutoRaid isolated scope
 -- AUTO RAID : LOGIC (Data dari RaidSniffer v2)
 -- Format confirmed:
 -- UpdateRaidInfo -> arg[1] = {
@@ -6981,22 +6981,6 @@ function ParseChatLine(text)
   end
   if RebuildRaidList then pcall(RebuildRaidList) end
 
-  -- [FIX FINAL] AT dan normal raid adalah 1 darah.
-  -- [v10] WH_LIVE removed
-  -- Tidak bergantung pada UpdateRaidInfo datang lebih dulu atau tidak.
-  -- [v10] WH_LIVE block removed
- end
- -- Jangan buat entry RAID_LIVE di sini - tunggu server
- else
- -- Update isAscension = false untuk entry normal di RAID_LIVE
- for rid, entry in pairs(RAID_LIVE) do
- if entry.mapId and (entry.mapId - 50000) == mapNum then
- entry.isAscension = false
- end
- end
- end
-
- -- [v10] webhook removed
  -- [v58] Gunakan debounce terpusat: tunggu 3 detik setelah notif terakhir
  -- baru bangunkan RAID dan ASC bersamaan untuk filter dan masuk
  TriggerEntryWakeup()
@@ -7104,9 +7088,8 @@ task.spawn(function()
  for _, ch in ipairs(channels:GetChildren()) do watchChannel(ch) end
  channels.ChildAdded:Connect(function(ch) task.wait(0.1); watchChannel(ch) end)
 
- -- Scan history awal saat startup (silent, jangan trigger webhook)
+ -- Scan history awal saat startup
  task.wait(5)
- -- [v10] _whSilent removed
  pcall(function()
  for _, ch in ipairs(channels:GetChildren()) do
  if ch:IsA("TextChannel") then
@@ -7120,7 +7103,6 @@ task.spawn(function()
  end
  end
  end)
- -- [v10] _whSilent removed
  end)
 end)
 
@@ -7160,15 +7142,39 @@ task.spawn(function()
 end)
 
 
--- Forward declare raid+webhook functions
+-- Forward declare raid functions
 RebuildRaidList=nil; ParseRaidEntry=nil
 DisconnectRaidConns=nil; ConnectRaidListeners=nil; RaidFireDamage=nil
 
-do -- [FIX] webhook + raid logic wrapped to free top-level locals
+-- [v58] ENTRY WAKEUP DEBOUNCE - Gerbang masuk terpusat
+-- ============================================================
+-- Semua sumber notif (chat parser, workspace watcher, UpdateRaidInfo server)
+-- wajib memanggil TriggerEntryWakeup() dan TIDAK boleh langsung fire wakeup.
+--
+-- Cara kerja:
+--   1. Notif masuk -> data langsung masuk RAID_LIVE (seperti biasa)
+--   2. TriggerEntryWakeup() dipanggil -> timer di-reset ke 3 detik
+--   3. Selama 3 detik: notif-notif berikutnya terus update data, timer terus di-reset
+--   4. Setelah 3 detik tidak ada notif baru -> BARU fire wakeup ke RAID dan ASC
+--   5. RAID dan ASC masing-masing cek filter mereka sendiri dan masuk jika cocok
+--   6. Karena keduanya dibangunkan dari titik yang SAMA setelah data stabil,
+--      tidak ada race condition - siapa yang resolve entry lebih dulu itulah yang masuk
+--
+-- Keuntungan vs v57:
+--   - Tidak perlu _ascPending flag
+--   - Tidak ada pembedaan "ini notif ASC, jangan bangunkan RAID" yang rapuh
+--   - Lebih toleran terhadap notif terlambat / out-of-order dari server
+--   - Tetap ada TryClaimMapLock sebagai safety net terakhir
 
--- Koneksi raid listeners (v10: _WH removed, pakai _raidConns)
--- [v10] _WH removed
+local _entryWakeupTimer = nil  -- handle task.delay aktif
+local _ENTRY_DEBOUNCE_SEC = 3  -- detik tunggu setelah notif terakhir
 
+TriggerEntryWakeup = function()
+    -- Reset timer: kalau sudah ada timer berjalan, batalkan dan mulai lagi
+    if _entryWakeupTimer then
+        pcall(function() task.cancel(_entryWakeupTimer) end)
+        _entryWakeupTimer = nil
+    end
 RebuildRaidList = function()
  local sorted = {}
  for _, e in pairs(RAID_LIVE) do
@@ -7218,7 +7224,6 @@ RebuildRaidList = function()
  })
  end
  if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
- -- [v10] webhook removed
 end
 
 -- Parse satu entry raidInfos
@@ -7314,13 +7319,13 @@ end
 -- Hanya untuk dapat raidId yang dibutuhkan CreateRaidTeam.
 -- ============================================================
 
-_raidConns = {}  -- [v10] dipindah dari _raidConns
+_raidConnsList = {}
 
 DisconnectRaidConns = function()
- for _, conn in ipairs(_raidConns) do
+ for _, conn in ipairs(_raidConnsList) do
  pcall(function() conn:Disconnect() end)
  end
- _raidConns = {}
+ _raidConnsList = {}
 end
 
 -- Ekstrak mapNum dari nama child (mis. "RaidEnter7" -> 7)
@@ -7369,139 +7374,6 @@ local function _onRaidChildAdded(child, slotName)
  -- [v58] Gunakan debounce terpusat: jangan langsung bangunkan siapapun
  -- TriggerEntryWakeup() akan tunggu 3 detik setelah notif terakhir baru fire RAID & ASC
  if TriggerEntryWakeup then TriggerEntryWakeup() end
- -- [v271] Trigger webhook LANGSUNG saat raid muncul di workspace
- do -- [v10] _whSilent guard removed
-  task.spawn(function()
-   task.wait(0.5)
-   -- [v10] webhook removed
-  end)
- end
-end
-
--- Child RaidEnterX hilang = raid Map X tutup
-local function _onRaidChildRemoved(child)
- local mapNum = _parseRaidEnterName(child.Name)
- if not mapNum then return end
- local mapId = 50000 + mapNum
- local changed = false
- for rid, ent in pairs(RAID_LIVE) do
- if ent.mapId == mapId then
- RAID_LIVE[rid] = nil; changed = true
- end
- end
- if changed then RebuildRaidList() end
-end
-
--- Pasang watcher ke satu slot (RE1001 atau RE1002)
-local function _watchRaidSlot(reFolder)
- if not reFolder then return end
- for _, child in ipairs(reFolder:GetChildren()) do
- _onRaidChildAdded(child, reFolder.Name)
- end
- reFolder.ChildAdded:Connect(function(child)
- _onRaidChildAdded(child, reFolder.Name)
- -- [v268] Scan RaidCoolingGui untuk dapat grade dari ValueText/TextLabel
- task.spawn(function()
- task.wait(1) -- tunggu descendants terisi
- pcall(function()
- -- Scan semua TextLabel di dalam child (RaidEnterX atau RaidCoolingGui)
- local function scanForGrade(obj)
- for _, desc in ipairs(obj:GetDescendants()) do
- if desc:IsA("TextLabel") or desc:IsA("TextBox") then
- local txt = (desc.Text or ""):gsub("<[^>]+>","")
- -- Cari teks yang mengandung grade bracket [X]
- local grade = txt:match("%[M%+%+%]") and "M++" or txt:match("%[M%+%]") and "M+" or txt:match("%[SS%]") and "SS" or txt:match("%[XM%]") and "XM" or txt:match("%[ULT%]") and "ULT" or txt:match("%[GOD%]") and "GOD" or txt:match("%[([EDCBAGSNMedcbagsn])%]") or (txt:find("%[M%]") and "M")
- if grade then
- -- Cari mapNum dari nama child (RaidEnterX)
- local mn = _parseRaidEnterName(child.Name)
- if mn and _runeGradeCache then
- local prev = _runeGradeCache[mn]
- if not prev or prev == "?" then
- _runeGradeCache[mn] = grade:upper()
- -- [v58] Gunakan debounce terpusat
- if TriggerEntryWakeup then TriggerEntryWakeup() end
- end
- end
- end
- -- Watch Text changes juga
- pcall(function()
- desc:GetPropertyChangedSignal("Text"):Connect(function()
- local t2 = (desc.Text or ""):gsub("<[^>]+>","")
- local g2 = t2:match("%[M%+%+%]") and "M++" or t2:match("%[M%+%]") and "M+" or t2:match("%[SS%]") and "SS" or t2:match("%[XM%]") and "XM" or t2:match("%[ULT%]") and "ULT" or t2:match("%[GOD%]") and "GOD" or t2:match("%[([EDCBAGSNMedcbagsn])%]") or (t2:find("%[M%]") and "M")
- if g2 then
- local mn2 = _parseRaidEnterName(child.Name)
- if mn2 and _runeGradeCache then
- local prev2 = _runeGradeCache[mn2]
- if not prev2 or prev2 == "?" then
- _runeGradeCache[mn2] = g2:upper()
- -- [v58] Gunakan debounce terpusat
- if TriggerEntryWakeup then TriggerEntryWakeup() end
- end
- end
- end
- end)
- end)
- end
- end
- end
- scanForGrade(child)
- -- Cari RaidCoolingGui khusus
- for _, desc in ipairs(child:GetDescendants()) do
- if desc.Name == "RaidCoolingGui" then
- scanForGrade(desc)
- end
- end
- end)
- end)
- end)
- reFolder.ChildRemoved:Connect(function(child)
- _onRaidChildRemoved(child)
- end)
-end
-
--- Tunggu workspace.Maps.Map.RaidEnter lalu pasang watcher
-task.spawn(function()
- local ok, mapsF = pcall(function() return workspace:WaitForChild("Maps", 15) end)
- if not ok or not mapsF then return end
- local ok2, mapF = pcall(function() return mapsF:WaitForChild("Map", 10) end)
- if not ok2 or not mapF then return end
- local ok3, reF = pcall(function() return mapF:WaitForChild("RaidEnter", 10) end)
- if not ok3 or not reF then return end
- local re1 = reF:WaitForChild("RE1001", 5)
- local re2 = reF:WaitForChild("RE1002", 5)
- _watchRaidSlot(re1)
- _watchRaidSlot(re2)
-end)
-
--- UpdateRaidInfo: HANYA untuk dapat raidId + grade dari server
--- Bukan lagi sumber utama exist/tidak-nya raid
-ConnectRaidListeners = function()
- DisconnectRaidConns()
-
- local _RE_Update = Remotes:FindFirstChild("UpdateRaidInfo")
- local _RE_Enter = Remotes:FindFirstChild("EnterRaidsUpdateInfo")
-
- if _RE_Update then
- local conn = _RE_Update.OnClientEvent:Connect(function(data)
- if type(data) ~= "table" then return end
- local action = data.action
- local raidInfos = data.raidInfos
- if type(raidInfos) ~= "table" then return end
-
- if action == "RemoveRaidEnters" then
- for k, info in pairs(raidInfos) do
- local raidId = type(k)=="number" and k or tonumber(k)
- if raidId then
-  local ent = RAID_LIVE[raidId]
-  -- [FIX] Clear grade cache AT saat raid tutup agar tidak cemari raid baru
-  if ent and ent.isAscension and ent.mapId then
-   local _mn = ent.mapId >= 50301 and (ent.mapId - 50300)
-    or (ent.mapId >= 50001 and ent.mapId <= 50026 and (ent.mapId - 50000))
-    or nil
-   if _mn then
-    if _runeGradeCache then _runeGradeCache[-_mn] = nil end
-    if _ASC_CHAT_CACHE then _ASC_CHAT_CACHE[_mn] = nil end
-   end
   end
   RAID_LIVE[raidId] = nil
  end
@@ -7615,10 +7487,9 @@ ConnectRaidListeners = function()
  RebuildRaidList()
  -- [v58] Gunakan debounce terpusat
  if TriggerEntryWakeup then TriggerEntryWakeup() end
- -- [v10] webhook removed
  end
  end)
- table.insert(_raidConns, conn)
+ table.insert(_raidConnsList, conn)
  end
 
  -- EnterRaidsUpdateInfo: slotIndex + serverMapId saat masuk map
@@ -7653,14 +7524,13 @@ ConnectRaidListeners = function()
   end
  end
  end)
- table.insert(_raidConns, conn)
+ table.insert(_raidConnsList, conn)
  end
 end
 
 -- Pasang listener saat start
 task.spawn(function()
  ConnectRaidListeners()
- -- [v10] ConnectWHLiveListener removed
 end)
 
 -- Auto-reconnect kalau Remotes refresh (mis. setelah rejoin)
@@ -7673,7 +7543,6 @@ task.spawn(function()
  lastRef = cur
  if cur then
   ConnectRaidListeners()
-  -- [v10] ConnectWHLiveListener removed
  end
  end
  end
@@ -8670,6 +8539,7 @@ function StartAscensionLoop()
        _ascSuccess = true
        _ascDone = true
        AscStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
+      end -- if bossPos
      else
       -- Boss tidak ditemukan setelah 30s - last chance scan
       if not boss then
@@ -9110,7 +8980,6 @@ local function ForceRescanRaidEnter()
             RebuildRaidList()
             -- [v58] Gunakan debounce terpusat
             if TriggerEntryWakeup then TriggerEntryWakeup() end
-                    -- [v10] webhook removed
         end
     end)
 end
@@ -10442,7 +10311,6 @@ end
 -- 
 
 -- ============================================================
--- do (webhook + raid logic)
 
 -- ============================================================
 
@@ -14358,9 +14226,6 @@ do
 end
 
 -- ============================================================
--- WEBHOOK SENDER
--- ============================================================
--- ============================================================
 -- PANEL : SETTINGS
 -- ============================================================
 do
@@ -14392,7 +14257,7 @@ do
   _setPotatoToggle = _s
   _visPotato = _v
  end
-
+end
 
 
 -- ============================================================
@@ -15354,9 +15219,6 @@ task.spawn(function()
             elseif action == "OpenCityRaid" then
                 SIEGE.live[id] = mn
                 if _siegeWakeup then pcall(function() _siegeWakeup:Fire() end) end
-                    -- [v10] webhook removed
-                    -- [v10] webhook removed 
-                end
             elseif action == "CloseCityRaid" or action == "LeaveCityRaid" then
                 SIEGE.live[id] = nil
                 if _siegeChatOpen then _siegeChatOpen[mn] = false end
