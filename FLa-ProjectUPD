@@ -1179,6 +1179,15 @@ RAID = {
  updownDir = "up", -- "up" = UseRaidItem(10270) | "down" = UseRaidItem(10271)
  diffLbl = nil, -- label UI difficulty
  snapshotMapId = nil, -- mapId hasil jepretan sesuai difficulty saat ini
+ autoKillBoss = false, -- toggle: teleport ke raja + auto attack sampai mati
+ bossDelay    = 3,     -- delay sebelum TP ke boss (1-10s)
+ pickMode     = "easy",  -- pick mode: easy|hard|default|byrank|bymap|manual
+ manualMatchMode = "none", -- primary|fallback|none
+ updownTargetGrade = nil, -- grade target untuk UP/DOWN rank
+ killLbl      = nil,   -- label kill counter (legacy)
+ loopLbl      = nil,   -- label loop counter (legacy)
+ activeRaidLbl = nil,  -- label raid aktif
+ updateActiveLabel = nil, -- callback update label
 }
 _raidOn = false
 
