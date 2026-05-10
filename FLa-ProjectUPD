@@ -1476,6 +1476,9 @@ _webhookEnabled = false
 _webhookUrl = ""
 _whSilent = false -- true saat scan history awal (jangan fire webhook duplikat)
 _RAID_LINES = {}   -- raw text dari TipsFloatingPanel, key=teks, value=tick()
+GRADE_LIST = {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT","GOD"}
+GRADE_RANK = {["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,
+ ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18}
 
 -- ============================================================
 -- _processMsg: filter + simpan ke _RAID_LINES + parse RAID_LIVE
@@ -1646,10 +1649,6 @@ RAID_CONFIG_GRADE = setmetatable({}, {
   return nil
  end
 })
-
--- GRADE_RANK: nilai numerik untuk perbandingan
-GRADE_RANK = {["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,
- ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18}
 
 -- Helper: dapatkan request function (support semua executor)
 local function _getReqFunc()
