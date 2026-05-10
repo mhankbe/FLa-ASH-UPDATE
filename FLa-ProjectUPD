@@ -7477,7 +7477,113 @@ end
 -- SendRaid / SendSiege: kompatibilitas dengan kode lama
 -- Sekarang keduanya langsung flush buffer (tidak rebuild dari RAID_LIVE)
 -- ============================================================
-_WH.SendRaid  = function(url) _flushRawBuffer() end
+-- SendRaid: kirim dari raw buffer (notif baru) ATAU fallback dari RAID_LIVE (execute telat)
+_WH.SendRaid = function(url)
+    -- Kalau buffer tidak kosong: kirim dari buffer (cara baru, grade akurat)
+    if #_rawNotifBuffer > 0 then
+        _flushRawBuffer()
+        return
+    end
+
+    -- FALLBACK: buffer kosong (execute setelah notif hilang)
+    -- Bangun teks dari RAID_LIVE + grade cache, sama persis seperti yang terlihat di game
+    if not RAID_LIVE or next(RAID_LIVE) == nil then return end
+    local _url = url or _webhookUrl
+    if not _url or _url == "" then return end
+
+    local GRADE_COLOR_FB = GRADE_COLOR_WH
+    local GRADE_RANK_FB  = GRADE_RANK_WH
+
+    local function _getBestGradeFB(entry)
+        -- 1. Dari RAID_CONFIG_GRADE (formula raidId untuk normal raid)
+        local g = "?"
+        if entry.raidId and RAID_CONFIG_GRADE then
+            g = RAID_CONFIG_GRADE[entry.raidId] or "?"
+        end
+        -- 2. Dari _runeGradeCache (diisi oleh ParseChatLine waktu popup muncul)
+        if g == "?" and _runeGradeCache then
+            local isAT = entry.isAscension == true or (entry.raidId and entry.raidId >= 935001)
+            local _mid = entry.mapId or 50000
+            local mn
+            if isAT then
+                if _mid >= 50001 and _mid <= 50026 then _mid = _mid + 300 end
+                if _mid >= 50101 and _mid <= 50126 then _mid = _mid + 200 end
+                if _mid >= 50401 and _mid <= 50426 then _mid = _mid - 100 end
+                mn = math.max(1, _mid - 50300)
+                g = _runeGradeCache[-mn] or "?"
+            else
+                mn = _mid - 50000
+                g = _runeGradeCache[mn] or "?"
+            end
+        end
+        -- 3. Dari entry.grade langsung
+        if g == "?" then g = entry.grade or "?" end
+        return g
+    end
+
+    -- Susun list entry
+    local raidList = {}
+    for _, entry in pairs(RAID_LIVE) do table.insert(raidList, entry) end
+    table.sort(raidList, function(a,b) return (a.mapId or 0) < (b.mapId or 0) end)
+
+    local normalLines, atLines = {}, {}
+    local topGrade = "?"
+
+    for _, entry in ipairs(raidList) do
+        local isAT = entry.isAscension == true
+            or (entry.raidId and entry.raidId >= 935001)
+        local g = _getBestGradeFB(entry)
+        if (GRADE_RANK_FB[g] or 0) > (GRADE_RANK_FB[topGrade] or 0) then topGrade = g end
+
+        if isAT then
+            local _mid = entry.mapId or 50301
+            if _mid >= 50001 and _mid <= 50026 then _mid = _mid + 300 end
+            if _mid >= 50101 and _mid <= 50126 then _mid = _mid + 200 end
+            if _mid >= 50401 and _mid <= 50426 then _mid = _mid - 100 end
+            local tNum = math.max(1, _mid - 50300)
+            local _bn = entry.bossName and (entry.bossName:gsub("^%l", string.upper)) or "?"
+            table.insert(atLines, "The MaFissure appeared in Ascension Tower "..tNum.." - [Monarch] ".._bn.." ["..g.."]")
+        else
+            local mn = (entry.mapId or 50000) - 50000
+            local name = MAP_NAMES and MAP_NAMES[mn] or ("Map "..mn)
+            table.insert(normalLines, "The MaFissure appeared in "..mn..","..name.." ["..g.."]")
+        end
+    end
+
+    local isDiscord = _url:find("discord%.com/api/webhooks")
+    local totalLines = #normalLines + #atLines
+    if totalLines == 0 then return end
+
+    if isDiscord then
+        local fields = {}
+        if #normalLines > 0 then
+            local val = table.concat(normalLines, "\n")
+            if #val > 1020 then val = val:sub(1,1020).."..." end
+            table.insert(fields, { name="🗡️ Normal Raid ("..#normalLines..")", value=val, inline=false })
+        end
+        if #atLines > 0 then
+            local val = table.concat(atLines, "\n")
+            if #val > 1020 then val = val:sub(1,1020).."..." end
+            table.insert(fields, { name="👑 Ascension Tower ("..#atLines..")", value=val, inline=false })
+        end
+        local color = GRADE_COLOR_FB[topGrade] or GRADE_COLOR_FB["?"]
+        local payload = { embeds = {{
+            title       = "[RAID OPEN] Top Grade: "..topGrade,
+            description = "Total **"..totalLines.."** raid aktif *(dari cache RAID_LIVE)*",
+            color       = color,
+            fields      = fields,
+            footer      = { text = "ASH GUI - FLa Project | @"..os.date("%H:%M:%S") },
+        }}}
+        task.spawn(function() _doSend(_url, payload, true) end)
+    else
+        -- Telegram
+        local parts = {"[ASH RAID OPEN] *(RAID_LIVE cache)*"}
+        for _, l in ipairs(normalLines) do table.insert(parts, l) end
+        for _, l in ipairs(atLines)    do table.insert(parts, l) end
+        task.spawn(function() _doSend(_url, table.concat(parts, "\n")) end)
+    end
+end
+
 _WH.SendSiege = function(url)
     -- Siege masih dari SIEGE.live karena tidak ada teks di TipsFloatingPanel
     if not SIEGE or not SIEGE.live then return end
