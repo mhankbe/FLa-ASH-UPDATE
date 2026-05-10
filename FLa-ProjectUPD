@@ -7324,7 +7324,10 @@ _WH.SendRaid = function(url)
   end
 
   local totalRaid = #lines_normal + #lines_at
-  if totalRaid == 0 then goto fallback_raid_live end
+  if totalRaid == 0 then
+   -- buffer ada tapi semua entry sudah expire / kosong, lanjut ke fallback
+   -- (dihandle oleh else di bawah)
+  else
 
   if isDiscord then
    -- Discord embed: rapi, berisi teks mentah persis seperti di game
@@ -7372,13 +7375,15 @@ _WH.SendRaid = function(url)
   -- Reset buffer setelah terkirim agar batch berikutnya bersih
   _TIP_RAW_LINES = {}
   return -- selesai, tidak perlu fallback
- end
+  end -- tutup else (totalRaid > 0)
+ end -- tutup if #rawLines > 0
 
  -- ====================================================
- -- FALLBACK: rebuild dari RAID_LIVE (kalau buffer kosong)
+ -- FALLBACK: rebuild dari RAID_LIVE (kalau buffer kosong / totalRaid == 0)
  -- Ini path lama, dipertahankan sebagai safety net
  -- ====================================================
- ::fallback_raid_live::
+ -- (tidak menggunakan goto, langsung flow natural)
+ do
  local GRADE_RANK_W2 = GRADE_RANK_W -- alias
  local raidList = {}
  for _, entry in pairs(RAID_LIVE or {}) do table.insert(raidList, entry) end
@@ -7465,6 +7470,8 @@ _WH.SendRaid = function(url)
   end
   _doSend(url, table.concat(lines3, "\n"))
  end
+end
+ end -- tutup do fallback
 end
 SendWebhookRaid = function(url) _WH.SendRaid(url) end -- alias internal
 
