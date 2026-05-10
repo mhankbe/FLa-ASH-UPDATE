@@ -7683,64 +7683,39 @@ local _whDebounce = nil
 local _whLastSent = 0
 
 TriggerWebhookDebounce = function()
+    -- [v9 PATCH] TriggerWebhookDebounce tidak lagi mengirim Raid/AT sendiri.
+    -- Semua pengiriman Raid/AT terpusat di _flushRawBuffer (source: TipsFloatingPanel).
+    -- Fungsi ini sekarang hanya menangani Siege (tidak ada di TipsFloatingPanel).
     if not _webhookEnabled or not _webhookUrl or _webhookUrl == "" then return end
-    
-    -- ==========================================
-    -- [SISTEM INGATAN ANTI-SPAM DISCORD]
-    -- ==========================================
-    _G.SentRaidIds = _G.SentRaidIds or {}
-    _G.SentSiegeIds = _G.SentSiegeIds or {}
-    
-    local hasNew = false
-    
-    -- 1. Cek apakah ada ID Raid baru yang belum pernah dikirim
-    if RAID_LIVE then
-        for id, _ in pairs(RAID_LIVE) do
-            if not _G.SentRaidIds[id] then
-                _G.SentRaidIds[id] = true
-                hasNew = true
+
+    -- Siege: masukkan ke buffer agar ikut embed bersama raid
+    if SIEGE and SIEGE.live and next(SIEGE.live) ~= nil then
+        local mode = _webhookMode or "both"
+        if mode == "siege" or mode == "both" then
+            local SIEGE_NAMES_TWH = {
+                [3]="Shadow Castle", [7]="Demon Castle Tier 2",
+                [10]="Plagueheart", [13]="Lava Hell", [18]="Golden Throne"
+            }
+            for cid, mn in pairs(SIEGE.live) do
+                local name = SIEGE_NAMES_TWH[mn] or ("Map "..mn)
+                local line = string.format("City Raid - Map %d - %s", mn, name)
+                local already = false
+                for _, entry in ipairs(_rawNotifBuffer) do
+                    if entry.text == line and (tick() - entry.time) < 60 then
+                        already = true; break
+                    end
+                end
+                if not already then
+                    table.insert(_rawNotifBuffer, { text = line, time = tick() })
+                end
             end
+            if _rawBufferTimer then pcall(function() task.cancel(_rawBufferTimer) end) end
+            _rawBufferTimer = task.delay(1, function()
+                _rawBufferTimer = nil
+                _flushRawBuffer()
+            end)
         end
     end
-    
-    -- 2. Cek apakah ada ID Siege baru yang belum pernah dikirim
-    if SIEGE and SIEGE.live then
-        for id, _ in pairs(SIEGE.live) do
-            if not _G.SentSiegeIds[id] then
-                _G.SentSiegeIds[id] = true
-                hasNew = true
-            end
-        end
-    end
-    
-    -- 3. HUKUM MUTLAK: Jika tidak ada ID baru, BATALKAN PENGIRIMAN! (Diam)
-    if not hasNew then return end
-    -- ==========================================
-
-    if _whDebounce then pcall(function() task.cancel(_whDebounce) end) end
-
-    -- [v271] Debounce 1 detik (turun dari 3s) agar lebih responsif
-    _whDebounce = task.delay(1, function()
-        _whDebounce = nil
-        -- [v271] Cooldown 10 detik (turun dari 30s) agar tidak terlalu lambat
-        if (tick() - _whLastSent) < 10 then return end
-        _whLastSent = tick()
-
-        task.spawn(function()
-            local mode = _webhookMode or "both"
-            local url = _webhookUrl
-            local hasRaid = next(RAID_LIVE or {}) ~= nil
-            local hasSiege = SIEGE and SIEGE.live and next(SIEGE.live) ~= nil
-
-            if (mode == "raid" or mode == "both") and hasRaid then
-                SendWebhookRaid(url)
-            end
-            if (mode == "siege" or mode == "both") and hasSiege then
-                task.wait(0.3)
-                SendWebhookSiege(url)
-            end
-        end)
-    end)
 end
 
 SendWebhookNotif = TriggerWebhookDebounce -- alias untuk kompatibilitas
