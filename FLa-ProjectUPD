@@ -6814,7 +6814,7 @@ RANK_LABEL = {
 }
 -- Nama map in-game (mapNum = mapId - 50000)
 MAP_NAMES = {
- [1] = "Shadow Gate City",
+ [1] = "Shadow Gate",
  [2] = "Level Grinding Cavern",
  [3] = "Shadow Castle",
  [4] = "Seolhan Forest",
@@ -7277,14 +7277,9 @@ _WH.SendRaid = function(url)
  return g
  end
 
- local normalRaids, atRaids = {}, {}
- for _, entry in ipairs(raidList) do
- -- [FIX Map 20] Gunakan flag isAscension dari entry, bukan mn >= 20
- -- Map 20 normal (raidId positif) harus masuk normalRaids, bukan atRaids
- local isAT = entry.isAscension == true or (entry.raidId and entry.raidId < 0) or (entry.raidId and entry.raidId >= 935001)
- if isAT then table.insert(atRaids, entry)
- else table.insert(normalRaids, entry) end
- end
+ -- [v274 FIX] Semua entry (normal + AT) digabung satu loop
+ -- AT ditampilkan sebagai "[Map: X, Ascension Tower X] | Rank: G"
+ -- Grade diambil: RAID_CONFIG_GRADE -> entry.grade -> GetBestGrade (fallback)
 
  local isDiscord = url:find("discord%.com/api/webhooks")
  local isTelegram = url:find("api%.telegram%.org")
@@ -7292,94 +7287,90 @@ _WH.SendRaid = function(url)
  local reqFunc = _getReqFunc()
  if not reqFunc then return end
 
+ -- Helper: normalize AT mapId -> towerNum
+ local function getATNum(mapId)
+  local m = mapId or 50301
+  if m >= 50001 and m <= 50026 then m = m + 300 end
+  if m >= 50101 and m <= 50126 then m = m + 200 end
+  if m >= 50401 and m <= 50426 then m = m - 100 end
+  return math.max(1, m - 50300)
+ end
+
+ -- Helper: grade unified — prioritas RAID_CONFIG_GRADE -> entry.grade -> GetBestGrade
+ local function getGradeU(entry, isAT, mn)
+  local g = "?"
+  if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then
+   g = RAID_CONFIG_GRADE[entry.raidId] or "?"
+  end
+  if g == "?" then g = entry.grade or "?" end
+  if g == "?" then g = (GetBestGrade and GetBestGrade(mn, isAT)) or "?" end
+  return g
+ end
+
  if isDiscord then
  local topGrade = "E"
- local lines_normal, lines_at = {}, {}
- -- [v273 FIX] Format baris raid: [Map: X, Name] | Rank: G (sesuai standar)
- for _, entry in ipairs(normalRaids) do
- local mn = (entry.mapId or 50000) - 50000
- local name = MAP_NAMES[mn] or ("Map "..mn)
- local g = getGrade(entry)
- table.insert(lines_normal, "[Map: "..mn..", "..name.."] | Rank: "..g)
- if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
- end
- for _, entry in ipairs(atRaids) do
- -- [FIX] Normalize mapId AT ke range 50301-50326 dulu baru hitung towerNum
- local _atMapId = entry.mapId or 50301
- if _atMapId >= 50001 and _atMapId <= 50026 then _atMapId = _atMapId + 300 end
- if _atMapId >= 50101 and _atMapId <= 50126 then _atMapId = _atMapId + 200 end
- if _atMapId >= 50401 and _atMapId <= 50426 then _atMapId = _atMapId - 100 end
- local towerNum = math.max(1, _atMapId - 50300)
- -- [FIX] Grade AT: pakai cacheKey negatif via GetBestGrade(towerNum, true)
- local g = "?"
- if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
- if g == "?" then g = (GetBestGrade and GetBestGrade(towerNum, true)) or "?" end
- if g == "?" then g = entry.grade or "?" end
- local _bn = entry.bossName and (entry.bossName:gsub("^%l",string.upper)) or nil
- -- [v273 FIX] Format AT konsisten
- local atLabel = "[Ascension Tower "..towerNum.."] | Rank: "..g..(_bn and (" | Boss: ".._bn) or "")
- table.insert(lines_at, atLabel)
- if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
+ local lines_all = {}
+ for _, entry in ipairs(raidList) do
+  local isAT = entry.isAscension == true or (entry.raidId and (entry.raidId < 0 or entry.raidId >= 935001))
+  local mn
+  local name
+  if isAT then
+   mn = getATNum(entry.mapId)
+   name = "Ascension Tower "..mn
+  else
+   mn = (entry.mapId or 50000) - 50000
+   name = MAP_NAMES[mn] or ("Map "..mn)
+  end
+  local g = getGradeU(entry, isAT, mn)
+  table.insert(lines_all, "[Map: "..mn..", "..name.."] | Rank: "..g)
+  if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
  end
  local color = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
- -- [v273 FIX] ServerId: game.JobId (public) atau VIPServerId (private/VIP)
- local _jobId = tostring(game.JobId or "")
+ -- [v274] ServerId: VIPServerId (ada prefix/suffix khas) fallback ke JobId
  local _vipId = tostring(game.VIPServerId or "")
+ local _jobId = tostring(game.JobId or "")
  local _serverId = (_vipId ~= "" and _vipId) or _jobId
- local _serverLabel = (_vipId ~= "" and "VIP Server") or "Server"
  local fields = {}
- if #lines_normal > 0 then
- -- Separator antar baris agar rapi seperti format temanmu
- local sep = "\n-----------------------\n"
- table.insert(fields, {name="[Raid List] ("..#lines_normal..")", value=table.concat(lines_normal, "\n-----------------------\n"), inline=false})
+ if #lines_all > 0 then
+  table.insert(fields, {name="[Raid List] ("..#lines_all..")", value=table.concat(lines_all, "\n-----------------------\n"), inline=false})
  end
- if #lines_at > 0 then
- table.insert(fields, {name="[Ascension Tower] ("..#lines_at..")", value=table.concat(lines_at, "\n-----------------------\n"), inline=false})
- end
- -- [v273 NEW] ServerId field — selalu tampil di bawah
  if _serverId ~= "" then
- table.insert(fields, {name=_serverLabel.." ID", value="`".._serverId.."`", inline=false})
+  table.insert(fields, {name="ServerId", value=_serverId, inline=false})
  end
  local payload = {embeds={{title="[RAID OPEN] Rank "..topGrade, description="Total: **"..#raidList.."** raid aktif", color=color, fields=fields, footer={text="ASH GUI FLa Project"}}}}
  pcall(function()
  reqFunc({Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=HS:JSONEncode(payload)})
  end)
  elseif isTelegram then
- -- [v273 FIX] Format Telegram: header Raid Server + [Map: X, Name] | Rank: G + ServerId
- local lines = {"Raid Server\n[Raid List]"}
- for _, entry in ipairs(normalRaids) do
- local mn = (entry.mapId or 50000) - 50000
- local g = getGrade(entry)
- local name = MAP_NAMES[mn] or ("Map "..mn)
- table.insert(lines, "[Map: "..mn..", "..name.."] | Rank: "..g)
- table.insert(lines, "-----------------------")
+ -- [v274 FIX] Telegram: AT digabung ke Raid List, format sama seperti Discord
+ local lines = {"Raid Server
+[Raid List]"}
+ for _, entry in ipairs(raidList) do
+  local isAT = entry.isAscension == true or (entry.raidId and (entry.raidId < 0 or entry.raidId >= 935001))
+  local mn, name
+  if isAT then
+   mn = getATNum(entry.mapId)
+   name = "Ascension Tower "..mn
+  else
+   mn = (entry.mapId or 50000) - 50000
+   name = MAP_NAMES[mn] or ("Map "..mn)
+  end
+  local g = getGradeU(entry, isAT, mn)
+  table.insert(lines, "[Map: "..mn..", "..name.."] | Rank: "..g)
+  table.insert(lines, "-----------------------")
  end
- for _, entry in ipairs(atRaids) do
- local _atMapId = entry.mapId or 50301
- if _atMapId >= 50001 and _atMapId <= 50026 then _atMapId = _atMapId + 300 end
- if _atMapId >= 50101 and _atMapId <= 50126 then _atMapId = _atMapId + 200 end
- if _atMapId >= 50401 and _atMapId <= 50426 then _atMapId = _atMapId - 100 end
- local towerNum = math.max(1, _atMapId - 50300)
- local g = "?"
- if entry.raidId and entry.raidId > 0 and RAID_CONFIG_GRADE then g = RAID_CONFIG_GRADE[entry.raidId] or "?" end
- if g == "?" then g = (GetBestGrade and GetBestGrade(towerNum, true)) or "?" end
- if g == "?" then g = entry.grade or "?" end
- local _bn = entry.bossName and (entry.bossName:gsub("^%l",string.upper)) or nil
- table.insert(lines, "[Ascension Tower "..towerNum.."] | Rank: "..g..(_bn and (" | Boss: ".._bn) or ""))
- table.insert(lines, "-----------------------")
- end
- -- [v273 NEW] ServerId
- local _jobId = tostring(game.JobId or "")
+ -- ServerId
  local _vipId = tostring(game.VIPServerId or "")
+ local _jobId = tostring(game.JobId or "")
  local _serverId = (_vipId ~= "" and _vipId) or _jobId
- local _serverLabel = (_vipId ~= "" and "VIP Server") or "ServerId"
  if _serverId ~= "" then
- table.insert(lines, _serverLabel)
- table.insert(lines, _serverId)
+  table.insert(lines, "ServerId")
+  table.insert(lines, _serverId)
  end
  _doSend(url, table.concat(lines, "\n"))
  end
 end
+SendWebhookRaid = function(url) _WH.SendRaid(url) end -- alias internal
 SendWebhookRaid = function(url) _WH.SendRaid(url) end -- alias internal
 
 -- Kirim notif Siege ke webhook
