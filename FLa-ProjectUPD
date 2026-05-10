@@ -828,7 +828,6 @@ ContentFrame.BackgroundTransparency = 1
 -- ============================================================
 local NAV_ITEMS = {
  {tag="main", ico="", lbl="Main"},
- {tag="hide", ico="", lbl="Hide"},
  {tag="farm", ico="", lbl="Farm"},
  {tag="attack", ico="", lbl="Attack"},
  {tag="autoraid", ico="", lbl="Automation"},
@@ -4555,310 +4554,6 @@ end
 -- ============================================================
 
 -- ============================================================
-
--- ============================================================
--- PANEL : HIDE
--- ============================================================
-do
- local p = NewPanel("hide")
- local _hideRerollOn = false
- local _hideUIOn     = false
- local _hideAnimOn   = false
-
- local _rerollConn   = nil
- local _animLoop     = nil
- local _animWsConn   = nil
- local _uiAddConn    = nil
-
- -- Cache untuk restore
- local _rerollHidden = {}  -- [Frame baris] = true
- local _uiCache      = {}  -- [obj] = state sebelum hide
- local _animBbCache  = {}
- local _animPcCache  = {}
-
- local _OUR_GUI = "ASH_NightFrost"
-
- -- Header
- local hCard = Frame(p, C.BG3, UDim2.new(1,0,0,52))
- hCard.LayoutOrder=0; Corner(hCard,10); Stroke(hCard,C.BORD,1.5,0.6); Padding(hCard,8,8,10,10)
- local hLbl = Label(hCard,"  HIDE MANAGER",12,C.ACC2,Enum.Font.GothamBold,Enum.TextXAlignment.Left)
- hLbl.Size=UDim2.new(1,0,0,20)
- local hSub = Label(hCard,"Sembunyikan elemen game. Toggle OFF untuk restore penuh.",10,C.DIM,Enum.Font.Gotham,Enum.TextXAlignment.Left)
- hSub.Size=UDim2.new(1,0,0,24); hSub.Position=UDim2.new(0,0,0,22); hSub.TextWrapped=true
-
- -- ============================================================
- -- 1. HIDE REROLL CHAT
- -- Struktur ExperienceChat:
- --   ScrollingFrame[scrollView]
- --     Frame[0-{uuid}]    <-- satu baris chat (INI yang di-hide)
- --       Frame[TextMessage]
- --         TextLabel[BodyText]  <-- teks "... just reroll a ..."
- -- ============================================================
- local function isRerollText(t)
-     t = (t or ""):gsub("<[^>]+>",""):lower()
-     return t:find("reroll a",1,true) ~= nil
- end
-
- -- Cari Frame baris (0-{uuid}) dari sebuah TextLabel BodyText
- -- Naik 2 level: BodyText -> Frame[TextMessage] -> Frame[0-{uuid}]
- local function getRowFrame(lbl)
-     local p1 = lbl.Parent          -- Frame[TextMessage]
-     if not p1 then return lbl end
-     local p2 = p1.Parent           -- Frame[0-{uuid}] = baris chat
-     if not p2 then return p1 end
-     -- Pastikan p2 bukan ScrollingFrame (jangan terlalu naik)
-     if p2:IsA("ScrollingFrame") then return p1 end
-     return p2
- end
-
- local function hideRow(row)
-     if row and row.Parent and not _rerollHidden[row] then
-         row.Visible = false
-         _rerollHidden[row] = true
-     end
- end
-
- local function scanAndHideReroll()
-     pcall(function()
-         local ec = game:GetService("CoreGui"):FindFirstChild("ExperienceChat")
-         if not ec then return end
-         -- Cari semua BodyText di dalam scrollView
-         for _, obj in ipairs(ec:GetDescendants()) do
-             if obj.Name == "BodyText" and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
-                 if isRerollText(obj.Text) then
-                     hideRow(getRowFrame(obj))
-                 end
-             end
-         end
-     end)
- end
-
- local function ApplyHideReroll(on)
-     _hideRerollOn = on
-     if _rerollConn then _rerollConn:Disconnect(); _rerollConn = nil end
-
-     if on then
-         -- Scan history yang sudah ada
-         scanAndHideReroll()
-
-         -- Watch DescendantAdded: saat baris baru muncul
-         pcall(function()
-             local CG2 = game:GetService("CoreGui")
-             local ec = CG2:FindFirstChild("ExperienceChat")
-             if not ec then ec = CG2:WaitForChild("ExperienceChat",10) end
-             if not ec then return end
-             _rerollConn = ec.DescendantAdded:Connect(function(obj)
-                 -- Tunggu teks terisi (BodyText sering kosong saat baru muncul)
-                 task.delay(0.2, function()
-                     pcall(function()
-                         if not _hideRerollOn then return end
-                         if obj.Name == "BodyText" and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
-                             if isRerollText(obj.Text) then
-                                 hideRow(getRowFrame(obj))
-                             end
-                         end
-                     end)
-                 end)
-             end)
-         end)
-
-     else
-         -- RESTORE: tampilkan kembali semua baris yang kita sembunyikan
-         for row, _ in pairs(_rerollHidden) do
-             pcall(function()
-                 if row and row.Parent then
-                     row.Visible = true
-                 end
-             end)
-         end
-         _rerollHidden = {}
-     end
- end
-
- ToggleRow(p,"HIDE REROLL CHAT","Sembunyikan baris chat 'just reroll a...' tanpa menghilangkan chat box",1,function(on)
-     ApplyHideReroll(on)
- end)
-
- -- ============================================================
- -- 2. HIDE ALL UI
- -- ============================================================
- local function ApplyHideUI(on)
-     _hideUIOn = on
-     if _uiAddConn then _uiAddConn:Disconnect(); _uiAddConn = nil end
-
-     if on then
-         _uiCache = {}
-         pcall(function()
-             for _, gui in ipairs(PG:GetChildren()) do
-                 pcall(function()
-                     if gui.Name == _OUR_GUI then return end
-                     if gui:IsA("ScreenGui") or gui:IsA("GuiBase2d") then
-                         _uiCache[gui] = gui.Enabled
-                         gui.Enabled = false
-                     elseif gui:IsA("GuiObject") then
-                         _uiCache[gui] = gui.Visible
-                         gui.Visible = false
-                     end
-                 end)
-             end
-         end)
-         -- Watch GUI baru yang muncul saat hide aktif
-         _uiAddConn = PG.ChildAdded:Connect(function(gui)
-             task.defer(function()
-                 pcall(function()
-                     if not _hideUIOn then return end
-                     if gui.Name == _OUR_GUI then return end
-                     if gui:IsA("ScreenGui") or gui:IsA("GuiBase2d") then
-                         _uiCache[gui] = gui.Enabled
-                         gui.Enabled = false
-                     elseif gui:IsA("GuiObject") then
-                         _uiCache[gui] = gui.Visible
-                         gui.Visible = false
-                     end
-                 end)
-             end)
-         end)
-     else
-         if _uiAddConn then _uiAddConn:Disconnect(); _uiAddConn = nil end
-         -- Restore dari cache (persis state sebelumnya)
-         for obj, prev in pairs(_uiCache) do
-             pcall(function()
-                 if obj and obj.Parent then
-                     if obj:IsA("ScreenGui") or obj:IsA("GuiBase2d") then
-                         obj.Enabled = prev
-                     elseif obj:IsA("GuiObject") then
-                         obj.Visible = prev
-                     end
-                 end
-             end)
-         end
-         _uiCache = {}
-     end
- end
-
- ToggleRow(p,"HIDE ALL UI","Sembunyikan semua panel game. Toggle OFF restore penuh.",2,function(on)
-     ApplyHideUI(on)
- end)
-
- -- ============================================================
- -- 3. HIDE ALL ANIMATION (versi penuh, restore sempurna)
- -- ============================================================
- local function ApplyHideAnim(on)
-     _hideAnimOn = on
-
-     if on then
-         _animBbCache = {}
-         _animPcCache = {}
-
-         -- Stop animation tracks via RenderStepped
-         if _animLoop then _animLoop:Disconnect(); _animLoop = nil end
-         _animLoop = game:GetService("RunService").RenderStepped:Connect(function()
-             pcall(function()
-                 for _, fname in ipairs({"Heros","Pets","Characters"}) do
-                     local folder = workspace:FindFirstChild(fname)
-                     if folder then
-                         for _, char in ipairs(folder:GetChildren()) do
-                             local hum = char:FindFirstChildOfClass("Humanoid")
-                                 or char:FindFirstChildOfClass("AnimationController")
-                             if hum then
-                                 local anim = hum:FindFirstChildOfClass("Animator")
-                                 if anim then
-                                     for _, track in ipairs(anim:GetPlayingAnimationTracks()) do
-                                         track:AdjustSpeed(0)
-                                     end
-                                 end
-                             end
-                         end
-                     end
-                 end
-             end)
-         end)
-
-         -- Matikan efek di workspace + cache state awal
-         pcall(function()
-             for _, obj in ipairs(workspace:GetDescendants()) do
-                 pcall(function()
-                     if obj:IsA("BillboardGui") then
-                         local n = obj.Name:lower()
-                         if not n:find("name") and not n:find("health") and not n:find("tag") then
-                             _animBbCache[obj] = obj.Enabled
-                             obj.Enabled = false
-                         end
-                     elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam")
-                         or obj:IsA("PointLight") or obj:IsA("Fire") or obj:IsA("Sparkles") then
-                         _animPcCache[obj] = obj.Enabled
-                         obj.Enabled = false
-                     end
-                 end)
-             end
-         end)
-
-         -- Watch objek efek baru yang spawn
-         if _animWsConn then _animWsConn:Disconnect(); _animWsConn = nil end
-         _animWsConn = workspace.DescendantAdded:Connect(function(obj)
-             task.defer(function()
-                 pcall(function()
-                     if not _hideAnimOn then return end
-                     if obj:IsA("BillboardGui") then
-                         local n = obj.Name:lower()
-                         if not n:find("name") and not n:find("health") and not n:find("tag") then
-                             _animBbCache[obj] = obj.Enabled; obj.Enabled = false
-                         end
-                     elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam")
-                         or obj:IsA("PointLight") or obj:IsA("Fire") or obj:IsA("Sparkles") then
-                         _animPcCache[obj] = obj.Enabled; obj.Enabled = false
-                     end
-                 end)
-             end)
-         end)
-
-     else
-         -- RESTORE PENUH
-         if _animLoop    then _animLoop:Disconnect();    _animLoop    = nil end
-         if _animWsConn  then _animWsConn:Disconnect(); _animWsConn  = nil end
-
-         -- Resume semua animation track
-         pcall(function()
-             for _, fname in ipairs({"Heros","Pets","Characters"}) do
-                 local folder = workspace:FindFirstChild(fname)
-                 if folder then
-                     for _, char in ipairs(folder:GetChildren()) do
-                         local hum = char:FindFirstChildOfClass("Humanoid")
-                             or char:FindFirstChildOfClass("AnimationController")
-                         if hum then
-                             local anim = hum:FindFirstChildOfClass("Animator")
-                             if anim then
-                                 for _, track in ipairs(anim:GetPlayingAnimationTracks()) do
-                                     pcall(function() track:AdjustSpeed(1) end)
-                                 end
-                             end
-                         end
-                     end
-                 end
-             end
-         end)
-
-         -- Restore BillboardGui ke state sebelumnya (bukan selalu true)
-         for obj, prev in pairs(_animBbCache) do
-             pcall(function() if obj and obj.Parent then obj.Enabled = prev end end)
-         end
-         _animBbCache = {}
-
-         -- Restore Particle/Trail/Beam ke state sebelumnya
-         for obj, prev in pairs(_animPcCache) do
-             pcall(function() if obj and obj.Parent then obj.Enabled = prev end end)
-         end
-         _animPcCache = {}
-     end
- end
-
- ToggleRow(p,"HIDE ALL ANIMATION","Matikan animasi, efek, partikel. Restore penuh saat OFF.",3,function(on)
-     ApplyHideAnim(on)
- end)
-
-end -- end do PANEL HIDE
--- ============================================================
-
 -- PANEL : FARM
 -- ============================================================
 do
@@ -7119,17 +6814,17 @@ RANK_LABEL = {
 }
 -- Nama map in-game (mapNum = mapId - 50000)
 MAP_NAMES = {
- [1] = "Shadow Gate City",
+ [1] = "Shadow Gate",
  [2] = "Level Grinding Cavern",
  [3] = "Shadow Castle",
  [4] = "Seolhan Forest",
  [5] = "Demon Castle - Tier 1",
  [6] = "Orc Palace",
- [7] = "Demon Castle - Tier 2",
+ [7] = "Demon Castle -Tier 2",
  [8] = "Ant Island",
- [9] = "Land of Giant",
+ [9] = "Land of Giants",
  [10] = "Plagueheart",
- [11] = "Umbralfrost Domain",
+ [11] = "Umbralfrost",
  [12] = "Kamish's Demise",
  [13] = "Lava Hell",
  [14] = "Illusory World",
@@ -7138,7 +6833,7 @@ MAP_NAMES = {
  [17] = "Angel Holy Realm",
  [18] = "Golden Throne",
  [19] = "Dragon Ball City",
- [20] = "Dragon Ball Wasteland",
+ [20] = "Dragonball Wasteland",
 
 }
 
@@ -7176,8 +6871,6 @@ end -- chat listener + grade cache
 
 GRADE_LIST = {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT"}
 _runeGradeCache = {} -- {[mapNum]=grade} - diisi dari popup/chat
-_pendingTowerNum  = nil -- [script lama FIX] nomor AT dari baris 1 chat, nunggu baris 2
-_pendingTowerTime = 0   -- tick() saat baris 1 diterima, expire 10 detik
 -- [FIX v267] GRADE_RANK: nilai numerik grade untuk perbandingan di ParseChatLine
 -- shouldUpdate hanya update kalau grade baru LEBIH TINGGI dari yang di cache
 GRADE_RANK = {
@@ -7206,100 +6899,113 @@ function ParseChatLine(text)
  if type(text) ~= "string" or #text < 3 then return end
  text = text:gsub("<[^>]+>",""):gsub("[\r\n]+"," "):match("^%s*(.-)%s*$") or text
 
- -- ============================================================
- -- CONFIRMED dari sniffer: TipsPanel kirim 1 baris lengkap untuk keduanya:
- -- Normal : "The MaFissure appeared in 6,Orc Palace [B]"
- -- AT     : "The MaFissure appeared in Ascension Tower 4 - [Monarch] Grendal+1 [E]"
- -- Grade SELALU ada di bracket TERAKHIR dalam teks.
- -- ============================================================
+ -- RAID Normal: "The MaFissure appeared in 6,Orc Palace [B]"
+ -- RAID Ascension: "The MaFissure appeared in Ascension Tower 16 - [Monarch] Antares+1 [A]"
  if text:find("MaFissure",1,true) and text:find("appeared",1,true) then
 
-  -- Helper: ambil grade dari bracket TERAKHIR dalam teks
-  -- Ini kunci fix: skip [Monarch], [King], dll -- ambil yang paling akhir
-  local function extractGradeLast(t)
-   local grade = nil
-   -- Cek multi-char grade dulu (M++, M+, SS, XM, ULT, GOD)
-   for _, pat in ipairs({"M%+%+","M%+","SS","XM","ULT","GOD","M"}) do
-    if t:find("%["..pat.."]", 1, false) then
-     -- Ambil posisi TERAKHIR
-     local last = nil
-     for m in t:gmatch("%["..pat.."]") do last = m end
-     if last then
-      grade = last:match("%[(.+)%]")
-      break
-     end
-    end
-   end
-   if grade then return grade:upper() end
-   -- Single char: ambil bracket TERAKHIR yang valid, skip [Monarch] dll
-   local last = nil
-   for bracket in t:gmatch("%[([^%]]+)%]") do
-    local up = bracket:upper()
-    if up:match("^[EDCBAGSN]$") then
-     last = up
-    end
-   end
-   return last
-  end
+ -- Helper: ekstrak grade dari teks
+ local function extractGrade(t)
+ local g = t:match("%[M%+%+%]") and "M++" or t:match("%[M%+%]") and "M+" or
+ t:match("%[SS%]") and "SS" or t:match("%[XM%]") and "XM" or
+ t:match("%[ULT%]") and "ULT" or t:match("%[GOD%]") and "GOD" or
+ t:match("%[([EDCBAGSNMedcbagsn])%]") or (t:find("%[M%]") and "M")
+ return g and g:upper() or nil
+ end
 
-  -- ASCENSION TOWER: "appeared in Ascension Tower 4 - [Monarch] Grendal+1 [E]"
-  if text:find("Ascension Tower", 1, true) then
-   local towerNum = tonumber(text:match("Ascension Tower (%d+)"))
-   local grade    = extractGradeLast(text)
-   if towerNum and grade then
-    -- Cache key negatif agar tidak bentrok dengan normal raid (map 1-20)
-    _runeGradeCache[-towerNum] = grade
-    if not _ASC_CHAT_CACHE then _ASC_CHAT_CACHE = {} end
-    _ASC_CHAT_CACHE[towerNum] = { grade = grade, time = os.time() }
-    -- [FIX TIMING] update RAID_LIVE entry AT yang sudah ada tapi grade masih "?"
-    for _rid, _ent in pairs(RAID_LIVE) do
-     if _ent.isAscension and _ent.mapId then
-      local _mn2 = (_ent.mapId >= 50301 and _ent.mapId <= 50326)
-       and (_ent.mapId - 50300) or nil
-      if _mn2 == towerNum and (_ent.grade == "?" or not _ent.grade) then
-       _ent.grade = grade
-       _ent.label = "Ascension Tower ".._mn2.." ["..grade.."]"
-      end
-     end
-    end
-    if RebuildRaidList then pcall(RebuildRaidList) end
-    -- [WEBHOOK PURE] Kirim teks mentah langsung ke buffer webhook
-    if _WH and _WH.AddLine then
-     _WH.AddLine("The MaFissure appeared in Ascension Tower "..towerNum.." ["..grade.."]")
-    end
-    TriggerEntryWakeup()
-   end
-   return
-  end
+ -- Cek apakah format Ascension: "appeared in Ascension Tower <num>"
+ local isAscension = text:find("Ascension Tower", 1, true) and true or false
+ local mapNum, rest, grade
 
-  -- RAID NORMAL: "appeared in 6,Orc Palace [B]"
-  local mapStr, rest
-  mapStr, rest = text:match("appeared in (%d+),(.+)")
-  if not mapStr then mapStr, rest = text:match("appeared in (%d+) (.+)") end
-  if mapStr then
-   local mapNum = tonumber(mapStr)
-   local grade  = extractGradeLast(rest or "") or extractGradeLast(text)
-   if mapNum and grade then
-    local prev      = _runeGradeCache[mapNum]
-    local cleanPrev = prev and prev:match("^([^%s%(]+)") or prev
-    local upd = not prev or cleanPrev == "?"
-     or (GRADE_RANK[grade] and GRADE_RANK[cleanPrev] and GRADE_RANK[grade] > GRADE_RANK[cleanPrev])
-    if upd then _runeGradeCache[mapNum] = grade end
-    for _, entry in pairs(RAID_LIVE) do
-     if entry.mapId and (entry.mapId - 50000) == mapNum then
-      entry.isAscension = false
-     end
+ if isAscension then
+ -- Format: "appeared in Ascension Tower 8 - [Monarch] Frostborne+1 [E]"
+ mapNum = tonumber(text:match("Ascension Tower (%d+)"))
+ rest = text:match("Ascension Tower %d+%s*[-]?%s*(.+)") or ""
+ grade = extractGrade(rest) or extractGrade(text)
+ if not grade and text:find("Monarch",1,true) then grade = "?" end
+ -- [FIX] Ekstrak nama boss dari sisa teks setelah nomor tower
+ -- Contoh rest: "[Monarch] Frostborne+1 [E]" -> _ascBossName = "frostborne"
+ _ascBossName = nil
+ if rest ~= "" then
+ -- Hapus prefix [Monarch]/[King]/etc, suffix grade [E]/[N]/[M+]/[M++], dan +N
+ local raw = rest
+  :gsub("%[M%+%+%]",""):gsub("%[M%+%]","")
+  :gsub("%[[A-Za-z0-9%+]+%]",""):gsub("%+%d+","")
+  :match("^%s*(.-)%s*$")
+ if raw and #raw > 1 then
+  _ascBossName = raw:lower()
+ end
+ end
+ else
+ -- Format normal: "appeared in 6,Orc Palace [B]"
+ local mapStr
+ mapStr, rest = text:match("appeared in (%d+),(.+)")
+ if not mapStr then mapStr, rest = text:match("appeared in (%d+) (.+)") end
+ if mapStr then
+ mapNum = tonumber(mapStr)
+ grade = extractGrade(rest or "") or extractGrade(text)
+ if not grade and text:find("Monarch",1,true) then grade = "?" end
+ end
+ end
+
+ if mapNum and grade then
+ -- Update grade cache (untuk raid normal, key = mapNum; Ascension pakai key negatif agar tidak bentrok)
+ local cacheKey = isAscension and (-mapNum) or mapNum
+ local prev = _runeGradeCache[cacheKey]
+ local cleanPrev = prev and prev:match("^([^%s%(]+)") or prev
+ -- [FIX] AT: selalu update (setiap notif = raid baru, grade bisa lebih rendah dari sebelumnya)
+ -- Normal: hanya update kalau grade >= grade sebelumnya (bisa ada duplikat notif)
+ local shouldUpdate = isAscension or not prev or cleanPrev == "?" or (GRADE_RANK[grade] and GRADE_RANK[cleanPrev] and GRADE_RANK[grade] > GRADE_RANK[cleanPrev])
+ if shouldUpdate then _runeGradeCache[cacheKey] = grade end
+
+ if isAscension then
+ -- Simpan info ASC ke cache saja - JANGAN buat entry RAID_LIVE negatif
+ -- Entry RAID_LIVE akan dibuat saat server kirim data via EnterRaidsUpdateInfo/ParseRaidEntry
+ -- dengan raidId asli (935001+), sama persis seperti sistem RAID normal
+ if not _ASC_CHAT_CACHE then _ASC_CHAT_CACHE = {} end
+ _ASC_CHAT_CACHE[mapNum] = {
+  grade = grade,
+  bossName = _ascBossName,
+  time = os.time(),
+ }
+ -- Update grade cache (key negatif agar tidak bentrok dengan RAID normal)
+ -- dipakai ParseRaidEntry saat server data datang
+ if _runeGradeCache and grade and grade ~= "?" then
+  _runeGradeCache[-mapNum] = grade
+ end
+ -- [FIX TIMING] Jika RAID_LIVE sudah punya entry AT ini dengan grade "?",
+ -- update langsung sekarang (server data datang lebih dulu dari chat)
+ if grade and grade ~= "?" then
+  for _rid, _ent in pairs(RAID_LIVE) do
+   if _ent.isAscension and _ent.mapId then
+    local _mn2 = (_ent.mapId >= 50301 and _ent.mapId <= 50326) and (_ent.mapId - 50300) or nil
+    if _mn2 == mapNum and (_ent.grade == "?" or not _ent.grade) then
+     _ent.grade = grade
+     local _bn = _ent.bossName or (_ascBossName) or nil
+     if _bn then _ent.bossName = _bn end
+     _ent.label = "Ascension Tower ".._mn2..(_ent.bossName and (" - "..(_ent.bossName:gsub("^%l",string.upper))) or "").." ["..grade.."]"
     end
-    -- [WEBHOOK PURE] Kirim teks mentah langsung dari TipsPanel ke buffer webhook
-    -- Format persis seperti yang muncul di game
-    if _WH and _WH.AddLine then
-     local _mapName = MAP_NAMES and MAP_NAMES[mapNum] or ("Map "..mapNum)
-     _WH.AddLine("The MaFissure appeared in "..mapNum..",".._mapName.." ["..grade.."]")
-    end
-    TriggerEntryWakeup()
    end
   end
-  return
+  if RebuildRaidList then pcall(RebuildRaidList) end
+  -- [v275] Update grade WH_LIVE yang masih "?" setelah chat parser dapat grade AT
+  if WH_UpdateGrades then pcall(WH_UpdateGrades) end
+ end
+ -- Jangan buat entry RAID_LIVE di sini - tunggu server
+ else
+ -- Update isAscension = false untuk entry normal di RAID_LIVE
+ for rid, entry in pairs(RAID_LIVE) do
+ if entry.mapId and (entry.mapId - 50000) == mapNum then
+ entry.isAscension = false
+ end
+ end
+ end
+
+ if not _whSilent then TriggerWebhookDebounce() end
+ -- [v58] Gunakan debounce terpusat: tunggu 3 detik setelah notif terakhir
+ -- baru bangunkan RAID dan ASC bersamaan untuk filter dan masuk
+ TriggerEntryWakeup()
+ end
+ return
  end
 
 --  Deduplicate seen messages (v273 FIX: Short-term memory 3 minutes)
@@ -7462,7 +7168,6 @@ end)
 SendWebhookNotif=nil; RebuildRaidList=nil; ParseRaidEntry=nil
 DisconnectRaidConns=nil; ConnectRaidListeners=nil; RaidFireDamage=nil
 
-local _whFlushBuffer = nil -- forward declare agar FlushWebhookPending bisa akses
 do -- [FIX] webhook + raid logic wrapped to free top-level locals
 
 -- ============================================================
@@ -7470,6 +7175,92 @@ do -- [FIX] webhook + raid logic wrapped to free top-level locals
 -- Kirim notif ke Discord/Telegram saat Raid atau Siege OPEN
 -- ============================================================
 _WH = {}
+
+-- ============================================================
+-- [v276] CHAT-BASED WEBHOOK SYSTEM
+-- Sumber data: langsung dari ExperienceChat DOM (chat box)
+-- Format persis dari game:
+--   Normal : "The MaFissure appeared in 3,Shadow Castle [B]"
+--   AT     : "The MaFissure appeared in Ascension Tower 15 - [Monarch] Antares [C]"
+-- Kirim ke Discord/Telegram begitu teks muncul di chat box
+-- Tidak bergantung pada RAID_LIVE, WH_LIVE, atau RAID_CONFIG_GRADE
+-- ============================================================
+
+-- Anti-duplikat: teks yang sudah pernah dikirim tidak dikirim ulang
+local _whChatSent = {}
+
+-- Cek apakah teks adalah announce raid/siege/dungeon
+local function _whIsAnnounce(text)
+ if not text or #text < 5 then return false end
+ local tl = text:lower()
+ return tl:find("mafissure appeared in", 1, true) ~= nil
+  or tl:find("siege", 1, true) ~= nil
+  or tl:find("dungeon", 1, true) ~= nil
+end
+
+-- Strip rich text tag (<font ...>, </font>, dll) dari teks
+local function _whStripRichText(text)
+ if not text then return "" end
+ return text:gsub("<[^>]+>", ""):gsub("&lt;","<"):gsub("&gt;",">"):gsub("&amp;","&")
+end
+
+-- Kirim teks mentah dari chat langsung ke Discord/Telegram
+local function _whSendChatLine(text)
+ if not _webhookEnabled then return end
+ local url = _webhookUrl
+ if not url or url == "" then return end
+ -- Strip rich text dulu
+ local clean = _whStripRichText(text):match("^%s*(.-)%s*$")
+ if not clean or clean == "" then return end
+ -- Anti-duplikat
+ if _whChatSent[clean] then return end
+ _whChatSent[clean] = true
+ -- Kirim async
+ task.spawn(function()
+  pcall(function()
+   _doSend(url, clean)
+  end)
+ end)
+end
+
+-- Pasang listener ke ExperienceChat DOM
+-- Dipanggil sekali saat startup, reconnect otomatis kalau ExperienceChat refresh
+local _whChatConn = nil
+function ConnectWHLiveListener()
+ if _whChatConn then pcall(function() _whChatConn:Disconnect() end); _whChatConn = nil end
+ local CG = game:GetService("CoreGui")
+ local ec = CG:FindFirstChild("ExperienceChat")
+ if not ec then
+  -- Tunggu ExperienceChat muncul
+  task.spawn(function()
+   local conn2 = CG.ChildAdded:Connect(function(child)
+    if child.Name == "ExperienceChat" then
+     task.wait(1)
+     ConnectWHLiveListener()
+    end
+   end)
+  end)
+  return
+ end
+ _whChatConn = ec.DescendantAdded:Connect(function(obj)
+  if not (obj:IsA("TextLabel") or obj:IsA("TextButton")) then return end
+  task.defer(function()
+   pcall(function()
+    task.wait(0.3)
+    local raw = obj.Text or ""
+    local clean = _whStripRichText(raw):match("^%s*(.-)%s*$")
+    if _whIsAnnounce(clean) then
+     _whSendChatLine(clean)
+    end
+   end)
+  end)
+ end)
+end
+
+-- Reset anti-duplikat (dipanggil saat pindah server / rejoin)
+function WH_UpdateGrades()
+ -- Tidak dipakai di sistem baru, dibiarkan kosong agar tidak error
+end
 
 -- Helper: dapatkan request function (support semua executor)
 local function _getReqFunc()
@@ -7542,161 +7333,128 @@ local function _doSend(url, text)
 end
 
 -- Kirim notif Raid ke webhook
--- ============================================================
--- WEBHOOK SYSTEM v2 - Pure TipsPanel
--- Buffer teks langsung dari TipsPanel, kirim ke Discord/Telegram
--- Tidak ada ketergantungan RAID_LIVE / ASC_LIVE apapun
--- ============================================================
+_WH.SendRaid = function(url)
+ -- ============================================================
+ -- [v275] Baca dari WH_LIVE (independen), bukan RAID_LIVE
+ -- WH_LIVE berisi semua raid: normal + AT, tanpa filter AUTO RAID/ASC
+ -- Grade AT langsung dari _runeGradeCache[-mn] / _ASC_CHAT_CACHE
+ -- ============================================================
+ local GRADE_COLOR = {
+  ["E"]=9868950,["D"]=6604900,["C"]=5294200,["B"]=6589695,
+  ["A"]=11822335,["S"]=16757810,["SS"]=16768000,["G"]=16742440,
+  ["N"]=16732240,["M"]=16727160,["M+"]=14428340,["M++"]=13115135,
+  ["XM"]=16732360,["ULT"]=16766720,["GOD"]=16777215,
+ }
+ local GRADE_RANK_W = {
+  ["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,
+  ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18,
+ }
 
--- Buffer: teks mentah dari TipsPanel, diisi ParseChatLine
--- { text = "The MaFissure appeared in ...", isAT = bool, time = tick() }
-local _whBuffer        = {}   -- list of raw lines dari event ini
-local _whBufferTimer   = nil  -- debounce handle
-local _whLastSent      = 0
-
-local GRADE_COLOR = {
- ["E"]=9868950,  ["D"]=6604900,  ["C"]=5294200,  ["B"]=6589695,
- ["A"]=11822335, ["S"]=16757810, ["SS"]=16768000, ["G"]=16742440,
- ["N"]=16732240, ["M"]=16727160, ["M+"]=14428340, ["M++"]=13115135,
- ["XM"]=16732360,["ULT"]=16766720,["GOD"]=16777215,
-}
-local GRADE_RANK_W = {
- ["E"]=1,["D"]=2,["C"]=3,["B"]=4,["A"]=5,["S"]=6,["SS"]=7,
- ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18,
-}
-
--- Ambil grade dari bracket TERAKHIR dalam teks
-local function _extractGradeLast(t)
- for _, pat in ipairs({"M%+%+","M%+","SS","XM","ULT","GOD","M"}) do
-  if t:find("%["..pat.."]", 1, false) then
-   local last = nil
-   for m in t:gmatch("%["..pat.."]") do last = m end
-   if last then return last:match("%[(.+)%]"):upper() end
-  end
+ -- Ambil dari WH_LIVE, fallback ke RAID_LIVE kalau WH_LIVE kosong
+ local src = (next(WH_LIVE or {}) ~= nil) and WH_LIVE or RAID_LIVE
+ local raidList = {}
+ for _, entry in pairs(src or {}) do
+  table.insert(raidList, entry)
  end
- local last = nil
- for bracket in t:gmatch("%[([^%]]+)%]") do
-  local up = bracket:upper()
-  if up:match("^[EDCBAGSN]$") then last = up end
+ -- Sort: normal (mapId 500xx) dulu, AT (mapId 503xx) belakangan, masing-masing by mn
+ table.sort(raidList, function(a, b)
+  local aAT = a.isAscension and true or false
+  local bAT = b.isAscension and true or false
+  if aAT ~= bAT then return not aAT end
+  return (a.mn or a.mapId or 0) < (b.mn or b.mapId or 0)
+ end)
+ if #raidList == 0 then return end
+
+ -- Grade resolver: untuk entry WH_LIVE pakai _whGetGrade, untuk fallback RAID_LIVE pakai entry.grade
+ local function resolveGrade(entry)
+  local g = entry.grade or "?"
+  if g ~= "?" then return g end
+  -- Coba ambil fresh dari cache
+  return _whGetGrade(entry.raidId, entry.mapId, entry.isAscension, entry.mn) or "?"
  end
- return last
-end
 
--- Kirim buffer ke Discord/Telegram, lalu kosongkan buffer
-_whFlushBuffer = function(url)
- if #_whBuffer == 0 then return end
- local lines   = _whBuffer
- _whBuffer     = {}
- _whLastSent   = tick()
-
- local reqFunc = _getReqFunc()
- if not reqFunc then return end
- local isDiscord  = url:find("discord%.com/api/webhooks")
+ local isDiscord = url:find("discord%.com/api/webhooks")
  local isTelegram = url:find("api%.telegram%.org")
  local HS = game:GetService("HttpService")
+ local reqFunc = _getReqFunc()
+ if not reqFunc then return end
 
- -- Pisahkan normal raid vs AT, hitung top grade
- local lines_normal, lines_at = {}, {}
+ -- Bangun baris list — sama untuk Discord dan Telegram
  local topGrade = "E"
- for _, line in ipairs(lines) do
-  local g = _extractGradeLast(line) or "?"
-  if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
-  if line:find("Ascension Tower", 1, true) then
-   table.insert(lines_at, line)
-  else
-   table.insert(lines_normal, line)
+ local lines_all = {}
+ for _, entry in ipairs(raidList) do
+  local isAT = entry.isAscension == true or (entry.raidId and (entry.raidId >= 935001 or entry.raidId < 0))
+  local mn = entry.mn
+  if not mn then
+   mn = isAT and math.max(1, (entry.mapId or 50301) - 50300) or ((entry.mapId or 50000) - 50000)
   end
+  local name = isAT and ("Ascension Tower "..mn) or (MAP_NAMES[mn] or ("Map "..mn))
+  local g = resolveGrade(entry)
+  table.insert(lines_all, "[Map: "..mn..", "..name.."] | Rank: "..g)
+  if (GRADE_RANK_W[g] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = g end
  end
 
- local total = #lines_normal + #lines_at
+ -- ServerId
+ local _vipId = tostring(game.VIPServerId or "")
+ local _jobId = tostring(game.JobId or "")
+ local _serverId = (_vipId ~= "" and _vipId) or _jobId
 
  if isDiscord then
+  local color = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
   local fields = {}
-  if #lines_normal > 0 then
+  if #lines_all > 0 then
    table.insert(fields, {
-    name   = "[Normal Raid] ("..#lines_normal..")",
-    value  = table.concat(lines_normal, "\n"),
+    name = "[Raid List] ("..#lines_all..")",
+    value = table.concat(lines_all, "\n-----------------------\n"),
     inline = false,
    })
   end
-  if #lines_at > 0 then
-   table.insert(fields, {
-    name   = "[Ascension Tower] ("..#lines_at..")",
-    value  = table.concat(lines_at, "\n"),
-    inline = false,
-   })
+  if _serverId ~= "" then
+   table.insert(fields, {name="ServerId", value=_serverId, inline=false})
   end
-  local color   = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
-  local payload = {embeds = {{
-   title       = "[RAID OPEN] Rank "..topGrade,
-   description = "Total: **"..total.."** raid aktif",
-   color       = color,
-   fields      = fields,
-   footer      = {text = "ASH GUI FLa Project"},
+  local payload = {embeds={{
+   title = "[RAID OPEN] Rank "..topGrade,
+   description = "Total: **"..#raidList.."** raid aktif",
+   color = color,
+   fields = fields,
+   footer = {text = "ASH GUI FLa Project"},
   }}}
   pcall(function()
-   reqFunc({
-    Url     = url,
-    Method  = "POST",
-    Headers = {["Content-Type"] = "application/json"},
-    Body    = HS:JSONEncode(payload),
-   })
+   reqFunc({Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=HS:JSONEncode(payload)})
   end)
  elseif isTelegram then
-  local out = {"[RAID OPEN] Rank "..topGrade}
-  for _, l in ipairs(lines_normal) do table.insert(out, l) end
-  for _, l in ipairs(lines_at)     do table.insert(out, l) end
-  _doSend(url, table.concat(out, "\n"))
- end
-end
-
--- Dipanggil dari ParseChatLine setiap kali TipsPanel tangkap 1 baris raid/AT
--- text = teks mentah sudah bersih (strip markup)
-_WH.AddLine = function(text)
- if not _webhookEnabled or not _webhookUrl or _webhookUrl == "" then return end
- if _whSilent then return end
- -- Cek apakah sudah ada baris identik dalam buffer (anti duplikat)
- for _, existing in ipairs(_whBuffer) do
-  if existing == text then return end
- end
- table.insert(_whBuffer, text)
- -- Reset debounce: tunggu 3 detik setelah baris terakhir baru kirim
- if _whBufferTimer then pcall(function() task.cancel(_whBufferTimer) end) end
- _whBufferTimer = task.delay(3, function()
-  _whBufferTimer = nil
-  -- Cooldown 10 detik antar pengiriman
-  if (tick() - _whLastSent) < 10 then
-   -- Jadwalkan ulang setelah sisa cooldown
-   local sisa = 10 - (tick() - _whLastSent)
-   _whBufferTimer = task.delay(sisa, function()
-    _whBufferTimer = nil
-    _whFlushBuffer(_webhookUrl)
-   end)
-   return
+  local lines = {"Raid Server\n[Raid List]"}
+  for _, l in ipairs(lines_all) do
+   table.insert(lines, l)
+   table.insert(lines, "-----------------------")
   end
-  _whFlushBuffer(_webhookUrl)
- end)
+  if _serverId ~= "" then
+   table.insert(lines, "ServerId")
+   table.insert(lines, _serverId)
+  end
+  _doSend(url, table.concat(lines, "\n"))
+ end
 end
+SendWebhookRaid = function(url) _WH.SendRaid(url) end -- alias internal
 
--- Alias lama agar kode lain yang memanggil SendWebhookRaid tidak error
-_WH.SendRaid  = function(url) _whFlushBuffer(url) end
-SendWebhookRaid  = function(url) _whFlushBuffer(url) end
+-- Kirim notif Siege ke webhook
 _WH.SendSiege = function(url)
- -- Siege tetap pakai SIEGE.live (tidak ada TipsPanel untuk Siege)
  local SIEGE_NAMES = {
-  [3]="Shadow Castle",[7]="Demon Castle Tier 2",
-  [10]="Plagueheart",[13]="Lava Hell",[18]="Golden Throne",
+ [3]="Shadow Castle", [7]="Demon Castle Tier 2",
+ [10]="Plagueheart", [13]="Lava Hell", [18]="Golden Throne"
  }
- local lines = {"**SIEGE OPEN**"}
+ local lines = { "**SIEGE OPEN**" }
  local found = false
  if SIEGE and SIEGE.live then
-  for _, mn in pairs(SIEGE.live) do
-   table.insert(lines, "- Map "..mn.." - "..(SIEGE_NAMES[mn] or "Map "..mn))
-   found = true
-  end
+ for cid, mn in pairs(SIEGE.live) do
+ local name = SIEGE_NAMES[mn] or ("Map " .. mn)
+ table.insert(lines, string.format("- Map %d - %s", mn, name))
+ found = true
+ end
  end
  if not found then return end
- _doSend(url, table.concat(lines, "\n"))
+ local msg = table.concat(lines, "\n")
+ _doSend(url, msg)
 end
 SendWebhookSiege = function(url) _WH.SendSiege(url) end -- alias internal
 
@@ -7704,9 +7462,67 @@ SendWebhookSiege = function(url) _WH.SendSiege(url) end -- alias internal
 local _whDebounce = nil
 local _whLastSent = 0
 
--- [WEBHOOK PURE] TriggerWebhookDebounce tidak dipakai lagi
--- Webhook sekarang dikirim langsung dari ParseChatLine via _WH.AddLine
-TriggerWebhookDebounce = function() end -- no-op, compat
+TriggerWebhookDebounce = function()
+    if not _webhookEnabled or not _webhookUrl or _webhookUrl == "" then return end
+    
+    -- ==========================================
+    -- [SISTEM INGATAN ANTI-SPAM DISCORD]
+    -- ==========================================
+    _G.SentRaidIds = _G.SentRaidIds or {}
+    _G.SentSiegeIds = _G.SentSiegeIds or {}
+    
+    local hasNew = false
+    
+    -- 1. Cek apakah ada ID Raid baru yang belum pernah dikirim
+    if RAID_LIVE then
+        for id, _ in pairs(RAID_LIVE) do
+            if not _G.SentRaidIds[id] then
+                _G.SentRaidIds[id] = true
+                hasNew = true
+            end
+        end
+    end
+    
+    -- 2. Cek apakah ada ID Siege baru yang belum pernah dikirim
+    if SIEGE and SIEGE.live then
+        for id, _ in pairs(SIEGE.live) do
+            if not _G.SentSiegeIds[id] then
+                _G.SentSiegeIds[id] = true
+                hasNew = true
+            end
+        end
+    end
+    
+    -- 3. HUKUM MUTLAK: Jika tidak ada ID baru, BATALKAN PENGIRIMAN! (Diam)
+    if not hasNew then return end
+    -- ==========================================
+
+    if _whDebounce then pcall(function() task.cancel(_whDebounce) end) end
+
+    -- [v271] Debounce 1 detik (turun dari 3s) agar lebih responsif
+    _whDebounce = task.delay(1, function()
+        _whDebounce = nil
+        -- [v271] Cooldown 10 detik (turun dari 30s) agar tidak terlalu lambat
+        if (tick() - _whLastSent) < 10 then return end
+        _whLastSent = tick()
+
+        task.spawn(function()
+            local mode = _webhookMode or "both"
+            local url = _webhookUrl
+            local hasRaid = next(RAID_LIVE or {}) ~= nil
+            local hasSiege = SIEGE and SIEGE.live and next(SIEGE.live) ~= nil
+
+            if (mode == "raid" or mode == "both") and hasRaid then
+                SendWebhookRaid(url)
+            end
+            if (mode == "siege" or mode == "both") and hasSiege then
+                task.wait(0.3)
+                SendWebhookSiege(url)
+            end
+        end)
+    end)
+end
+
 SendWebhookNotif = TriggerWebhookDebounce -- alias untuk kompatibilitas
 
 -- ============================================================
@@ -7782,11 +7598,8 @@ TriggerEntryWakeup = function()
 end
 -- ============================================================
 FlushWebhookPending = function()
- -- Reset cooldown dan flush buffer yang ada
- _whLastSent = 0
- if _WH and _whFlushBuffer and _webhookUrl and _webhookUrl ~= "" then
-  _whFlushBuffer(_webhookUrl)
- end
+ _whLastSent = 0 -- reset cooldown
+ TriggerWebhookDebounce()
 end
 
 _WH.SendCustomMessage = function(url, msg, onDone, onFail)
@@ -8329,7 +8142,10 @@ ConnectRaidListeners = function()
 end
 
 -- Pasang listener saat start
-task.spawn(function() ConnectRaidListeners() end)
+task.spawn(function()
+ ConnectRaidListeners()
+ ConnectWHLiveListener() -- [v275] WH_LIVE independen
+end)
 
 -- Auto-reconnect kalau Remotes refresh (mis. setelah rejoin)
 task.spawn(function()
@@ -8339,7 +8155,10 @@ task.spawn(function()
  local cur = Remotes:FindFirstChild("UpdateRaidInfo")
  if cur ~= lastRef then
  lastRef = cur
- if cur then ConnectRaidListeners() end
+ if cur then
+  ConnectRaidListeners()
+  ConnectWHLiveListener() -- [v275] reconnect WH_LIVE juga
+ end
  end
  end
 end)
@@ -15211,27 +15030,18 @@ do
  local wKnob=Frame(wPill,Color3.fromRGB(120,50,8),UDim2.new(0,20,0,20))
  wKnob.AnchorPoint=Vector2.new(0,0.5); wKnob.Position=UDim2.new(0,3,0.5,0); Corner(wKnob,10)
  wPill.MouseButton1Click:Connect(function()
-    _webhookEnabled = not _webhookEnabled
-    local on = _webhookEnabled
-    _webhookUrl = (urlBox.Text or ""):match("^%s*(.-)%s*$") or ""
-    if on and (_webhookUrl == "" or not _webhookUrl:find("discord%.com/api/webhooks") and not _webhookUrl:find("api%.telegram%.org")) then
-        -- URL kosong atau tidak valid, batalkan
-        _webhookEnabled = false
-        on = false
-        pcall(function() warn("[ASH Webhook] Isi URL webhook dulu sebelum mengaktifkan!") end)
-    end
-    TweenService:Create(wPill,TweenInfo.new(0.16),{BackgroundColor3=on and Color3.fromRGB(200,80,10) or C.TBAR}):Play()
-    TweenService:Create(wKnob,TweenInfo.new(0.16),{
-        Position=on and UDim2.new(1,-23,0.5,0) or UDim2.new(0,3,0.5,0),
-        BackgroundColor3=on and Color3.fromRGB(255,255,255) or Color3.fromRGB(120,50,8),
-    }):Play()
-    wRow.BackgroundColor3 = on and C.BG2 or C.BG3
-    pcall(UpdatePlatformLbl)
-    if on then
-        -- Reset cooldown agar tidak terblok pengiriman sebelumnya
-        _whLastSent = 0
-        if FlushWebhookPending then task.spawn(FlushWebhookPending) end
-    end
+ _webhookEnabled=not _webhookEnabled; local on=_webhookEnabled
+ _webhookUrl = urlBox.Text:match("^%s*(.-)%s*$") or ""
+ TweenService:Create(wPill,TweenInfo.new(0.16),{BackgroundColor3=on and Color3.fromRGB(200,80,10) or C.TBAR}):Play()
+ TweenService:Create(wKnob,TweenInfo.new(0.16),{
+ Position=on and UDim2.new(1,-23,0.5,0) or UDim2.new(0,3,0.5,0),
+ BackgroundColor3=on and Color3.fromRGB(255,255,255) or Color3.fromRGB(120,50,8),
+ }):Play()
+ wRow.BackgroundColor3=on and C.BG2 or C.BG3
+ UpdatePlatformLbl()
+ if on then
+ if FlushWebhookPending then task.spawn(FlushWebhookPending) end
+ end
  end)
  -- Visual-only setter untuk webhook toggle (update pill tanpa trigger logic)
  _visWebhookToggle = function(v)
