@@ -7177,30 +7177,24 @@ do -- [FIX] webhook + raid logic wrapped to free top-level locals
 _WH = {}
 
 -- ============================================================
--- [v277] CHAT-BASED WEBHOOK SYSTEM — BUFFER + DEBOUNCE
+-- [v276] CHAT-BASED WEBHOOK SYSTEM
 -- Sumber data: langsung dari ExperienceChat DOM (chat box)
 -- Format persis dari game:
 --   Normal : "The MaFissure appeared in 3,Shadow Castle [B]"
 --   AT     : "The MaFissure appeared in Ascension Tower 15 - [Monarch] Antares [C]"
--- Semua baris dikumpulkan dulu ke buffer, setelah 3 detik tidak ada
--- pesan baru → digabung jadi 1 pesan dan dikirim ke Discord/Telegram
+-- Kirim ke Discord/Telegram begitu teks muncul di chat box
+-- Tidak bergantung pada RAID_LIVE, WH_LIVE, atau RAID_CONFIG_GRADE
 -- ============================================================
 
--- Buffer: tampung semua baris announce sebelum dikirim
-local _whBuffer = {}
--- Anti-duplikat: teks yang sudah masuk buffer tidak ditambah lagi
+-- Anti-duplikat: teks yang sudah pernah dikirim tidak dikirim ulang
 local _whChatSent = {}
--- Timer debounce
-local _whDebounceThread = nil
--- Waktu tunggu setelah pesan terakhir sebelum kirim (detik)
-local WH_BUFFER_WAIT = 3
 
 -- Cek apakah teks adalah announce raid/siege/dungeon
 local function _whIsAnnounce(text)
  if not text or #text < 5 then return false end
  local tl = text:lower()
  return tl:find("mafissure appeared in", 1, true) ~= nil
-  or tl:find("has begun", 1, true) ~= nil
+  or tl:find("siege", 1, true) ~= nil
   or tl:find("dungeon", 1, true) ~= nil
 end
 
@@ -7210,83 +7204,36 @@ local function _whStripRichText(text)
  return text:gsub("<[^>]+>", ""):gsub("&lt;","<"):gsub("&gt;",">"):gsub("&amp;","&")
 end
 
--- Gabung buffer jadi 1 pesan dan kirim ke Discord/Telegram
-local function _whFlushBuffer()
- if #_whBuffer == 0 then return end
- if not _webhookEnabled then _whBuffer = {}; return end
+-- Kirim teks mentah dari chat langsung ke Discord/Telegram
+local function _whSendChatLine(text)
+ if not _webhookEnabled then return end
  local url = _webhookUrl
- if not url or url == "" then _whBuffer = {}; return end
-
- -- Gabung semua baris dengan separator
- local lines = {"Raid Server", "[Raid List]"}
- for _, line in ipairs(_whBuffer) do
-  table.insert(lines, line)
-  table.insert(lines, "-----------------------")
- end
- -- Tambah ServerId
- local _vipId = tostring(game.VIPServerId or "")
- local _jobId = tostring(game.JobId or "")
- local _serverId = (_vipId ~= "" and _vipId) or _jobId
- if _serverId ~= "" then
-  table.insert(lines, "ServerId")
-  table.insert(lines, _serverId)
- end
-
- local msg = table.concat(lines, "\n")
-
- -- Reset buffer sebelum kirim (agar tidak double kirim)
- _whBuffer = {}
-
+ if not url or url == "" then return end
+ -- Strip rich text dulu
+ local clean = _whStripRichText(text):match("^%s*(.-)%s*$")
+ if not clean or clean == "" then return end
+ -- Anti-duplikat
+ if _whChatSent[clean] then return end
+ _whChatSent[clean] = true
+ -- Kirim async
  task.spawn(function()
   pcall(function()
-   _doSend(url, msg)
+   _doSend(url, clean)
   end)
  end)
 end
 
--- Tambah baris ke buffer + reset timer debounce
-local function _whAddToBuffer(text)
- if not _webhookEnabled then return end
- local url = _webhookUrl
- if not url or url == "" then return end
-
- local clean = _whStripRichText(text):match("^%s*(.-)%s*$")
- if not clean or clean == "" then return end
- -- Anti-duplikat per sesi
- if _whChatSent[clean] then return end
- _whChatSent[clean] = true
-
- table.insert(_whBuffer, clean)
-
- -- Reset debounce timer — kalau ada pesan baru, tunda pengiriman
- if _whDebounceThread then
-  task.cancel(_whDebounceThread)
-  _whDebounceThread = nil
- end
- _whDebounceThread = task.delay(WH_BUFFER_WAIT, function()
-  _whDebounceThread = nil
-  _whFlushBuffer()
- end)
-end
-
--- Send Notify Now — kirim buffer sekarang tanpa tunggu timer
-function WH_SendNow()
- if _whDebounceThread then
-  task.cancel(_whDebounceThread)
-  _whDebounceThread = nil
- end
- _whFlushBuffer()
-end
-
 -- Pasang listener ke ExperienceChat DOM
+-- Dipanggil sekali saat startup, reconnect otomatis kalau ExperienceChat refresh
 local _whChatConn = nil
 function ConnectWHLiveListener()
  if _whChatConn then pcall(function() _whChatConn:Disconnect() end); _whChatConn = nil end
  local CG = game:GetService("CoreGui")
  local ec = CG:FindFirstChild("ExperienceChat")
  if not ec then
+  -- Tunggu ExperienceChat muncul
   task.spawn(function()
-   CG.ChildAdded:Connect(function(child)
+   local conn2 = CG.ChildAdded:Connect(function(child)
     if child.Name == "ExperienceChat" then
      task.wait(1)
      ConnectWHLiveListener()
@@ -7303,17 +7250,16 @@ function ConnectWHLiveListener()
     local raw = obj.Text or ""
     local clean = _whStripRichText(raw):match("^%s*(.-)%s*$")
     if _whIsAnnounce(clean) then
-     _whAddToBuffer(clean)
+     _whSendChatLine(clean)
     end
    end)
   end)
  end)
 end
 
--- Reset anti-duplikat saat pindah server (agar raid bisa dikirim ulang)
+-- Reset anti-duplikat (dipanggil saat pindah server / rejoin)
 function WH_UpdateGrades()
- _whChatSent = {}
- _whBuffer = {}
+ -- Tidak dipakai di sistem baru, dibiarkan kosong agar tidak error
 end
 
 -- Helper: dapatkan request function (support semua executor)
@@ -15224,21 +15170,31 @@ do
  end
  end)
  task.spawn(function()
- -- [v277] Kirim buffer yang ada sekarang tanpa tunggu timer
- local hasBuf = #_whBuffer > 0
- if hasBuf then
-  WH_SendNow()
-  if _snDone then return end; _snDone = true
-  task.wait(0.5)
-  sendNowLbl.Text="[OK] Sent!"; sendNowLbl.TextColor3=Color3.fromRGB(100,255,100)
-  task.wait(2.5)
-  sendNowLbl.Text=" Send Notify Now"; sendNowLbl.TextColor3=C.TXT
- else
-  -- Buffer kosong — tidak ada announce raid yang tertampung
-  if _snDone then return end; _snDone = true
-  sendNowLbl.Text="[!] No Raid Data"; sendNowLbl.TextColor3=Color3.fromRGB(255,180,60)
-  task.delay(2.5, function() sendNowLbl.Text=" Send Notify Now"; sendNowLbl.TextColor3=C.TXT end)
+ local mode = _webhookMode or "both"
+ local url = _webhookUrl
+ local sent = false
+ local hasRaid = next(RAID_LIVE or {}) ~= nil
+ local hasSiege = SIEGE and SIEGE.live and next(SIEGE.live) ~= nil
+ if (mode == "raid" or mode == "both") and hasRaid then
+ if _WH.SendRaid then _WH.SendRaid(url) end; sent = true
  end
+ if (mode == "siege" or mode == "both") and hasSiege then
+ task.wait(0.3)
+ if _WH.SendSiege then _WH.SendSiege(url) end; sent = true
+ end
+ if not sent then
+ -- Tidak ada data raid/siege aktif saat tombol ditekan
+ if _snDone then return end; _snDone = true
+ sendNowLbl.Text="[!] No Raid Data"; sendNowLbl.TextColor3=Color3.fromRGB(255,180,60)
+ task.delay(2.5, function() sendNowLbl.Text=" Send Notify Now"; sendNowLbl.TextColor3=C.TXT end)
+ return
+ end
+ _whLastSent = tick()
+ if _snDone then return end; _snDone = true
+ task.wait(0.5)
+ sendNowLbl.Text="[OK] Sent!"; sendNowLbl.TextColor3=Color3.fromRGB(100,255,100)
+ task.wait(2.5)
+ sendNowLbl.Text=" Send Notify Now"; sendNowLbl.TextColor3=C.TXT
  end)
  end)
 end
