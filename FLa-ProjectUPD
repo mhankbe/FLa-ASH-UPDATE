@@ -1194,8 +1194,9 @@ ASC = {
  pickMode = "easy",   -- "easy" | "hard" | "default" | "byrank" | "bymap" | "manual"
  preferMaps    = {},    -- [v48] map filter (mapNum -> true), sama seperti RAID.preferMaps
  runeGrades    = {},    -- filter grade (Preferred Rank)
- runeEnabled   = false, -- rune map item aktif (ASC Tower 1-26)
- runeMapTarget = 0,     -- target Tower rune (1-26), 0 = nonaktif
+ runeEnabled      = false, -- rune map item aktif (ASC Tower 1-26)
+ runeMapTarget    = 0,     -- target Tower rune (1-26), 0 = nonaktif
+ preferMapTarget  = 0,     -- [PREFERRED MAP] target Tower pilihan (1-26), 0 = nonaktif
  manualMatchMode   = "none", -- [v48] "primary" | "fallback" | "none"
  _rrIdx            = 0,      -- [v48] Round-robin index untuk Pick Mode Default
  autoKillBoss = false, -- AUTO BOSS KILL toggle
@@ -8801,8 +8802,12 @@ function StartAscensionLoop()
     -- ASC : StartChallengeRaidMap({mapId = 50300+mn})              → Tower X = 50301-50326
     -- Pakai ResolveAscTargetMapId(mn) agar selalu 50300+mn
 
-    local targetMapId = ResolveAscTargetMapId(mn)  -- 50300+mn, confirmed formula
-    local mn_label = mn  -- Tower number untuk display
+    -- [PREFERRED MAP] Override targetMapId jika user memilih Tower tertentu
+    local _prefMap = ASC.preferMapTarget or 0
+    local targetMapId = (_prefMap >= 1 and _prefMap <= 26)
+        and ResolveAscTargetMapId(_prefMap)   -- 50300 + preferMapTarget
+        or  ResolveAscTargetMapId(mn)         -- default: 50300 + mn (dari event)
+    local mn_label = (_prefMap >= 1 and _prefMap <= 26) and (_prefMap.." [Pref]") or mn
 
     AscStatusUpdate("[~] Enter Tower "..mn_label.."...", Color3.fromRGB(100,200,255))
 
@@ -12264,6 +12269,101 @@ do
     CloseActiveDD(); ASC.runeMapTarget=ml; AscSyncRuneState()
     local _bn2=ASC_TOWER_NAMES[ml] or ("Tower "..ml)
     ascRuneDDVal.Text=" Tower "..ml.." - ".._bn2; ascRuneDDVal.TextColor3=C.ACC2
+   end)
+  end
+  DDLayer.Visible=true
+  _activeDDClose=function() popup:Destroy(); DDLayer.Visible=false end
+ end)
+
+
+
+ -- ============================================================
+ -- ROW 8: PREFERRED MAP (Tower tujuan masuk)
+ -- ============================================================
+ local ascPrefMapCard = Frame(ascInner,C.SURFACE,UDim2.new(1,0,0,40))
+ ascPrefMapCard.LayoutOrder = 8; Corner(ascPrefMapCard,10); Stroke(ascPrefMapCard,C.BORD,1.5,0.3); Padding(ascPrefMapCard,6,6,10,10)
+ local ascPrefMapRow = Frame(ascPrefMapCard,C.BLACK,UDim2.new(1,0,1,0)); ascPrefMapRow.BackgroundTransparency=1
+ local ascPrefMapKeyL = Label(ascPrefMapRow,"Preferred Map",11,C.TXT2,Enum.Font.GothamBold)
+ ascPrefMapKeyL.Size = UDim2.new(0,86,1,0)
+ local ascPrefMapDDBtn = Btn(ascPrefMapRow,C.BG3,UDim2.new(1,-96,1,0))
+ ascPrefMapDDBtn.Position = UDim2.new(0,94,0,0); Corner(ascPrefMapDDBtn,6); Stroke(ascPrefMapDDBtn,C.BORD,1.5,0.25)
+ local ascPrefMapDDVal = Label(ascPrefMapDDBtn," -- NOT SELECTED --",11,C.TXT3,Enum.Font.GothamBold)
+ ascPrefMapDDVal.Size = UDim2.new(1,-20,1,0); ascPrefMapDDVal.TextTruncate = Enum.TextTruncate.AtEnd
+ local ascPrefMapArr = Label(ascPrefMapDDBtn,"v",10,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+ ascPrefMapArr.Size = UDim2.new(0,18,1,0); ascPrefMapArr.Position = UDim2.new(1,-20,0,0)
+
+ -- Nama Tower (sama persis dengan Preferred Rune)
+ local ASC_PREFMAP_NAMES = {
+  [1]="Baran",       [2]="Baran+1",
+  [3]="Grendal",     [4]="Grendal+1",
+  [5]="Plague",      [6]="Plague+1",
+  [7]="Frostborne",  [8]="Frostborne+1",
+  [9]="Legia",       [10]="Legia+1",
+  [11]="Silas",      [12]="Silas+1",
+  [13]="Yogumunt",   [14]="Yogumunt+1",
+  [15]="Antares",    [16]="Antares+1",
+  [17]="Ashborn",    [18]="Ashborn+1",
+  [19]="Dominion",   [20]="Dominion+1",
+  [21]="Absolute",   [22]="Absolute+1",
+  [23]="Broly",      [24]="Broly+1",
+  [25]="Goku Super 4", [26]="Goku Super 4+1",
+ }
+
+ -- Sync tampilan awal
+ if ASC.preferMapTarget >= 1 and ASC.preferMapTarget <= 26 then
+  local _ptn = ASC_PREFMAP_NAMES[ASC.preferMapTarget] or ("Tower "..ASC.preferMapTarget)
+  ascPrefMapDDVal.Text = " Tower "..ASC.preferMapTarget.." - ".._ptn
+  ascPrefMapDDVal.TextColor3 = Color3.fromRGB(100,220,255)
+ end
+
+ ascPrefMapDDBtn.MouseButton1Click:Connect(function()
+  CloseActiveDD()
+  local aP=ascPrefMapDDBtn.AbsolutePosition; local aS=ascPrefMapDDBtn.AbsoluteSize; local IH=28
+  local popH=(27*(IH+2)+8); local cam=workspace.CurrentCamera
+  local vpH=cam and cam.ViewportSize.Y or 800
+  local goUp=(aP.Y+popH > vpH*0.85)
+  local popup=Instance.new("Frame")
+  popup.Parent=DDLayer; popup.BackgroundColor3=C.DD_BG; popup.BorderSizePixel=0
+  popup.Size=UDim2.new(0,aS.X+10,0,math.min(popH,220))
+  if goUp then popup.Position=UDim2.new(0,aP.X,0,aP.Y-math.min(popH,220)-4)
+  else popup.Position=UDim2.new(0,aP.X,0,aP.Y+aS.Y+4) end
+  popup.ZIndex=9999; popup.ClipsDescendants=true; Corner(popup,10); Stroke(popup,C.BORD2,1.5,0.2)
+  local sf=Instance.new("ScrollingFrame",popup); sf.Size=UDim2.new(1,0,1,0)
+  sf.BackgroundTransparency=1; sf.BorderSizePixel=0; sf.ScrollBarThickness=4; sf.ScrollBarImageColor3=Color3.fromRGB(100,220,255)
+  sf.ZIndex=9999; sf.CanvasSize=UDim2.new(0,0,0,27*(IH+2)+8)
+  local sfl=Instance.new("UIListLayout",sf); sfl.Padding=UDim.new(0,2); sfl.SortOrder=Enum.SortOrder.LayoutOrder
+  Instance.new("UIPadding",sf).PaddingTop=UDim.new(0,4)
+  -- NOT SELECTED
+  local i0=Instance.new("TextButton",sf); i0.Size=UDim2.new(1,-8,0,IH); i0.LayoutOrder=0
+  local s0=(ASC.preferMapTarget==0)
+  i0.BackgroundColor3=s0 and C.SURFACE or C.DD_BG; i0.BackgroundTransparency=s0 and 0.18 or 0.42
+  i0.BorderSizePixel=0; i0.Text=""; i0.AutoButtonColor=false; i0.ZIndex=9999
+  Instance.new("UICorner",i0).CornerRadius=UDim.new(0,6)
+  local l0=Instance.new("TextLabel",i0); l0.Size=UDim2.new(1,-8,1,0); l0.Position=UDim2.new(0,8,0,0)
+  l0.BackgroundTransparency=1; l0.Text="-- NOT SELECTED --"; l0.TextSize=10
+  l0.Font=Enum.Font.GothamBold; l0.TextColor3=s0 and Color3.fromRGB(100,220,255) or C.TXT3
+  l0.TextXAlignment=Enum.TextXAlignment.Left; l0.ZIndex=9999
+  i0.MouseButton1Click:Connect(function()
+   CloseActiveDD(); ASC.preferMapTarget=0
+   ascPrefMapDDVal.Text=" -- NOT SELECTED --"; ascPrefMapDDVal.TextColor3=C.TXT3
+  end)
+  -- Tower 1-26
+  for mn=1,26 do
+   local ml=mn; local bossName=ASC_PREFMAP_NAMES[mn] or ("Tower "..mn)
+   local it=Instance.new("TextButton",sf); it.Size=UDim2.new(1,-8,0,IH); it.LayoutOrder=mn
+   local iS=(ASC.preferMapTarget==mn)
+   it.BackgroundColor3=iS and C.SURFACE or C.DD_BG; it.BackgroundTransparency=iS and 0.18 or 0.42
+   it.BorderSizePixel=0; it.Text=""; it.AutoButtonColor=false; it.ZIndex=9999
+   Instance.new("UICorner",it).CornerRadius=UDim.new(0,6)
+   local il=Instance.new("TextLabel",it); il.Size=UDim2.new(1,-8,1,0); il.Position=UDim2.new(0,8,0,0)
+   il.BackgroundTransparency=1
+   il.Text="Tower "..mn.." - "..bossName; il.TextSize=10; il.Font=Enum.Font.GothamBold
+   il.TextColor3=iS and Color3.fromRGB(100,220,255) or C.TXT
+   il.TextXAlignment=Enum.TextXAlignment.Left; il.ZIndex=9999; il.TextTruncate=Enum.TextTruncate.AtEnd
+   it.MouseButton1Click:Connect(function()
+    CloseActiveDD(); ASC.preferMapTarget=ml
+    local _bn2=ASC_PREFMAP_NAMES[ml] or ("Tower "..ml)
+    ascPrefMapDDVal.Text=" Tower "..ml.." - ".._bn2; ascPrefMapDDVal.TextColor3=Color3.fromRGB(100,220,255)
    end)
   end
   DDLayer.Visible=true
