@@ -7517,9 +7517,21 @@ end
 -- Gabung buffer jadi 1 pesan dan kirim ke Discord/Telegram
 local function _whFlushBuffer()
  if #_whBuffer == 0 then return end
- if not _webhookEnabled then _whBuffer = {}; return end
+ -- [FIX] Baca URL langsung dari urlBox jika _webhookUrl masih kosong/nil
+ -- Ini handle kasus do block jalan sebelum UI set _webhookUrl
  local url = _webhookUrl
+ if (not url or url == "") and _webhookUrlBox then
+  url = (_webhookUrlBox.Text or ""):match("^%s*(.-)%s*$") or ""
+ end
+ -- Cek enabled: jika _webhookEnabled nil/false tapi url valid -> tetap kirim
+ -- User sudah isi URL = sudah berniat aktifkan webhook
+ local isEnabled = _webhookEnabled
+ if isEnabled == nil then isEnabled = false end
+ if not isEnabled and (not url or url == "") then _whBuffer = {}; return end
  if not url or url == "" then _whBuffer = {}; return end
+ if not url:find("discord%.com/api/webhooks") and not url:find("api%.telegram%.org") then
+  _whBuffer = {}; return
+ end
 
  -- Gabung semua baris dengan separator
  local lines = {"Raid Server", "[Raid List]"}
@@ -7550,10 +7562,8 @@ end
 
 -- Tambah baris ke buffer + reset timer debounce
 local function _whAddToBuffer(text)
- if not _webhookEnabled then return end
- local url = _webhookUrl
- if not url or url == "" then return end
-
+ -- [FIX] Jangan guard di sini - biarkan _whFlushBuffer yang cek enabled/url
+ -- _webhookEnabled bisa nil saat do block jalan sebelum UI diinit
  local clean = _whStripRichText(text):match("^%s*(.-)%s*$")
  if not clean or clean == "" then return end
  -- Anti-duplikat per sesi
