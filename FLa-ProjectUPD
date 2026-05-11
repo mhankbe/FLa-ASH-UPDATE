@@ -7246,6 +7246,7 @@ function ParseChatLine(text)
   if text:find("Ascension Tower", 1, true) then
    local towerNum = tonumber(text:match("Ascension Tower (%d+)"))
    local grade    = extractGradeLast(text)
+   print("[PCL AT]", "towerNum=", tostring(towerNum), "grade=", tostring(grade), "WH.AddLine=", tostring(_WH and _WH.AddLine))
    if towerNum and grade then
     -- Cache key negatif agar tidak bentrok dengan normal raid (map 1-20)
     _runeGradeCache[-towerNum] = grade
@@ -8430,7 +8431,25 @@ ConnectRaidListeners = function()
  -- [v271] Grade dari RAID_CONFIG_GRADE (formula matematika, cover semua seri)
  -- [FIX] AT: cache key negatif (-mapNum), RAID normal: positif (mapNum)
  local _grCacheKey = _isAscMapId and (-mapNum) or mapNum
- local grade = (RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[raidId])
+ -- [FIX] Baca grade langsung dari info server - AT dan normal raid sama
+ local _infoGrade = nil
+ if type(info.grade) == "string" and #info.grade > 0 then
+  _infoGrade = info.grade:upper()
+ elseif type(info.rank) == "string" and #info.rank > 0 then
+  _infoGrade = info.rank:upper()
+ end
+ -- [DEBUG] Print semua field info AT untuk lihat nama field grade dari server
+ if _isAscMapId or _isAscById then
+  print("[AT DEBUG] === RAW INFO ===")
+  print("[AT DEBUG] raidId =", tostring(raidId), "mapId =", tostring(mapId))
+  for _f, _v in pairs(info) do
+   print("[AT DEBUG]", tostring(_f), "=", tostring(_v))
+  end
+  print("[AT DEBUG] _infoGrade =", tostring(_infoGrade))
+  print("[AT DEBUG] =============")
+ end
+ local grade = _infoGrade
+  or (RAID_CONFIG_GRADE and RAID_CONFIG_GRADE[raidId])
   or (_runeGradeCache and _runeGradeCache[_grCacheKey])
   or (_ASC_CHAT_CACHE and _isAscMapId and _ASC_CHAT_CACHE[mapNum] and _ASC_CHAT_CACHE[mapNum].grade)
   or "?"
