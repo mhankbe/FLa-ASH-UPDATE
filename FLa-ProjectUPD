@@ -7593,9 +7593,8 @@ local function _extractGradeLast(t)
 end
 
 -- Kirim buffer ke Discord/Telegram, lalu kosongkan buffer
--- [FIX v272] Grade diambil LANGSUNG dari _ASC_CHAT_CACHE / _runeGradeCache
--- bukan hanya dari ekstraksi teks (yang bisa "?" kalau format berubah)
--- Embed Discord diperkaya: nama map, boss AT, timestamp, grade per-entry
+-- AT dan RAID Normal diperlakukan IDENTIK — satu sumber grade: GetBestGrade
+-- AT: isAscension=true, mapNum = towerNum. RAID: isAscension=false, mapNum = mapId-50000
 _whFlushBuffer = function(url)
  if #_whBuffer == 0 then return end
  local lines   = _whBuffer
@@ -7608,32 +7607,21 @@ _whFlushBuffer = function(url)
  local isTelegram = url:find("api%.telegram%.org")
  local HS = game:GetService("HttpService")
 
- -- [FIX v272] Helper: ambil grade AKURAT dari cache, bukan hanya teks
- -- Prioritas: _ASC_CHAT_CACHE -> _runeGradeCache -> ekstraksi teks (last resort)
- local function _getAccurateGrade(line, isAT, mapNum)
-  if isAT and mapNum then
-   -- Cek _ASC_CHAT_CACHE dulu (paling akurat untuk AT)
-   if _ASC_CHAT_CACHE then
-    local _ce = _ASC_CHAT_CACHE[mapNum]
-    if _ce and _ce.grade and _ce.grade ~= "?" then return _ce.grade end
-   end
-   -- Fallback ke _runeGradeCache key negatif
-   if _runeGradeCache then
-    local _cg = _runeGradeCache[-mapNum]
-    if _cg and _cg ~= "?" then return _cg end
-   end
-  elseif not isAT and mapNum then
-   -- RAID Normal: _runeGradeCache key positif
-   if _runeGradeCache then
-    local _cg = _runeGradeCache[mapNum]
-    if _cg and _cg ~= "?" then return _cg end
-   end
+ -- Satu helper grade untuk keduanya — identik cara RAID Normal baca grade
+ -- AT   : GetBestGrade(towerNum, true)
+ -- RAID : GetBestGrade(mapNum, false)
+ local function _gradeFor(mapNum, isAscension)
+  local g = GetBestGrade(mapNum, isAscension)
+  if g and g ~= "?" then return g end
+  -- last resort: baca langsung dari _runeGradeCache
+  if isAscension then
+   return (_runeGradeCache and (_runeGradeCache[-mapNum] or _runeGradeCache[mapNum])) or "?"
+  else
+   return (_runeGradeCache and _runeGradeCache[mapNum]) or "?"
   end
-  -- Last resort: ekstraksi dari teks
-  return _extractGradeLast(line) or "?"
  end
 
- -- Parse setiap baris jadi struct yang lebih kaya informasi
+ -- Parse baris jadi entries
  local entries_normal, entries_at = {}, {}
  local topGrade = "E"
 
@@ -7641,30 +7629,15 @@ _whFlushBuffer = function(url)
   local isAT = line:find("Ascension Tower", 1, true)
   if isAT then
    local towerNum = tonumber(line:match("Ascension Tower (%d+)"))
-   local grade    = _getAccurateGrade(line, true, towerNum)
+   local grade    = towerNum and _gradeFor(towerNum, true) or _extractGradeLast(line) or "?"
    if (GRADE_RANK_W[grade] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = grade end
-   -- Ambil boss name dari _ASC_CHAT_CACHE jika ada
-   local bossName = nil
-   if _ASC_CHAT_CACHE and towerNum and _ASC_CHAT_CACHE[towerNum] then
-    bossName = _ASC_CHAT_CACHE[towerNum].bossName
-   end
-   table.insert(entries_at, {
-    towerNum = towerNum,
-    grade    = grade,
-    bossName = bossName,
-    raw      = line,
-   })
+   table.insert(entries_at, { mapNum = towerNum, grade = grade, raw = line })
   else
    local mapNum = tonumber(line:match("appeared in (%d+)"))
-   local grade  = _getAccurateGrade(line, false, mapNum)
+   local grade  = mapNum and _gradeFor(mapNum, false) or _extractGradeLast(line) or "?"
    if (GRADE_RANK_W[grade] or 0) > (GRADE_RANK_W[topGrade] or 0) then topGrade = grade end
    local mapName = (MAP_NAMES and mapNum and MAP_NAMES[mapNum]) or (mapNum and ("Map "..mapNum)) or "?"
-   table.insert(entries_normal, {
-    mapNum  = mapNum,
-    mapName = mapName,
-    grade   = grade,
-    raw     = line,
-   })
+   table.insert(entries_normal, { mapNum = mapNum, mapName = mapName, grade = grade, raw = line })
   end
  end
 
@@ -7673,7 +7646,6 @@ _whFlushBuffer = function(url)
  if isDiscord then
   local fields = {}
 
-  -- Field Normal Raid: satu baris per map, tampilkan nama map + grade
   if #entries_normal > 0 then
    local valLines = {}
    for _, e in ipairs(entries_normal) do
@@ -7682,41 +7654,34 @@ _whFlushBuffer = function(url)
     table.insert(valLines, gradeStr.." "..mapStr)
    end
    table.insert(fields, {
-    name   = "⚔️ Normal Raid ("..#entries_normal..")",
+    name   = "Normal Raid ("..#entries_normal..")",
     value  = table.concat(valLines, "\n"),
     inline = false,
    })
   end
 
-  -- Field Ascension Tower: satu baris per tower, tampilkan tower num + boss + grade
   if #entries_at > 0 then
    local valLines = {}
    for _, e in ipairs(entries_at) do
     local gradeStr = e.grade ~= "?" and ("**["..e.grade.."]**") or "[?]"
-    local tStr     = e.towerNum and ("Tower "..e.towerNum) or "Tower ?"
-    local bossStr  = e.bossName and (" › "..e.bossName) or ""
-    table.insert(valLines, gradeStr.." "..tStr..bossStr)
+    local tStr     = e.mapNum and ("Tower "..e.mapNum) or "Tower ?"
+    table.insert(valLines, gradeStr.." "..tStr)
    end
    table.insert(fields, {
-    name   = "🏯 Ascension Tower ("..#entries_at..")",
+    name   = "Ascension Tower ("..#entries_at..")",
     value  = table.concat(valLines, "\n"),
     inline = false,
    })
   end
 
   local color   = GRADE_COLOR[topGrade] or GRADE_COLOR["E"]
-  -- Timestamp format sederhana (epoch -> readable)
-  local _ts = os.date and os.date("!%Y-%m-%d %H:%M UTC") or "N/A"
-
   local payload = {embeds = {{
-   title       = "🔴 RAID OPEN — Top Rank: "..topGrade,
-   description = "Total **"..total.."** raid/tower aktif sekarang",
+   title       = "[RAID OPEN] Rank "..topGrade,
+   description = "Total: **"..total.."** raid aktif",
    color       = color,
    fields      = fields,
-   footer      = {text = "ASH GUI FLa Project • ".. _ts},
-   timestamp   = os.date and os.date("!%Y-%m-%dT%H:%M:%SZ") or nil,
+   footer      = {text = "ASH GUI FLa Project"},
   }}}
-
   pcall(function()
    reqFunc({
     Url     = url,
@@ -7727,22 +7692,14 @@ _whFlushBuffer = function(url)
   end)
 
  elseif isTelegram then
-  -- Telegram: format teks lebih rapi dengan grade & nama
-  local out = {"🔴 *RAID OPEN* — Top Rank: *"..topGrade.."*"}
-  if #entries_normal > 0 then
-   table.insert(out, "\n⚔️ *Normal Raid ("..#entries_normal..")*")
-   for _, e in ipairs(entries_normal) do
-    local mapStr = e.mapNum and ("Map "..e.mapNum.." - "..e.mapName) or e.raw
-    table.insert(out, "• ["..e.grade.."] "..mapStr)
-   end
+  local out = {"[RAID OPEN] Rank "..topGrade}
+  for _, e in ipairs(entries_normal) do
+   local mapStr = e.mapNum and ("Map "..e.mapNum.." - "..e.mapName) or e.raw
+   table.insert(out, "["..e.grade.."] "..mapStr)
   end
-  if #entries_at > 0 then
-   table.insert(out, "\n🏯 *Ascension Tower ("..#entries_at..")*")
-   for _, e in ipairs(entries_at) do
-    local tStr    = e.towerNum and ("Tower "..e.towerNum) or "Tower ?"
-    local bossStr = e.bossName and (" - "..e.bossName) or ""
-    table.insert(out, "• ["..e.grade.."] "..tStr..bossStr)
-   end
+  for _, e in ipairs(entries_at) do
+   local tStr = e.mapNum and ("Ascension Tower "..e.mapNum) or e.raw
+   table.insert(out, "["..e.grade.."] "..tStr)
   end
   _doSend(url, table.concat(out, "\n"))
  end
@@ -8637,170 +8594,166 @@ function StartAscensionLoop()
  -- ResolveAscEntry: Pick Mode logic IDENTIK dengan AUTO RAID
  -- Semua mode locked kecuali Manual -> hanya masuk Tower terkecil
  -- Manual: PREFERRED MAP + PREFERRED RANK aktif, fallback ke terkecil jika tidak match
+ -- ============================================================
+ -- ResolveAscEntry: 100% IDENTIK dengan ResolveEntry (Auto Raid Normal)
+ -- Satu-satunya perbedaan: pakai ASC.* dan ascList (mapNum) bukan RAID_ID_LIST (mapId)
+ -- MapId masuk ke tower tetap 503xx — tidak diubah di sini
+ -- ============================================================
  local function ResolveAscEntry()
   local ascList = GetAscensionList()
   if #ascList == 0 then return nil end
 
-  local pm = ASC.pickMode or "easy"
-
-  -- Helper: ambil grade entry (Ascension)
-  -- [FIX v272] Urutan: GetBestGrade (sudah include _ASC_CHAT_CACHE) -> _ASC_CHAT_CACHE langsung
-  -- -> _runeGradeCache[-mapNum] -> r.grade
-  -- Ini memastikan grade terbaca meski UpdateRaidInfo dari server belum datang
-  local function _getGrade(r)
-   local g = GetBestGrade(r.mapNum, true)
-   if g and g ~= "?" then return g end
-   -- Fallback langsung ke _ASC_CHAT_CACHE (paling reliabel untuk AT)
-   if _ASC_CHAT_CACHE then
-    local _ce = _ASC_CHAT_CACHE[r.mapNum]
-    if _ce and _ce.grade and _ce.grade ~= "?" then return _ce.grade end
+  -- Prune expired entries (sama seperti RAID)
+  local _now0 = os.time()
+  local _pruned0 = false
+  for rid, ent in pairs(RAID_LIVE) do
+   if ent.isAscension and ent.endTime and ent.endTime < (_now0 - 10) then
+    RAID_LIVE[rid] = nil; _pruned0 = true
    end
-   -- Fallback ke _runeGradeCache key negatif
-   if _runeGradeCache then
-    local _cg = _runeGradeCache[-(r.mapNum)]
-    if _cg and _cg ~= "?" then return _cg end
-   end
-   return r.grade
+  end
+  if _pruned0 then
+   ascList = GetAscensionList()
+   if #ascList == 0 then return nil end
   end
 
-  -- Helper sort highest rank
+  local pm = ASC.pickMode or "easy"
+  local hasPick = (pm == "byrank" or pm == "manual") and next(ASC.runeGrades or {}) ~= nil
+
+  -- Grade helper: identik RAID — sumber sama (RAID_LIVE/RAID_CONFIG_GRADE/cache)
+  -- mapNum untuk ASC = mapId - 50300, tapi GetBestGrade butuh isAscension=true
+  local function _getGrade(r)
+   return GetBestGrade(r.mapNum, true)
+  end
+
+  -- pickLowest: ambil tower dengan mapNum terkecil
+  local function pickLowest(list)
+   table.sort(list, function(a, b) return a.mapNum < b.mapNum end)
+   return list[1]
+  end
+
+  -- sortHighestRank: sort rank tertinggi, tie-break mapNum terkecil (identik RAID)
   local function sortHighestRank(list)
    table.sort(list, function(a, b)
-    local ra = GRADE_RANK[_getGrade(a)] or 0
-    local rb = GRADE_RANK[_getGrade(b)] or 0
+    local ga = _getGrade(a) or "?"
+    local gb = _getGrade(b) or "?"
+    local ra = GRADE_RANK[ga] or 0
+    local rb = GRADE_RANK[gb] or 0
     if ra == rb then return a.mapNum < b.mapNum end
     return ra > rb
    end)
   end
 
-  -- Helper: ambil Tower terkecil dari list
-  local function pickLowest(list)
-   table.sort(list, function(a,b) return a.mapNum < b.mapNum end)
-   return list[1]
+  -- pickByDiff: identik RAID pickByDiff, adaptasi mapNum
+  local function pickByDiff(list)
+   if #list == 0 then return nil end
+   if pm == "easy" then
+    table.sort(list, function(a, b) return a.mapNum < b.mapNum end)
+    return list[1]
+   elseif pm == "hard" then
+    table.sort(list, function(a, b) return a.mapNum > b.mapNum end)
+    return list[1]
+   elseif pm == "default" then
+    -- Round-robin Tower 1-8, fallback ke terkecil (identik RAID map 1-8)
+    local low = {}
+    for _, r in ipairs(list) do
+     if r.mapNum >= 1 and r.mapNum <= 8 then table.insert(low, r) end
+    end
+    if #low == 0 then return pickLowest(list) end
+    table.sort(low, function(a, b) return a.mapNum < b.mapNum end)
+    ASC._rrIdx = (ASC._rrIdx or 0) + 1
+    if ASC._rrIdx > #low then ASC._rrIdx = 1 end
+    return low[ASC._rrIdx]
+   elseif pm == "byrank" then
+    sortHighestRank(list)
+    return list[1]
+   elseif pm == "bymap" then
+    table.sort(list, function(a, b) return a.mapNum < b.mapNum end)
+    for _, r in ipairs(list) do
+     if ASC.preferMaps[r.mapNum] then return r end
+    end
+    return list[1]
+   end
+   return pickLowest(list)
   end
 
-  -- [MANUAL MODE]
-  -- Aturan ketat: script hanya masuk jika semua filter yang di-set oleh user terpenuhi.
-  -- Tidak ada fallback ke tower lain. Jika tidak match -> return nil -> nganggur.
+  -- ============================================================
+  -- MANUAL MODE — identik RAID: 3 tahap, fallback ke terkecil
+  -- ============================================================
   if pm == "manual" then
    ASC.manualMatchMode = "none"
+   local valid_asc = {}
    local hasPreferMaps = next(ASC.preferMaps or {}) ~= nil
-   local hasPreferRank = next(ASC.runeGrades or {}) ~= nil
 
-   -- Kandidat awal: semua tower yang tersedia
-   local valid = {}
+   -- Tahap 0: kumpulkan kandidat, filter PreferMap jika di-set
    for _, r in ipairs(ascList) do
-    table.insert(valid, r)
+    local mn = r.mapNum
+    if not hasPreferMaps or ASC.preferMaps[mn] then
+     table.insert(valid_asc, r)
+    end
+   end
+   if #valid_asc == 0 then return nil end
+
+   -- Helper sort
+   local function sortHighestRankLocal(list)
+    table.sort(list, function(a, b)
+     local ga = _getGrade(a) or "?"
+     local gb = _getGrade(b) or "?"
+     local ra = GRADE_RANK[ga] or 0
+     local rb = GRADE_RANK[gb] or 0
+     if ra == rb then return a.mapNum < b.mapNum end
+     return ra > rb
+    end)
    end
 
-   -- GERBANG 1: filter by Preferred Map (jika di-set)
-   -- Tidak match = nganggur, bukan fallback ke semua
-   if hasPreferMaps then
-    local mapFiltered = {}
-    for _, r in ipairs(valid) do
-     if ASC.preferMaps[r.mapNum] then
-      table.insert(mapFiltered, r)
-     end
-    end
-    if #mapFiltered == 0 then
-     ASC.manualMatchMode = "none"
-     return nil
-    end
-    valid = mapFiltered
-   end
-
-   -- GERBANG 2: filter by Preferred Rank (jika di-set)
-   -- Tidak match = nganggur
+   -- TAHAP 1: Cari kecocokan Preferred Rank
+   local matched = {}
+   local hasPreferRank = next(ASC.runeGrades or {}) ~= nil
    if hasPreferRank then
-    local rankFiltered = {}
-    for _, r in ipairs(valid) do
-     if ASC.runeGrades[_getGrade(r)] then
-      table.insert(rankFiltered, r)
+    for _, r in ipairs(valid_asc) do
+     local grade = _getGrade(r)
+     if grade and ASC.runeGrades[grade] then
+      table.insert(matched, r)
      end
     end
-    if #rankFiltered == 0 then
-     ASC.manualMatchMode = "none"
-     return nil
-    end
-    sortHighestRank(rankFiltered)
+   end
+   if #matched > 0 then
+    sortHighestRankLocal(matched)
     ASC.manualMatchMode = "primary"
-    return rankFiltered[1]
+    return matched[1]
    end
 
-   -- Tidak ada filter rank -> masuk tower terkecil dari kandidat yang lolos filter map
-   ASC.manualMatchMode = "primary"
-   return pickLowest(valid)
+   -- TAHAP 2: Fallback ke tower terkecil dari kandidat (identik RAID Tahap 3)
+   ASC.manualMatchMode = "fallback"
+   table.sort(valid_asc, function(a, b) return a.mapNum < b.mapNum end)
+   return valid_asc[1]
   end
 
-  -- [BYRANK MODE] - Nganggur sampai ada ASC dengan Rank yang cocok
-  if pm == "byrank" then
-   local hasPreferRank = next(ASC.runeGrades or {}) ~= nil
-   if hasPreferRank then
-    local matched2 = {}
-    for _, r in ipairs(ascList) do
-     if ASC.runeGrades[_getGrade(r)] then
-      table.insert(matched2, r)
-     end
-    end
-    if #matched2 > 0 then
-     sortHighestRank(matched2)
-     return matched2[1]
-    end
-    -- Rank di-set tapi tidak ada yang cocok -> nganggur
-    return nil
-   end
-   -- Rank tidak di-set sama sekali -> masuk terkecil
-   return pickLowest(ascList)
-  end
-
-  -- [BYMAP MODE] - Nganggur sampai ada ASC di Map yang dipilih
-  if pm == "bymap" then
-   local hasPreferMaps = next(ASC.preferMaps or {}) ~= nil
-   if hasPreferMaps then
-    local mapMatched = {}
-    for _, r in ipairs(ascList) do
-     if ASC.preferMaps[r.mapNum] then
-      table.insert(mapMatched, r)
-     end
-    end
-    if #mapMatched > 0 then
-     return pickLowest(mapMatched)
-    end
-    -- Map di-set tapi tidak ada yang cocok -> nganggur
-    return nil
-   end
-   -- Map tidak di-set sama sekali -> masuk terkecil
-   return pickLowest(ascList)
-  end
-
-  -- [DEFAULT MODE] - Round-robin Tower 1-8, fallback ke terkecil
-  if pm == "default" then
-   local low = {}
+  -- ============================================================
+  -- BYRANK + BYMAP + hasPick: identik RAID
+  -- ============================================================
+  if hasPick then
+   local matched2 = {}
    for _, r in ipairs(ascList) do
-    if r.mapNum >= 1 and r.mapNum <= 8 then table.insert(low, r) end
+    local grade = _getGrade(r)
+    if grade and ASC.runeGrades[grade] == true then table.insert(matched2, r) end
    end
-   if #low == 0 then
-    return pickLowest(ascList)
+   if #matched2 > 0 then
+    local chosen = pickByDiff(matched2)
+    if chosen then return chosen end
    end
-   table.sort(low, function(a,b) return a.mapNum < b.mapNum end)
-   ASC._rrIdx = (ASC._rrIdx or 0) + 1
-   if ASC._rrIdx > #low then ASC._rrIdx = 1 end
-   return low[ASC._rrIdx]
+   if pm == "byrank" then return nil end
   end
 
-  -- [EASY MODE] - Selalu Tower terkecil
-  if pm == "easy" then
-   return pickLowest(ascList)
+  if pm == "bymap" and next(ASC.preferMaps or {}) ~= nil then
+   local mapMatched = {}
+   for _, r in ipairs(ascList) do
+    if ASC.preferMaps[r.mapNum] then table.insert(mapMatched, r) end
+   end
+   if #mapMatched > 0 then return pickLowest(mapMatched) end
+   return nil
   end
 
-  -- [HARD MODE] - Selalu Tower terbesar
-  if pm == "hard" then
-   table.sort(ascList, function(a,b) return a.mapNum > b.mapNum end)
-   return ascList[1]
-  end
-
-  -- Fallback ultimate
-  return pickLowest(ascList)
+  return pickByDiff(ascList)
  end
 
  ASC.thread = task.spawn(function()
