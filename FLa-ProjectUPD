@@ -8473,14 +8473,22 @@ local function GetAscensionList()
    -- ASC mapId 50301-50326 -> mapNum 1-26; RAID mapId 50001-50020 -> mapNum 1-20
    local _mId = ent.mapId or 50000
    local mn = (_mId >= 50301 and _mId <= 50326) and (_mId - 50300) or (_mId - 50000)
-   -- [FIX] Tidak ada filter grade di sini - semua filtering (Preferred Rank/Map + fallback)
-   -- ditangani sepenuhnya oleh ResolveAscEntry() agar fallback ke Tower terkecil bisa berjalan
+   -- [FIX] Grade resolution: prioritas chat cache -> runeGradeCache -> ent.grade -> "?"
+   -- ent.grade bisa nil jika workspace event datang sebelum chat notif
+   local _resolvedGrade = ent.grade
+   if (not _resolvedGrade or _resolvedGrade == "?") and _ASC_CHAT_CACHE and _ASC_CHAT_CACHE[mn] then
+    _resolvedGrade = _ASC_CHAT_CACHE[mn].grade or _resolvedGrade
+   end
+   if (not _resolvedGrade or _resolvedGrade == "?") and _runeGradeCache then
+    _resolvedGrade = _runeGradeCache[-mn] or _runeGradeCache[mn] or _resolvedGrade
+   end
+   _resolvedGrade = _resolvedGrade or "?"
    table.insert(list, {
     id      = resolvedId,
     rawId   = rid,
     mapId   = ent.mapId,
     mapNum  = mn,
-    grade   = ent.grade or "?",
+    grade   = _resolvedGrade,
     bossName= ent.bossName,
     isAscension = true,
    })
@@ -8583,7 +8591,13 @@ function StartAscensionLoop()
     return matched[1]
    end
 
-   -- TAHAP 2: Fallback - jangan nganggur, masuk Tower terkecil dari valid
+   -- TAHAP 2: Fallback
+   -- Jika Preferred Rank di-set tapi tidak ada yang cocok: return nil (standby, jangan masuk tower salah)
+   -- Jika tidak ada Preferred Rank sama sekali: fallback ke terkecil dari valid (filter map saja)
+   if hasPreferRank then
+    ASC.manualMatchMode = "none"
+    return nil
+   end
    ASC.manualMatchMode = "fallback"
    return pickLowest(valid)
   end
@@ -8731,7 +8745,10 @@ function StartAscensionLoop()
        table.insert(_parts, "Rune->T"..ASC.runeMapTarget)
       end
       local _filterStr = #_parts > 0 and table.concat(_parts," | ") or "no filter"
-      AscStatusUpdate("Waiting [Manual] "..(_filterStr).."...", Color3.fromRGB(255,180,50))
+      -- Jika ada tower tapi tidak cocok filter rank -> beri keterangan lebih jelas
+      local _ascListNow = GetAscensionList()
+      local _noMatchNote = (#_ascListNow > 0 and _hasRank) and " [no rank match]" or "..."
+      AscStatusUpdate("Waiting [Manual] "..(_filterStr).._noMatchNote, Color3.fromRGB(255,180,50))
      elseif _pm == "bymap" then
       local _ms = {}
       for mn=1,26 do if ASC.preferMaps and ASC.preferMaps[mn] then table.insert(_ms,"T"..mn) end end
@@ -8875,21 +8892,15 @@ function StartAscensionLoop()
     local _ascPm = ASC.pickMode or "easy"
     local useRune = false
 
-    if _ascPm == "manual" then
-     if ASC.manualMatchMode == "primary" then
-      -- TAHAP 1: MATCH PREFERRED RANK -> pakai Rune kalau target berbeda
-      if ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
-       useRune = (mn ~= ASC.runeMapTarget)
-      end
-     else
-      -- FALLBACK: jangan paksa item apapun
-      useRune = false
-     end
-    else
-     -- Mode easy / hard
-     if ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
+    -- Manual mode: rune aktif selama runeEnabled di-set dan entry adalah primary match
+    -- (fallback return nil, jadi kalau sampai sini di manual = pasti primary)
+    -- Non-manual: APM_UNLOCK rune=false -> runeMapTarget=0 -> useRune selalu false
+    if ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
+     if _ascPm == "manual" then
+      -- Primary match confirmed (fallback sudah return nil di ResolveAscEntry)
       useRune = (mn ~= ASC.runeMapTarget)
      end
+     -- Mode lain: rune diblokir struktural via ApplyAscPickModeLock (runeMapTarget=0)
     end
 
     -- [v64] EKSEKUSI (identik RAID - hanya RUNE_IDS dan mapId berbeda)
