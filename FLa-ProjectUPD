@@ -8537,7 +8537,7 @@ function StartAscensionLoop()
 
   -- Helper: ambil grade entry
   local function _getGrade(r)
-   return r.grade or "?"
+   return GetBestGrade(r.mapNum, true) or r.grade
   end
 
   -- Helper sort highest rank
@@ -9107,6 +9107,54 @@ function StartAscensionLoop()
 
 
 
+    -- [FIX] Loading wait universal - samakan dengan RAID (baris ~10649)
+    -- RAID punya loading wait SEBELUM split autoKillBoss, ASC tidak punya -> langsung masuk wait loop buggy
+    -- Untuk mode Boss Kill OFF: cukup tunggu ada enemy, tidak perlu cari boss
+    -- Untuk mode Boss Kill ON: tunggu boss terdeteksi (atau 12s timeout)
+    AscStatusUpdate("[~] Dalam Tower "..mn.." - loading...", Color3.fromRGB(100,200,255))
+    local _loadWaitUniv = 0
+    local _mapHasEnemies = false
+    local _earlyBossUniv = nil
+    local BOSS_KEYS_EARLY_ASC = {
+     "goblin king","giant arachnid","buryura","igris",
+     "leader of the polar","arch lich","kargalgan","baran",
+     "beru","grendal","monarch plague","frostborne","legia",
+     "monarch beastly","beastly fangs","silas","unbreakable monarch",
+     "yogumunt","monarch of transfiguration","transfiguration",
+     "antares","ashborn","dominion","absolute","monarch","fragment","boss",
+     "legendary super saiyan","broly",
+     "goku[super4]","goku super4","goku super 4",
+    }
+    local function IsBossEarlyASC(name)
+     local n = name:lower()
+     for _, k in ipairs(BOSS_KEYS_EARLY_ASC) do if n:find(k,1,true) then return true end end
+     return false
+    end
+    local _earlyAscHintUniv = raidEntry.bossName and raidEntry.bossName:lower() or nil
+    local function IsBossEarlyASCWithHint(name)
+     local n = name:lower()
+     if _earlyAscHintUniv and n:find(_earlyAscHintUniv,1,true) then return true end
+     return IsBossEarlyASC(name)
+    end
+    while _loadWaitUniv < 12 and ASC.running and not _ascDone do
+     task.wait(0.5); _loadWaitUniv = _loadWaitUniv + 0.5
+     local _bList = GetRaidEnemies()
+     if #_bList == 0 then _bList = GetEnemiesLocal() end
+     if #_bList > 0 then _mapHasEnemies = true end
+     if _loadWaitUniv >= 1 and not _earlyBossUniv and _mapHasEnemies then
+      for _, e in ipairs(_bList) do
+       if IsBossEarlyASCWithHint(e.model.Name) then _earlyBossUniv = e; break end
+      end
+     end
+     if _earlyBossUniv then
+      local _ep = _earlyBossUniv.hrp and _earlyBossUniv.hrp.Parent and _earlyBossUniv.hrp.Position
+      if _ep and _ep.Y > -200 and _loadWaitUniv >= 1.5 then break end
+      if _ep and _ep.Y <= -200 then _earlyBossUniv = nil end
+     end
+     -- [FIX] Split path: Boss Kill OFF tidak perlu tunggu boss, cukup ada enemy (min 2s) - identik RAID
+     if _mapHasEnemies and _loadWaitUniv >= 2 and not ASC.autoKillBoss then break end
+    end
+
     -- [v48] AUTO BOSS KILL - sama persis dengan AUTO RAID
     if ASC.autoKillBoss then
      -- BOSS_KEYS untuk Ascension Tower (semua boss AT + boss normal)
@@ -9386,12 +9434,19 @@ function StartAscensionLoop()
 
        -- 7) Serang boss (sama dengan RAID: 0.08s per attack)
        AscStatusUpdate("[FLa] Attack: "..boss.model.Name, Color3.fromRGB(255,80,80))
+       local _outOfMapCount = 0 -- [FIX] debounce counter - samakan dengan RAID, harus 3x berturut-turut baru break
        while ASC.running and not _ascDone do
         -- [v48] Validasi: player harus masih di Ascension Tower
+        -- [FIX] Debounce: harus 3x frame berturut-turut baru break (anti false-positive lag spike) - identik RAID
         local _curMap = GetCurrentMapId()
         if _curMap and (_curMap < 50301 or _curMap > 50326) then
-         AscStatusUpdate("[!] Player keluar Tower - stop attack", Color3.fromRGB(255,140,0))
-         break
+         _outOfMapCount = _outOfMapCount + 1
+         if _outOfMapCount >= 3 then
+          AscStatusUpdate("[!] Player keluar Tower - stop attack", Color3.fromRGB(255,140,0))
+          break
+         end
+        else
+         _outOfMapCount = 0
         end
         if not boss.model or not boss.model.Parent then break end
         local hum = boss.model:FindFirstChildOfClass("Humanoid")
@@ -9430,22 +9485,12 @@ function StartAscensionLoop()
      end
     else
      -- Auto Kill Boss OFF - tunggu event ChallengeRaidsSuccess max 5 menit
+     -- [FIX] Samakan dengan RAID (baris ~11003): tidak ada guard wm/MapId di sini.
+     -- Guard wm==0 yang lama menyebabkan break instan karena MapId attribute
+     -- belum ter-set server saat baru masuk tower. RAID tidak punya guard ini.
      local _wt = 0
      while ASC.running and not _ascDone and _wt < 300 do
       task.wait(1); _wt = _wt + 1
-      -- [v64 FIX] Guard keluar Tower: cek lebih komprehensif
-      -- Jika player sudah tidak di Ascension Tower (50301-50326), berarti sudah keluar
-      -- (bisa karena MA/RAID TP player keluar, atau server kick, atau kolisi event)
-      local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or 0
-      if wm == 0 or (wm >= 50001 and wm <= 50028) then
-       AscStatusUpdate("[!] Player keluar Tower (ext) - abort wait", Color3.fromRGB(255,140,0))
-       break
-      end
-      -- Jika player tiba-tiba di map RAID normal atau Siege, juga keluar
-      if (wm >= 50101 and wm <= 50120) or (wm >= 50201 and wm <= 50204) then
-       AscStatusUpdate("[!] Player di map lain - abort wait", Color3.fromRGB(255,140,0))
-       break
-      end
      end
     end
 
