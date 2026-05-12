@@ -4695,11 +4695,29 @@ do
              end
          end)
          -- Watch GUI baru yang muncul saat hide aktif
+         -- [FIX SIEGE] Panel Siege/CityRaid yang di-spawn server saat player masuk Siege
+         -- WAJIB dikecualikan dari hide - panel ini menampilkan Count/Timer dan men-trigger reward server
+         local _SIEGE_PANEL_KW = {
+             "cityraid","city_raid","garrisoncityraid","garrisonboss",
+             "siege","cityraidpanel","cityraidenterpanel",
+             "raidcityresult","garrisonraidresult","citycount","citytimer",
+         }
+         local function _isSiegePanelGui(gui)
+             if not (SIEGE and SIEGE.inMap) then return false end
+             local n = gui.Name:lower()
+             for _, kw in ipairs(_SIEGE_PANEL_KW) do
+                 if n:find(kw, 1, true) then return true end
+             end
+             return false
+         end
+
          _uiAddConn = PG.ChildAdded:Connect(function(gui)
              task.defer(function()
                  pcall(function()
                      if not _hideUIOn then return end
                      if gui.Name == _OUR_GUI then return end
+                     -- [FIX SIEGE] Jangan hide panel Siege saat SIEGE.inMap = true
+                     if _isSiegePanelGui(gui) then return end
                      if gui:IsA("ScreenGui") or gui:IsA("GuiBase2d") then
                          _uiCache[gui] = gui.Enabled
                          gui.Enabled = false
@@ -12957,16 +12975,6 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
             end
         end
 
-        -- Server kirim countdown timer dan nama map di sana
-        -- Cuma hide popup reward hasil boss saja setelah keluar
-        -- Auto hide UI reward (kecuali Siege UI penting)
-        pcall(function()
-            for _, name in ipairs({"ChallengeGarrisonBossSuccess"}) do
-                local ui = LP.PlayerGui:FindFirstChild(name)
-                if ui then ui.Enabled = false end
-            end
-        end)
-
         -- Timeout global
         if totalTime >= MAX_TIME then
             if onStatus then onStatus("[!] Timeout "..MAX_TIME.."s - Force OUT") end
@@ -13238,6 +13246,34 @@ StartSiegeLoop = function()
             end
 
             SIEGE.inMap = true
+
+            -- [FIX SIEGE PANEL] Restore panel Siege/CityRaid yang sudah terlanjur di-hide
+            -- oleh _hideUIOn sebelum SIEGE.inMap = true di-set.
+            -- Tanpa ini: panel Count/Timer/Reward tidak tampil -> reward tidak trigger.
+            pcall(function()
+                local _SIEGE_KW = {
+                    "cityraid","city_raid","garrisoncityraid","garrisonboss",
+                    "siege","cityraidpanel","cityraidenterpanel",
+                    "raidcityresult","garrisonraidresult","citycount","citytimer",
+                }
+                for _, gui in ipairs(PG:GetChildren()) do
+                    pcall(function()
+                        if not gui or not gui.Parent then return end
+                        local n = gui.Name:lower()
+                        local isSiege = false
+                        for _, kw in ipairs(_SIEGE_KW) do
+                            if n:find(kw, 1, true) then isSiege = true; break end
+                        end
+                        if isSiege then
+                            if gui:IsA("ScreenGui") or gui:IsA("GuiBase2d") then
+                                gui.Enabled = true
+                            elseif gui:IsA("GuiObject") then
+                                gui.Visible = true
+                            end
+                        end
+                    end)
+                end
+            end)
             SiegeStatus("[S] "..d.name.." - Masuk map, standby 2s...", Color3.fromRGB(255,200,60))
             if SIEGE.dot then SIEGE.dot.BackgroundColor3 = Color3.fromRGB(255,200,60) end
             task.wait(2)  -- jeda 2 detik setelah benar-benar masuk map sebelum serang
