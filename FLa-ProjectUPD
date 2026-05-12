@@ -8556,53 +8556,60 @@ function StartAscensionLoop()
    return list[1]
   end
 
-  -- [MANUAL MODE] - PREFERRED MAP + PREFERRED RANK aktif
-  -- Sama persis dengan AUTO RAID manual mode
+  -- [MANUAL MODE]
+  -- Aturan ketat: script hanya masuk jika semua filter yang di-set oleh user terpenuhi.
+  -- Tidak ada fallback ke tower lain. Jika tidak match -> return nil -> nganggur.
   if pm == "manual" then
    ASC.manualMatchMode = "none"
-   local valid = {}
    local hasPreferMaps = next(ASC.preferMaps or {}) ~= nil
-
-   -- GERBANG: filter by Preferred Map (jika ada)
-   for _, r in ipairs(ascList) do
-    local mn = r.mapNum
-    if not hasPreferMaps or (ASC.preferMaps and ASC.preferMaps[mn]) then
-     table.insert(valid, r)
-    end
-   end
-   -- Jika Preferred Map di-set tapi tidak ada yang lolos filter -> fallback ke semua tower
-   if #valid == 0 then
-    valid = ascList
-   end
-
-   -- TAHAP 1: Match Preferred Rank
-   local matched = {}
    local hasPreferRank = next(ASC.runeGrades or {}) ~= nil
-   if hasPreferRank then
+
+   -- Kandidat awal: semua tower yang tersedia
+   local valid = {}
+   for _, r in ipairs(ascList) do
+    table.insert(valid, r)
+   end
+
+   -- GERBANG 1: filter by Preferred Map (jika di-set)
+   -- Tidak match = nganggur, bukan fallback ke semua
+   if hasPreferMaps then
+    local mapFiltered = {}
     for _, r in ipairs(valid) do
-     if ASC.runeGrades[_getGrade(r)] then
-      table.insert(matched, r)
+     if ASC.preferMaps[r.mapNum] then
+      table.insert(mapFiltered, r)
      end
     end
-   end
-   if #matched > 0 then
-    sortHighestRank(matched)
-    ASC.manualMatchMode = "primary"
-    return matched[1]
+    if #mapFiltered == 0 then
+     ASC.manualMatchMode = "none"
+     return nil
+    end
+    valid = mapFiltered
    end
 
-   -- TAHAP 2: Fallback
-   -- Jika Preferred Rank di-set tapi tidak ada yang cocok: return nil (standby, jangan masuk tower salah)
-   -- Jika tidak ada Preferred Rank sama sekali: fallback ke terkecil dari valid (filter map saja)
+   -- GERBANG 2: filter by Preferred Rank (jika di-set)
+   -- Tidak match = nganggur
    if hasPreferRank then
-    ASC.manualMatchMode = "none"
-    return nil
+    local rankFiltered = {}
+    for _, r in ipairs(valid) do
+     if ASC.runeGrades[_getGrade(r)] then
+      table.insert(rankFiltered, r)
+     end
+    end
+    if #rankFiltered == 0 then
+     ASC.manualMatchMode = "none"
+     return nil
+    end
+    sortHighestRank(rankFiltered)
+    ASC.manualMatchMode = "primary"
+    return rankFiltered[1]
    end
-   ASC.manualMatchMode = "fallback"
+
+   -- Tidak ada filter rank -> masuk tower terkecil dari kandidat yang lolos filter map
+   ASC.manualMatchMode = "primary"
    return pickLowest(valid)
   end
 
-  -- [BYRANK MODE] - Filter by Preferred Rank, fallback ke terkecil jika tidak match
+  -- [BYRANK MODE] - Nganggur sampai ada ASC dengan Rank yang cocok
   if pm == "byrank" then
    local hasPreferRank = next(ASC.runeGrades or {}) ~= nil
    if hasPreferRank then
@@ -8616,26 +8623,30 @@ function StartAscensionLoop()
      sortHighestRank(matched2)
      return matched2[1]
     end
+    -- Rank di-set tapi tidak ada yang cocok -> nganggur
+    return nil
    end
-   -- Rank tidak match / tidak di-set -> fallback ke Tower terkecil
+   -- Rank tidak di-set sama sekali -> masuk terkecil
    return pickLowest(ascList)
   end
 
-  -- [BYMAP MODE] - Filter by Preferred Map, fallback ke terkecil jika tidak match
+  -- [BYMAP MODE] - Nganggur sampai ada ASC di Map yang dipilih
   if pm == "bymap" then
    local hasPreferMaps = next(ASC.preferMaps or {}) ~= nil
    if hasPreferMaps then
     local mapMatched = {}
     for _, r in ipairs(ascList) do
-     if ASC.preferMaps and ASC.preferMaps[r.mapNum] then
+     if ASC.preferMaps[r.mapNum] then
       table.insert(mapMatched, r)
      end
     end
     if #mapMatched > 0 then
      return pickLowest(mapMatched)
     end
+    -- Map di-set tapi tidak ada yang cocok -> nganggur
+    return nil
    end
-   -- Map tidak match / tidak di-set -> fallback ke Tower terkecil
+   -- Map tidak di-set sama sekali -> masuk terkecil
    return pickLowest(ascList)
   end
 
@@ -8889,18 +8900,17 @@ function StartAscensionLoop()
     }
 
     -- [v64] LOGIKA KEPUTUSAN (disesuaikan untuk Tower 1-26)
-    local _ascPm = ASC.pickMode or "easy"
+    -- Identik AUTO RAID: rune aktif di semua mode selama runeEnabled=true dan runeMapTarget valid
+    -- APM_UNLOCK hanya mengunci UI field (tidak bisa set baru), bukan memblokir eksekusi rune
     local useRune = false
 
-    -- Manual mode: rune aktif selama runeEnabled di-set dan entry adalah primary match
-    -- (fallback return nil, jadi kalau sampai sini di manual = pasti primary)
-    -- Non-manual: APM_UNLOCK rune=false -> runeMapTarget=0 -> useRune selalu false
     if ASC.runeEnabled and ASC.runeMapTarget >= 1 and ASC.runeMapTarget <= 26 then
-     if _ascPm == "manual" then
-      -- Primary match confirmed (fallback sudah return nil di ResolveAscEntry)
-      useRune = (mn ~= ASC.runeMapTarget)
+     -- Anti-mubazir: kalau tower yang akan dimasuki sudah sama dengan target, simpan rune
+     if mn == ASC.runeMapTarget then
+      useRune = false
+     else
+      useRune = true
      end
-     -- Mode lain: rune diblokir struktural via ApplyAscPickModeLock (runeMapTarget=0)
     end
 
     -- [v64] EKSEKUSI (identik RAID - hanya RUNE_IDS dan mapId berbeda)
@@ -8929,15 +8939,39 @@ function StartAscensionLoop()
       task.wait(0.1); _wR = _wR + 0.1
      end
 
-     -- Fallback jika item habis di inventory
+     -- Jika serverMapId nil setelah timeout: material habis atau server reject
      if ASC.serverMapId == nil and ASC.running then
-      AscStatusUpdate("[!] Item Kosong - Fallback ke Tower "..mn.."...", Color3.fromRGB(255,140,0))
-      if RE.CreateRaidTeam then pcall(function() RE.CreateRaidTeam:InvokeServer(raidEntry.id) end) end
-      task.wait(0.2)
-      if RE.StartChallengeRaidMap then pcall(function() RE.StartChallengeRaidMap:FireServer({mapId = targetMapId}) end) end
-      local _wFb = 0
-      while ASC.serverMapId == nil and _wFb < 5 and ASC.running do
-       task.wait(0.05); _wFb = _wFb + 0.05
+      -- Di Manual mode: JANGAN fallback masuk tower lain. Lapor dan nganggur.
+      local _pm_rune = ASC.pickMode or "easy"
+      if _pm_rune == "manual" then
+       AscStatusUpdate("[!] Material Habis - Nganggur (Manual mode)...", Color3.fromRGB(255,80,80))
+       ASC.inMap = false
+       _ascBusy = false
+       _ascInterrupt = false
+       ReleaseMapLock("asc")
+       -- Tunggu sampai wakeup event berikutnya (material diisi ulang / event baru)
+       local _woken = false
+       local _wConn
+       if _ascWakeup then
+        _wConn = _ascWakeup.Event:Connect(function() _woken = true end)
+       end
+       local _wt = 0
+       while not _woken and _wt < 30 and ASC.running do
+        task.wait(1); _wt = _wt + 1
+        AscStatusUpdate("[!] Material Habis - Menunggu... ("..tostring(30-_wt).."s)", Color3.fromRGB(255,80,80))
+       end
+       if _wConn then pcall(function() _wConn:Disconnect() end) end
+       break
+      else
+       -- Mode lain: fallback masuk tower original
+       AscStatusUpdate("[!] Item Kosong - Fallback ke Tower "..mn.."...", Color3.fromRGB(255,140,0))
+       if RE.CreateRaidTeam then pcall(function() RE.CreateRaidTeam:InvokeServer(raidEntry.id) end) end
+       task.wait(0.2)
+       if RE.StartChallengeRaidMap then pcall(function() RE.StartChallengeRaidMap:FireServer({mapId = targetMapId}) end) end
+       local _wFb = 0
+       while ASC.serverMapId == nil and _wFb < 5 and ASC.running do
+        task.wait(0.05); _wFb = _wFb + 0.05
+       end
       end
      end
 
