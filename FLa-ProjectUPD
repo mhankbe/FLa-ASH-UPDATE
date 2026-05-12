@@ -8721,10 +8721,11 @@ function StartAscensionLoop()
   local pm = ASC.pickMode or "easy"
   local hasPick = (pm == "byrank" or pm == "manual") and next(ASC.runeGrades or {}) ~= nil
 
-  -- Grade helper: identik RAID — sumber sama (RAID_LIVE/RAID_CONFIG_GRADE/cache)
-  -- mapNum untuk ASC = mapId - 50300, tapi GetBestGrade butuh isAscension=true
+  -- Grade helper: GetBestGrade dulu, fallback ke r.grade (sudah di-resolve di GetAscensionList)
   local function _getGrade(r)
-   return GetBestGrade(r.mapNum, true)
+   local g = GetBestGrade(r.mapNum, true)
+   if not g or g == "?" then g = r.grade end
+   return (g and g ~= "?") and g or nil
   end
 
   -- pickLowest: ambil tower dengan mapNum terkecil
@@ -8817,14 +8818,17 @@ function StartAscensionLoop()
       table.insert(matched, r)
      end
     end
-   end
-   if #matched > 0 then
-    sortHighestRankLocal(matched)
-    ASC.manualMatchMode = "primary"
-    return matched[1]
+    if #matched > 0 then
+     sortHighestRankLocal(matched)
+     ASC.manualMatchMode = "primary"
+     return matched[1]
+    end
+    -- Rank diset tapi tidak ada tower yang cocok -> return nil, tunggu event berikutnya
+    ASC.manualMatchMode = "none"
+    return nil
    end
 
-   -- TAHAP 2: Fallback ke tower terkecil dari kandidat (identik RAID Tahap 3)
+   -- Tidak ada Preferred Rank diset -> fallback ke tower terkecil dari kandidat
    ASC.manualMatchMode = "fallback"
    table.sort(valid_asc, function(a, b) return a.mapNum < b.mapNum end)
    return valid_asc[1]
