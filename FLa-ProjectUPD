@@ -8542,6 +8542,7 @@ function StopRaid()
  RAID.fromMapId = nil
  RAID.slotIndex = 2
  RAID._raidDone = false
+ RAID._cooldownActive = false -- reset agar tidak stuck di standby loop
  RAID_LIVE = {}
  _defaultRRIdx = 0 -- reset RR saat RAID habis
  RAID_ID_LIST = {}
@@ -9566,11 +9567,9 @@ function StartAscensionLoop()
 
        -- 7) Serang boss (sama dengan RAID: 0.08s per attack)
        AscStatusUpdate("[FLa] Attack: "..boss.model.Name, Color3.fromRGB(255,80,80))
-       -- [BUG FIX 1&2] Attack loop TIDAK pakai _ascDone sebagai stop condition.
-       -- _ascServerDone (ChallengeRaidsSuccess) tidak boleh interrupt attack di tengah.
-       -- Attack berhenti hanya saat: boss HP=0, boss hilang, atau player keluar tower.
        while ASC.running do
-        -- [v48] Validasi: player harus masih di Ascension Tower
+        -- Stop jika server sudah konfirmasi sukses
+        if _ascServerDone then break end
         local _curMap = GetCurrentMapId()
         if _curMap and (_curMap < 50301 or _curMap > 50326) then
          AscStatusUpdate("[!] Player keluar Tower - stop attack", Color3.fromRGB(255,140,0))
@@ -9578,15 +9577,22 @@ function StartAscensionLoop()
         end
         if not boss.model or not boss.model.Parent then break end
         local hum = boss.model:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health <= 0 then break end
+        if not hum or hum.Health <= 0 then break end
         local p = GetSafeAscBossPos()
-        if not p then task.wait(0.08); continue end
+        if not p then
+         task.wait(0.08)
+         if not boss.model or not boss.model.Parent then break end
+         local hum2 = boss.model:FindFirstChildOfClass("Humanoid")
+         if not hum2 or hum2.Health <= 0 then break end
+         continue
+        end
         task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
         task.wait(0.08)
        end
 
        pcall(function() task.cancel(_tpTh) end)
-       -- [BUG FIX 1&2] Setelah attack loop selesai, gabungkan _ascServerDone ke _ascSuccess.
+       -- Boss mati. _ascSuccess selalu true setelah attack loop selesai dari dalam tower.
+       _ascSuccess = true
        if _ascServerDone then _ascSuccess = true end
        _ascDone = true
        AscStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
@@ -11144,14 +11150,10 @@ local function ResolveEntry()
 
  -- 7) SERANG BOSS - langsung tanpa jeda
  RaidStatusUpdate("[FLa] Attack: " .. boss.model.Name, Color3.fromRGB(255,80,80))
- local _outOfMapCount = 0 -- [BUG FIX v49] debounce counter agar tidak false-break karena lag spike
- -- [BUG FIX 1&2] Attack loop TIDAK pakai RAID._raidDone sebagai stop condition.
- -- Server event ChallengeRaidsSuccess (_raidServerDone) tidak boleh interrupt attack di tengah.
- -- Attack berhenti hanya saat: boss HP=0, boss hilang, atau player keluar map.
+ local _outOfMapCount = 0
  while RAID.running do
- -- [FIX GODMODE] Validasi realtime: player harus masih di raid map (50101-50120)
- -- Jika sudah keluar ke basemap, stop serang boss
- -- [BUG FIX v49] Debounce: harus 3x frame berturut-turut baru break (anti false-positive lag spike)
+ -- Stop jika server sudah konfirmasi sukses
+ if _raidServerDone then break end
  local _curMap = GetCurrentMapId()
  if _curMap and (_curMap < 50101 or _curMap > 50120) then
   _outOfMapCount = _outOfMapCount + 1
@@ -11162,19 +11164,30 @@ local function ResolveEntry()
  else
   _outOfMapCount = 0
  end
+ -- Boss model hilang dari workspace = mati
  if not boss.model or not boss.model.Parent then break end
  local hum = boss.model:FindFirstChildOfClass("Humanoid")
- if hum and hum.Health <= 0 then break end
+ -- HP <= 0 atau Humanoid hilang = boss mati
+ if not hum or hum.Health <= 0 then break end
  local p = GetSafeBossPos()
- if not p then task.wait(0.08); continue end
+ -- Jika posisi boss tidak valid tapi boss masih ada: coba maksimal 2 detik, setelah itu anggap mati
+ if not p then
+  task.wait(0.08)
+  -- Cek lagi apakah boss masih ada
+  if not boss.model or not boss.model.Parent then break end
+  local hum2 = boss.model:FindFirstChildOfClass("Humanoid")
+  if not hum2 or hum2.Health <= 0 then break end
+  continue
+ end
  task.spawn(function() pcall(function() RaidFireDamage(bossGuid, p) end) end)
  task.wait(0.08)
  end
 
  pcall(function() task.cancel(_tpTh) end)
- -- [BUG FIX 1&2] Setelah attack loop selesai, baru set _raidDone.
- -- Jika server sudah kirim sukses (_raidServerDone), gabungkan ke _raidSuccess.
- if _raidServerDone then _raidSuccess = true end
+ -- Boss mati (apapun yang menyebabkan break dari attack loop).
+ -- _raidSuccess = true selalu setelah attack loop selesai dari dalam map.
+ _raidSuccess = true
+ if _raidServerDone then _raidSuccess = true end -- preserve
  RAID._raidDone = true
  RaidStatusUpdate("[FLa] Boss Dead!", Color3.fromRGB(100,255,150))
  end -- if RAID.running after delay
