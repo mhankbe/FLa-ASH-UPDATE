@@ -1306,7 +1306,7 @@ MODE = {
  current = "idle", -- "idle"|"ma"|"raid"|"siege"|"dungeon"|"asc"|"st2"
  -- PRIORITY: dungeon > siege > raid > asc > st2 > ma > idle
  -- Fitur HANYA boleh masuk jika MODE.current == "idle"
- -- (tidak ada override priority â€” setiap fitur harus tunggu giliran)
+ -- (tidak ada override priority — setiap fitur harus tunggu giliran)
  priority = { dungeon=6, siege=5, raid=4, asc=3, st2=2, ma=1, idle=0 },
  _prev = {}, -- stack: simpan mode yang diinterrupt, untuk resume
 }
@@ -7641,7 +7641,7 @@ local function _extractGradeLast(t)
 end
 
 -- Kirim buffer ke Discord/Telegram, lalu kosongkan buffer
--- AT dan RAID Normal diperlakukan IDENTIK â€” satu sumber grade: GetBestGrade
+-- AT dan RAID Normal diperlakukan IDENTIK — satu sumber grade: GetBestGrade
 -- AT: isAscension=true, mapNum = towerNum. RAID: isAscension=false, mapNum = mapId-50000
 _whFlushBuffer = function(url)
  if #_whBuffer == 0 then return end
@@ -7655,7 +7655,7 @@ _whFlushBuffer = function(url)
  local isTelegram = url:find("api%.telegram%.org")
  local HS = game:GetService("HttpService")
 
- -- Satu helper grade untuk keduanya â€” identik cara RAID Normal baca grade
+ -- Satu helper grade untuk keduanya — identik cara RAID Normal baca grade
  -- AT   : GetBestGrade(towerNum, true)
  -- RAID : GetBestGrade(mapNum, false)
  local function _gradeFor(mapNum, isAscension)
@@ -8699,7 +8699,7 @@ function StartAscensionLoop()
  -- ============================================================
  -- ResolveAscEntry: 100% IDENTIK dengan ResolveEntry (Auto Raid Normal)
  -- Satu-satunya perbedaan: pakai ASC.* dan ascList (mapNum) bukan RAID_ID_LIST (mapId)
- -- MapId masuk ke tower tetap 503xx â€” tidak diubah di sini
+ -- MapId masuk ke tower tetap 503xx — tidak diubah di sini
  -- ============================================================
  local function ResolveAscEntry()
   local ascList = GetAscensionList()
@@ -8780,7 +8780,7 @@ function StartAscensionLoop()
   end
 
   -- ============================================================
-  -- MANUAL MODE â€” identik RAID: 3 tahap, fallback ke terkecil
+  -- MANUAL MODE — identik RAID: 3 tahap, fallback ke terkecil
   -- ============================================================
   if pm == "manual" then
    ASC.manualMatchMode = "none"
@@ -9033,8 +9033,8 @@ function StartAscensionLoop()
     ReleaseMapLock("asc")
 
     -- Entry ASC = identik RAID normal, beda hanya mapId dan RUNE_IDS:
-    -- RAID: StartChallengeRaidMap({mapId = raidEntry.mapId + 100}) â†’ 50101-50120
-    -- ASC : StartChallengeRaidMap({mapId = 50300+mn})              â†’ Tower X = 50301-50326
+    -- RAID: StartChallengeRaidMap({mapId = raidEntry.mapId + 100}) → 50101-50120
+    -- ASC : StartChallengeRaidMap({mapId = 50300+mn})              → Tower X = 50301-50326
     -- mapNum sudah di-resolve oleh ResolveAscEntry (termasuk Preferred Map / Rank filter + fallback)
     local targetMapId = ResolveAscTargetMapId(mn)
     local _pm_now = ASC.pickMode or "easy"
@@ -9869,14 +9869,14 @@ function GetRaidEnemies()
  local list = {}
  local seen = {}
 
- -- [v51-FIX] Hapus hard early-return berdasarkan MapId â€” terlalu agresif.
+ -- [v51-FIX] Hapus hard early-return berdasarkan MapId — terlalu agresif.
  -- Guard lama menyebabkan scan gagal saat MapId belum update (race condition Delta Android)
  -- atau saat workspace.MapId pakai attribute name berbeda dari yang di-read.
  -- Sekarang: tetap scan workspace, hanya matikan distFilter jika mapId tidak dikenali.
  local currentMapId = GetCurrentMapId()
  local _inNormalRaid = currentMapId and (currentMapId >= 50101 and currentMapId <= 50120)
  local _inAscTower  = currentMapId and (currentMapId >= 50301 and currentMapId <= 50326)
- -- (tidak ada early return di sini â€” biarkan scan tetap berjalan)
+ -- (tidak ada early return di sini — biarkan scan tetap berjalan)
 
  -- spawnPos hanya relevan untuk Normal Raid (Ascension Tower tidak pakai RAID_SPAWN_POS)
  local activeMapId = (_inNormalRaid and RAID and RAID.serverMapId) or nil
@@ -12879,19 +12879,19 @@ do
  -- Label gembok (dibuat di sini, setelah semua card sudah ada)
  local _ascPrefMapLockLbl = Instance.new("TextLabel", ascPrefMapCard)
  _ascPrefMapLockLbl.Size = UDim2.new(1,0,1,0); _ascPrefMapLockLbl.BackgroundTransparency = 1
- _ascPrefMapLockLbl.Text = "ðŸ”’ Hanya aktif di Manual mode"; _ascPrefMapLockLbl.TextSize = 10
+ _ascPrefMapLockLbl.Text = "🔒 Hanya aktif di Manual mode"; _ascPrefMapLockLbl.TextSize = 10
  _ascPrefMapLockLbl.Font = Enum.Font.GothamBold; _ascPrefMapLockLbl.TextColor3 = C.TXT3
  _ascPrefMapLockLbl.ZIndex = 5; _ascPrefMapLockLbl.Visible = false
 
  local _ascRankLockLbl = Instance.new("TextLabel", ascRankCard)
  _ascRankLockLbl.Size = UDim2.new(1,0,1,0); _ascRankLockLbl.BackgroundTransparency = 1
- _ascRankLockLbl.Text = "ðŸ”’ Hanya aktif di Manual / By Rank"; _ascRankLockLbl.TextSize = 10
+ _ascRankLockLbl.Text = "🔒 Hanya aktif di Manual / By Rank"; _ascRankLockLbl.TextSize = 10
  _ascRankLockLbl.Font = Enum.Font.GothamBold; _ascRankLockLbl.TextColor3 = C.TXT3
  _ascRankLockLbl.ZIndex = 5; _ascRankLockLbl.Visible = false
 
  local _ascRuneLockLbl = Instance.new("TextLabel", ascRuneCard)
  _ascRuneLockLbl.Size = UDim2.new(1,0,1,0); _ascRuneLockLbl.BackgroundTransparency = 1
- _ascRuneLockLbl.Text = "ðŸ”’ Hanya aktif di Manual mode"; _ascRuneLockLbl.TextSize = 10
+ _ascRuneLockLbl.Text = "🔒 Hanya aktif di Manual mode"; _ascRuneLockLbl.TextSize = 10
  _ascRuneLockLbl.Font = Enum.Font.GothamBold; _ascRuneLockLbl.TextColor3 = C.TXT3
  _ascRuneLockLbl.ZIndex = 5; _ascRuneLockLbl.Visible = false
 
