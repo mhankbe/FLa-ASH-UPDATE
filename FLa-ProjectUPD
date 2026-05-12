@@ -7195,18 +7195,30 @@ GRADE_RANK = {
  ["G"]=8,["N"]=9,["M"]=10,["M+"]=11,["M++"]=12,["XM"]=15,["ULT"]=17,["GOD"]=18,
 }
 
--- RAID_CONFIG_GRADE: Normal Raid only (raidId 930001+)
+-- RAID_CONFIG_GRADE: Formula grade dari raidId
+-- RAID_NORMAL (930001-934999): (raidId - 930001) % 10 -> index ke grade
+-- ASC_TOWER  (935001+)       : raidId % 100 -> index ke grade (CONFIRMED sniffer)
+--
+-- GRADE INDEX MAP (shared):
+--  1=E  2=D  3=C  4=B  5=A  6=S  7=SS  8=G  9=N  10=M  11=M+  12=M++  13=XM  14=ULT  15=GOD
+local _GRADE_IDX = {"E","D","C","B","A","S","SS","G","N","M","M+","M++","XM","ULT","GOD"}
+-- RAID_NORMAL khusus pakai subset 10 grade (D,B,S,SS,G,N,M+,M++,XM,ULT)
+local _GRADE_RAID = {"D","B","S","SS","G","N","M+","M++","XM","ULT"}
+
 RAID_CONFIG_GRADE = setmetatable({}, {
  __index = function(_, raidId)
- if type(raidId) ~= "number" then return nil end
- -- Formula berlaku untuk semua raid (normal 930001+ DAN ASC 935001+)
- -- Data server sama persis, tidak ada perbedaan struktur raidId
- if raidId >= 930001 then
- local _nr = {"D","B","S","SS","G","N","M+","M++","XM","ULT"}
- local slot = (raidId - 930001) % 10
- return _nr[slot + 1]
- end
- return nil
+  if type(raidId) ~= "number" then return nil end
+  -- ASC Tower: raidId >= 935001, formula = raidId % 100 (CONFIRMED via sniffer)
+  if raidId >= 935001 then
+   local idx = raidId % 100
+   return _GRADE_IDX[idx] or "?"
+  end
+  -- RAID Normal: raidId >= 930001, formula = (raidId - 930001) % 10
+  if raidId >= 930001 then
+   local slot = (raidId - 930001) % 10
+   return _GRADE_RAID[slot + 1] or "?"
+  end
+  return nil
  end
 })
 
@@ -7561,6 +7573,33 @@ end
 -- Buffer: teks mentah dari TipsPanel, diisi ParseChatLine
 -- { text = "The MaFissure appeared in ...", isAT = bool, time = tick() }
 local _whBuffer        = {}   -- list of raw lines dari event ini
+
+-- [v_FIX] Helper: resolve grade terbaik dari raidId (formula baru) atau fallback entry
+local function _WH_resolveGrade(ent)
+ if not ent then return "?" end
+ -- 1. Formula langsung dari raidId (paling akurat, sudah fix ASC)
+ if ent.raidId and RAID_CONFIG_GRADE then
+  local g = RAID_CONFIG_GRADE[ent.raidId]
+  if g and g ~= "?" then return g end
+ end
+ -- 2. TipsPanel cache
+ if ent.isAscension then
+  local mn = ent.mapId and (ent.mapId - 50300)
+  if mn and _ASC_CHAT_CACHE and _ASC_CHAT_CACHE[mn] and _ASC_CHAT_CACHE[mn].grade then
+   return _ASC_CHAT_CACHE[mn].grade
+  end
+  if mn and _runeGradeCache and _runeGradeCache[-mn] then
+   return _runeGradeCache[-mn]
+  end
+ else
+  local mn = ent.mapId and (ent.mapId - 50000)
+  if mn and _runeGradeCache and _runeGradeCache[mn] then
+   return _runeGradeCache[mn]
+  end
+ end
+ -- 3. Entry grade field
+ return ent.grade or "?"
+end
 local _whBufferTimer   = nil  -- debounce handle
 local _whLastSent      = 0
 
@@ -7755,10 +7794,7 @@ _WH.SendSiege = function(url)
 end
 SendWebhookSiege = function(url) _WH.SendSiege(url) end -- alias internal
 
--- Debounce timer: tunggu 3 detik setelah notif terakhir baru kirim
-local _whDebounce = nil
-local _whLastSent = 0
-
+-- [v_FIX] Deklarasi duplikat _whLastSent dihapus - sudah ada di atas (baris 7565)
 -- [WEBHOOK PURE] TriggerWebhookDebounce tidak dipakai lagi
 -- Webhook sekarang dikirim langsung dari ParseChatLine via _WH.AddLine
 TriggerWebhookDebounce = function() end -- no-op, compat
@@ -7942,8 +7978,25 @@ RebuildRaidList = function()
  })
  end
  if _raidIdRefreshCb then pcall(_raidIdRefreshCb) end
- if _webhookEnabled and _webhookUrl ~= "" then
- TriggerWebhookDebounce()
+ -- [v_FIX] Kirim notif webhook untuk setiap raid/asc baru
+ if _webhookEnabled and _webhookUrl ~= "" and not _whSilent then
+  task.delay(0.5, function()
+   for _, ent in pairs(RAID_LIVE) do
+    if ent.label and ent.label ~= "" and _WH and _WH.AddLine then
+     -- [v_FIX] Gunakan _WH_resolveGrade: formula baru ASC (raidId%100) + fallback TipsPanel
+     local _grade = _WH_resolveGrade and _WH_resolveGrade(ent) or ent.grade or "?"
+     if ent.isAscension then
+      local mn = ent.mapId and (ent.mapId - 50300) or "?"
+      local bn = ent.bossName and (" - "..ent.bossName) or ""
+      _WH.AddLine("The MaFissure appeared in Ascension Tower "..tostring(mn)..bn.." [".._grade.."]")
+     else
+      local mn = ent.mapId and (ent.mapId - 50000) or "?"
+      local nm = MAP_NAMES and MAP_NAMES[mn] or ("Map "..tostring(mn))
+      _WH.AddLine("The MaFissure appeared in "..tostring(mn)..","..nm.." [".._grade.."]")
+     end
+    end
+   end
+  end)
  end
 end
 
@@ -8115,11 +8168,25 @@ local function _onRaidChildAdded(child, slotName)
  -- [v58] Gunakan debounce terpusat: jangan langsung bangunkan siapapun
  -- TriggerEntryWakeup() akan tunggu 3 detik setelah notif terakhir baru fire RAID & ASC
  if TriggerEntryWakeup then TriggerEntryWakeup() end
- -- [v271] Trigger webhook LANGSUNG saat raid muncul di workspace
- if not _whSilent then
+ -- [v_FIX] Webhook langsung dari workspace watcher
+ if not _whSilent and _webhookEnabled and _webhookUrl and _webhookUrl ~= "" then
   task.spawn(function()
    task.wait(0.5)
-   TriggerWebhookDebounce()
+   for _, ent in pairs(RAID_LIVE) do
+    if ent.label and ent.label ~= "" and _WH and _WH.AddLine then
+     -- [v_FIX] Gunakan _WH_resolveGrade: formula baru ASC (raidId%100) + fallback TipsPanel
+     local _grade = _WH_resolveGrade and _WH_resolveGrade(ent) or ent.grade or "?"
+     if ent.isAscension then
+      local mn = ent.mapId and (ent.mapId - 50300) or "?"
+      local bn = ent.bossName and (" - "..ent.bossName) or ""
+      _WH.AddLine("The MaFissure appeared in Ascension Tower "..tostring(mn)..bn.." [".._grade.."]")
+     else
+      local mn = ent.mapId and (ent.mapId - 50000) or "?"
+      local nm = MAP_NAMES and MAP_NAMES[mn] or ("Map "..tostring(mn))
+      _WH.AddLine("The MaFissure appeared in "..tostring(mn)..","..nm.." [".._grade.."]")
+     end
+    end
+   end
   end)
  end
 end
@@ -8361,7 +8428,24 @@ ConnectRaidListeners = function()
  RebuildRaidList()
  -- [v58] Gunakan debounce terpusat
  if TriggerEntryWakeup then TriggerEntryWakeup() end
- TriggerWebhookDebounce()
+ -- [v_FIX] Ganti TriggerWebhookDebounce (no-op)
+ if not _whSilent and _webhookEnabled and _webhookUrl and _webhookUrl ~= "" then
+  for _, ent in pairs(RAID_LIVE) do
+   if ent.label and ent.label ~= "" and _WH and _WH.AddLine then
+    -- [v_FIX] Gunakan _WH_resolveGrade: formula baru ASC (raidId%100) + fallback TipsPanel
+    local _grade = _WH_resolveGrade and _WH_resolveGrade(ent) or ent.grade or "?"
+    if ent.isAscension then
+     local mn = ent.mapId and (ent.mapId - 50300) or "?"
+     local bn = ent.bossName and (" - "..ent.bossName) or ""
+     _WH.AddLine("The MaFissure appeared in Ascension Tower "..tostring(mn)..bn.." [".._grade.."]")
+    else
+     local mn = ent.mapId and (ent.mapId - 50000) or "?"
+     local nm = MAP_NAMES and MAP_NAMES[mn] or ("Map "..tostring(mn))
+     _WH.AddLine("The MaFissure appeared in "..tostring(mn)..","..nm.." [".._grade.."]")
+    end
+   end
+  end
+ end
  end
  end)
  table.insert(_WH.raidConns, conn)
@@ -9923,7 +10007,21 @@ local function ForceRescanRaidEnter()
             RebuildRaidList()
             -- [v58] Gunakan debounce terpusat
             if TriggerEntryWakeup then TriggerEntryWakeup() end
-            if not _whSilent and TriggerWebhookDebounce then TriggerWebhookDebounce() end
+            -- [v_FIX] Ganti TriggerWebhookDebounce (no-op)
+            if not _whSilent and _webhookEnabled and _webhookUrl and _webhookUrl ~= "" then
+             for _, ent in pairs(RAID_LIVE) do
+              if ent.label and ent.label ~= "" and _WH and _WH.AddLine then
+               if ent.isAscension then
+                local mn = ent.mapId and (ent.mapId - 50300) or "?"
+                _WH.AddLine("The MaFissure appeared in Ascension Tower "..tostring(mn).." ["..(ent.grade or "?").."]")
+               else
+                local mn = ent.mapId and (ent.mapId - 50000) or "?"
+                local nm = MAP_NAMES and MAP_NAMES[mn] or ("Map "..tostring(mn))
+                _WH.AddLine("The MaFissure appeared in "..tostring(mn)..","..nm.." ["..(ent.grade or "?").."]")
+               end
+              end
+             end
+            end
         end
     end)
 end
@@ -16751,8 +16849,13 @@ task.spawn(function()
             elseif action == "OpenCityRaid" then
                 SIEGE.live[id] = mn
                 if _siegeWakeup then pcall(function() _siegeWakeup:Fire() end) end
-                if not _whSilent and TriggerWebhookDebounce then 
-                    TriggerWebhookDebounce() 
+                -- [v_FIX] TriggerWebhookDebounce sudah no-op, kirim langsung via _WH.SendSiege
+                if not _whSilent and _webhookEnabled and _webhookUrl and _webhookUrl ~= "" then
+                    task.delay(1, function()
+                        if _WH and _WH.SendSiege then
+                            pcall(function() _WH.SendSiege(_webhookUrl) end)
+                        end
+                    end)
                 end
             elseif action == "CloseCityRaid" or action == "LeaveCityRaid" then
                 SIEGE.live[id] = nil
