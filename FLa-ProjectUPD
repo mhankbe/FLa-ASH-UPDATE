@@ -77,6 +77,7 @@ RE = {
  HeroUseSkill = Remotes:FindFirstChild("HeroUseSkill"),
  EquipWeapon = Remotes:WaitForChild("EquipWeapon", 10),
  RandomWeaponQuirk = Remotes:WaitForChild("RandomWeaponQuirk", 10),
+ AutoWeaponQuirk = Remotes:WaitForChild("AutoRandomWeaponQuirk", 15),
  RandomHeroEquipGrade = Remotes:WaitForChild("RandomHeroEquipGrade", 10),
  RerollHalo = Remotes:FindFirstChild("RerollHalo"),
  RerollOrnament = Remotes:WaitForChild("RerollOrnament", 15),
@@ -1249,7 +1250,7 @@ _updateSiegeDdLabel = nil  -- diisi oleh Siege exclude-map UI
 _siegeToggleState   = false -- tracking state pill toggle Siege (true=ON)
 _dungeonToggleState = false -- tracking state pill toggle Dungeon (true=ON)
 -- Global Config - expose setter dari setiap panel
-_setAutoHideToggle  = nil  -- Main: Auto Hide Reward
+_setAutoHideToggle  = nil  -- Hide: Auto Hide Reward (dipindah ke tab HIDE)
 _setAutoCollectToggle = nil -- Main: Auto Collect GOLD & ITEM
 _setAnimToggle      = nil  -- Main: Disable All Animations
 _setSellHeroToggle  = nil  -- Main: Auto Sell Hero Equip
@@ -1277,7 +1278,7 @@ _setPotatoToggle    = nil  -- Settings: Potato Mode
 _webhookModeSetIdx  = nil  -- Settings: webhook mode setter
 _webhookUrlBox      = nil  -- Settings: urlBox reference untuk restore text
 -- Visual-only setters (update pill tanpa trigger logic - untuk restore UI saat load config)
-_visAutoHide    = nil  -- Main: Auto Hide Reward visual
+_visAutoHide    = nil  -- Hide: Auto Hide Reward visual (dipindah ke tab HIDE)
 _visAutoCollect = nil  -- Main: Auto Collect GOLD & ITEM visual
 _visDisableAnim = nil  -- Main: Disable Anim visual
 _visSellHero    = nil  -- Main: Sell Hero visual
@@ -2531,16 +2532,16 @@ QUIRK_LIST_PER_SLOT = {
  {id=99117,name="Sovereign Axiom"},
  },
 }
-MAX_PER_SLOT = 3
+MAX_PER_SLOT = math.huge -- [v18] Tidak ada batasan jumlah target
 
 QUIRK_MAP = {}
 for _, list in ipairs(QUIRK_LIST_PER_SLOT) do
  for _, q in ipairs(list) do QUIRK_MAP[q.id] = q.name end
 end
 
--- Weapon: hanya tampilkan quirk tier tinggi per slot, max pilih 3
+-- Weapon: hanya tampilkan quirk tier tinggi per slot, max pilih bebas (tidak dibatasi)
 W_QUIRK_LIST_PER_SLOT = {
- -- Slot 1 (6 pilihan, max 3)
+ -- Slot 1
  {
  {id=99067,name="Celestial Onslaught"},
  {id=99068,name="Lucky Scavenger"},
@@ -2548,8 +2549,11 @@ W_QUIRK_LIST_PER_SLOT = {
  {id=99070,name="Omnipotent Benefactor"},
  {id=99071,name="Archangel's Judgment"},
  {id=99072,name="Avatar of Destruction"},
+ {id=99118,name="Eternal Sovereign"},
+ {id=99119,name="Seraphic Verdict"},
+ {id=99120,name="Doombringer Ascendant"},
  },
- -- Slot 2 (6 pilihan, max 3)
+ -- Slot 2
  {
  {id=99085,name="Celestial Onslaught"},
  {id=99086,name="Lucky Scavenger"},
@@ -2557,8 +2561,11 @@ W_QUIRK_LIST_PER_SLOT = {
  {id=99088,name="Omnipotent Benefactor"},
  {id=99089,name="Archangel's Judgment"},
  {id=99090,name="Avatar of Destruction"},
+ {id=99121,name="Eternal Sovereign"},
+ {id=99122,name="Seraphic Verdict"},
+ {id=99123,name="Doombringer Ascendant"},
  },
- -- Slot 3 (6 pilihan, max 3)
+ -- Slot 3
  {
  {id=99103,name="Celestial Onslaught"},
  {id=99104,name="Lucky Scavenger"},
@@ -2566,9 +2573,12 @@ W_QUIRK_LIST_PER_SLOT = {
  {id=99106,name="Omnipotent Benefactor"},
  {id=99107,name="Archangel's Judgment"},
  {id=99108,name="Avatar of Destruction"},
+ {id=99124,name="Eternal Sovereign"},
+ {id=99125,name="Seraphic Verdict"},
+ {id=99126,name="Doombringer Ascendant"},
  },
 }
-W_MAX_PER_SLOT = 3
+W_MAX_PER_SLOT = math.huge -- [v18] Tidak ada batasan jumlah target
 
 W_QUIRK_MAP = {}
 for _, list in ipairs(W_QUIRK_LIST_PER_SLOT) do
@@ -3136,7 +3146,8 @@ MakeGenericDropdown = function(params)
  Corner(popup, 10); Stroke(popup, C.BORD2, 1.5, 0.2)
 
  local hdr = Frame(popup, C.TBAR, UDim2.new(1,0,0,HEADER_H)); hdr.ZIndex = 9999
- local countLbl = Label(hdr, "0/"..maxSel.." SELECTED", 12, C.TXT, Enum.Font.GothamBold)
+ local isUnlimited = (maxSel == math.huge)
+ local countLbl = Label(hdr, "0 SELECTED", 12, C.TXT, Enum.Font.GothamBold)
  countLbl.Size = UDim2.new(0.6,0,1,0); countLbl.Position = UDim2.new(0,8,0,0); countLbl.ZIndex = 9999
  local clrBtn = Btn(hdr, Color3.fromRGB(180,50,50), UDim2.new(0,50,0,20))
  clrBtn.Position = UDim2.new(1,-56,0.5,-10); Corner(clrBtn,5); clrBtn.ZIndex = 9999
@@ -3157,8 +3168,13 @@ MakeGenericDropdown = function(params)
  local rowRefs = {}
  function UpdateCount()
  local n = 0; for _ in pairs(selTable) do n = n + 1 end
- countLbl.Text = n.."/"..maxSel.." SELECTED"
- countLbl.TextColor3 = n >= maxSel and Color3.fromRGB(255,100,80) or C.ACC2
+ if isUnlimited then
+  countLbl.Text = n.." SELECTED (bebas)"
+  countLbl.TextColor3 = n > 0 and C.ACC2 or C.TXT
+ else
+  countLbl.Text = n.."/"..maxSel.." SELECTED"
+  countLbl.TextColor3 = n >= maxSel and Color3.fromRGB(255,100,80) or C.ACC2
+ end
  end
 
  for _, q in ipairs(list) do
@@ -3179,12 +3195,13 @@ MakeGenericDropdown = function(params)
  if selTable[key] then
  selTable[key] = nil
  else
- local n = 0; for _ in pairs(selTable) do n = n + 1 end
- if n >= maxSel then
- local old = countLbl.Text
- countLbl.Text = "MAX "..maxSel.." SUCCES!"; countLbl.TextColor3 = Color3.fromRGB(255,60,60)
- task.delay(1.2, function() UpdateCount() end)
- return
+ if not isUnlimited then
+  local n = 0; for _ in pairs(selTable) do n = n + 1 end
+  if n >= maxSel then
+  countLbl.Text = "MAX "..maxSel.." SUCCES!"; countLbl.TextColor3 = Color3.fromRGB(255,60,60)
+  task.delay(1.2, function() UpdateCount() end)
+  return
+  end
  end
  selTable[key] = true
  end
@@ -3223,71 +3240,6 @@ do
  local _sellToggleCb = nil
 
  -- ============================================================
- -- LOGIKA AUTO HIDE REWARD
- -- ============================================================
- local _autoHideConn = nil
- local _autoHideRemotes = {}
- STATE.autoHideReward = false
-
- local function DoAutoHideReward(on)
-        STATE.autoHideReward = on
-        if on then
-            local HIDE_PANELS = {"RewardsFrame", "ResultFrame", "RewardPanel", "ChallengeGarrisonBossSuccess"}
-            local function forceHide(obj)
-                if not obj or not obj.Parent then return end
-                pcall(function()
-                    if obj:IsA("GuiObject") then
-                        obj.Visible = false
-                        obj.Position = UDim2.new(2, 0, 2, 0)
-                    elseif obj:IsA("ScreenGui") then
-                        obj.Enabled = false
-                    end
-                end)
-            end
-
-         local function checkAndHide(obj)
-             if not STATE.autoHideReward then return end
-             if not (obj:IsA("GuiObject") or obj:IsA("ScreenGui")) then return end
-             
-             for _, name in ipairs(HIDE_PANELS) do
-                 if obj.Name == name or obj.Name:find("GarrisonBoss") then
-                     task.wait(0.1)
-                     if STATE.autoHideReward then forceHide(obj) end
-                     pcall(function()
-                         if obj:IsA("GuiObject") then
-                             obj:GetPropertyChangedSignal("Visible"):Connect(function()
-                                 if STATE.autoHideReward and obj.Visible then forceHide(obj) end
-                             end)
-                         elseif obj:IsA("ScreenGui") then
-                             obj:GetPropertyChangedSignal("Enabled"):Connect(function()
-                                 if STATE.autoHideReward and obj.Enabled then forceHide(obj) end
-                             end)
-                         end
-                     end)
-                     break
-                 end
-             end
-         end
-
-         -- Scan existing
-         for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do checkAndHide(obj) end
-        -- Ghost Polling untuk Auto Hide
-            task.spawn(function()
-                while STATE.autoHideReward do
-                    task.wait(0.5)
-                    pcall(function()
-                        for _, obj in ipairs(LP.PlayerGui:GetChildren()) do
-                            for _, name in ipairs(HIDE_PANELS) do
-                                if obj.Name == name or obj.Name:find("GarrisonBoss") then
-                                    forceHide(obj)
-                                end
-                            end
-                        end
-                    end)
-                end
-            end)
-        end
-    end-- ============================================================
 -- FITUR: DISABLE ALL ANIMATIONS & DAMAGE TEXT (GHOST POLLING)
 -- ============================================================
 local _dmgTextConnWorkspace = nil
@@ -3431,14 +3383,6 @@ end
  _cnt={R=0,Y=0,B=0,other=0,skipped=0}; RefreshCounters()
  SetSellStatus("[OK] DONE RESET", Color3.fromRGB(160,220,160))
  end)
-
---  [NEW] Toggle Auto Hide Reward
- local _autoHideRow, _autoHideSet, _autoHideVis = ToggleRow(p, "AUTO HIDE REWARD", "Sembunyikan popup item", 1, function(on)
-     DoAutoHideReward(on)
- end)
- _setAutoHideToggle = _autoHideSet
- _visAutoHide = _autoHideVis
- _autoHideRow.Name = "ZZZ_AutoHide" -- Trik aman! Memaksa posisinya di bawah Count RYB (LayoutOrder 1) tanpa merusak/menggeser LayoutOrder tombol lain.
 
  --  Toggle Auto Sell (DI BAWAH counter) 
  local _sellToggleRow, _sellToggleSet, _sellVis = ToggleRow(p,"AUTO SELL HERO EQUIP","Auto sell all items (except Locked)",4,function(on)
@@ -4866,6 +4810,117 @@ do
      ApplyHideAnim(on)
  end)
 
+ -- ============================================================
+ -- 4. AUTO HIDE REWARD
+ -- Sembunyikan popup reward (RewardsFrame, ResultFrame, dll)
+ -- saat muncul. Toggle OFF restore semua ke state semula.
+ -- ============================================================
+ local _hideRewardOn    = false
+ local _rewardConn      = nil
+ local _rewardAddConn   = nil
+ local _rewardCache     = {}  -- [obj] = {visible=bool, pos=UDim2, enabled=bool}
+
+ local HIDE_PANELS = {
+     "RewardsFrame","ResultFrame","RewardPanel","ChallengeGarrisonBossSuccess"
+ }
+
+ local function _isRewardPanel(obj)
+     for _, name in ipairs(HIDE_PANELS) do
+         if obj.Name == name or obj.Name:find("GarrisonBoss",1,true) then
+             return true
+         end
+     end
+     return false
+ end
+
+ local function _cacheAndHideReward(obj)
+     if not obj or not obj.Parent then return end
+     if _rewardCache[obj] then return end  -- sudah di-cache, skip
+     pcall(function()
+         if obj:IsA("ScreenGui") then
+             _rewardCache[obj] = {enabled = obj.Enabled}
+             obj.Enabled = false
+         elseif obj:IsA("GuiObject") then
+             _rewardCache[obj] = {visible = obj.Visible, pos = obj.Position}
+             obj.Visible  = false
+             obj.Position = UDim2.new(2, 0, 2, 0)
+         end
+     end)
+ end
+
+ local function _restoreAllReward()
+     for obj, state in pairs(_rewardCache) do
+         pcall(function()
+             if not obj or not obj.Parent then return end
+             if obj:IsA("ScreenGui") then
+                 obj.Enabled = state.enabled
+             elseif obj:IsA("GuiObject") then
+                 obj.Visible  = state.visible
+                 obj.Position = state.pos
+             end
+         end)
+     end
+     _rewardCache = {}
+ end
+
+ local function ApplyHideReward(on)
+     _hideRewardOn = on
+
+     -- Putus koneksi lama
+     if _rewardConn    then _rewardConn:Disconnect();    _rewardConn    = nil end
+     if _rewardAddConn then _rewardAddConn:Disconnect(); _rewardAddConn = nil end
+
+     if on then
+         -- Scan panel yang sudah ada
+         pcall(function()
+             for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
+                 if _isRewardPanel(obj) then _cacheAndHideReward(obj) end
+             end
+         end)
+
+         -- Watch panel baru yang muncul
+         _rewardAddConn = LP.PlayerGui.ChildAdded:Connect(function(obj)
+             task.defer(function()
+                 if not _hideRewardOn then return end
+                 if _isRewardPanel(obj) then _cacheAndHideReward(obj) end
+                 -- Cek juga descendant baru di dalam obj
+                 for _, child in ipairs(obj:GetDescendants()) do
+                     if _isRewardPanel(child) then _cacheAndHideReward(child) end
+                 end
+             end)
+         end)
+
+         -- Ghost polling: pastikan panel yang muncul ulang tetap tersembunyi
+         task.spawn(function()
+             while _hideRewardOn do
+                 task.wait(0.5)
+                 pcall(function()
+                     for _, obj in ipairs(LP.PlayerGui:GetChildren()) do
+                         if _isRewardPanel(obj) then _cacheAndHideReward(obj) end
+                     end
+                 end)
+             end
+         end)
+
+         -- Watch property change: kalau game paksa Visible/Enabled = true, hide lagi
+         _rewardConn = LP.PlayerGui.DescendantAdded:Connect(function(obj)
+             task.defer(function()
+                 if not _hideRewardOn then return end
+                 if _isRewardPanel(obj) then _cacheAndHideReward(obj) end
+             end)
+         end)
+
+     else
+         -- RESTORE PENUH ke state sebelum di-hide
+         _restoreAllReward()
+     end
+ end
+
+ ToggleRow(p, "AUTO HIDE REWARD", "Sembunyikan popup reward. Toggle OFF restore penuh.", 4, function(on)
+     ApplyHideReward(on)
+ end)
+
+
 end -- end do PANEL HIDE
 -- ============================================================
 
@@ -6045,6 +6100,8 @@ do
  slotLbls = {nil,nil,nil},
  slotTarget = {{},{},{}},
  running = false,
+ x100 = false,
+ x100Thread = nil,
  SetSlot = function(i,txt,col)
  if _WR_RPT.slotLbls[i] then
  _WR_RPT.slotLbls[i].Text = txt
@@ -6191,6 +6248,181 @@ do
  end
  end)
 
+ -- ── Toggle x100 Reroll Weapon ──────────────────────────────────
+ local wx100Row = Frame(wrInner, C.BG2, UDim2.new(1,0,0,34))
+ wx100Row.LayoutOrder = 8; Corner(wx100Row, 10); Stroke(wx100Row, C.ACC2, 1.5, 0.7)
+ local wx100Lbl = Label(wx100Row, "x100 Reroll", 12, C.TXT, Enum.Font.GothamBold)
+ wx100Lbl.Size = UDim2.new(0.55,0,1,0); wx100Lbl.Position = UDim2.new(0,10,0,0)
+ local wx100Sub = Label(wx100Row, "ON = 1 roll = 100 result", 9, C.TXT3, Enum.Font.GothamBold)
+ wx100Sub.Size = UDim2.new(0.55,0,0,12); wx100Sub.Position = UDim2.new(0,10,1,-14)
+ local wx100Pill = Btn(wx100Row, C.BG3, UDim2.new(0,40,0,22))
+ wx100Pill.Position = UDim2.new(1,-50,0.5,-11); Corner(wx100Pill, 11)
+ local wx100Knob = Frame(wx100Pill, C.TXT, UDim2.new(0,18,0,18))
+ wx100Knob.Position = UDim2.new(0,2,0.5,-9); Corner(wx100Knob, 9)
+ _WR_RPT.x100 = false
+ _WR_RPT.x100Thread = nil
+
+ local function SetWX100UI(on)
+  TweenService:Create(wx100Pill, TweenInfo.new(0.15), {BackgroundColor3 = on and C.PILL_ON or C.BG3}):Play()
+  TweenService:Create(wx100Knob, TweenInfo.new(0.15), {
+   Position = on and UDim2.new(1,-20,0.5,-9) or UDim2.new(0,2,0.5,-9),
+   BackgroundColor3 = on and Color3.fromRGB(255,255,255) or C.TXT,
+  }):Play()
+ end
+
+ local function StopWRX100()
+  _WR_RPT.x100 = false
+  SetWX100UI(false)
+  if _WR_RPT.x100Thread then
+   pcall(function() task.cancel(_WR_RPT.x100Thread) end)
+   _WR_RPT.x100Thread = nil
+  end
+  for i = 1, 3 do _WR_RPT.SetSlot(i, "Idle", Color3.fromRGB(160,148,135)) end
+ end
+
+ local function StartWRX100Loop()
+  if _WR_RPT.x100Thread then
+   pcall(function() task.cancel(_WR_RPT.x100Thread) end)
+  end
+  _WR_RPT.x100Thread = task.spawn(function()
+   -- Tunggu GUID tersedia
+   if not (_WR_RPT.guid and _WR_RPT.guid ~= "") then
+    for i = 1, 3 do _WR_RPT.SetSlot(i, "[..] Klik 1x di Mesin Reroll dulu", Color3.fromRGB(180,220,255)) end
+    while _WR_RPT.x100 and not (_WR_RPT.guid and _WR_RPT.guid ~= "") do task.wait(0.5) end
+    if not _WR_RPT.x100 then return end
+    task.wait(1.5)
+   end
+   -- Validasi remote
+   if not RE.AutoWeaponQuirk then
+    for i = 1, 3 do _WR_RPT.SetSlot(i, "[!] Remote AutoRandomWeaponQuirk nil", Color3.fromRGB(255,80,80)) end
+    StopWRX100(); return
+   end
+   local attempt = 0
+   -- Track slot yang sudah DONE agar tidak di-roll ulang
+   local slotDone = {false, false, false}
+
+   -- Helper: scan seluruh table (flat + nested 4 level) cari quirkId yang cocok target
+   local function ScanWResForTarget(res, targets)
+    if type(res) ~= "table" then return nil, nil end
+    local gotId, rawId = nil, nil
+    local PRIO = {"finalResultId","quirkId","resultId","id","Id","result","Result"}
+    -- Pass 1: key prioritas di root
+    for _, key in ipairs(PRIO) do
+     local v = res[key]
+     if type(v) == "number" and v > 0 then
+      rawId = rawId or v
+      if W_QUIRK_MAP[v] then gotId = gotId or v end
+      if targets[v] then return v, v end
+     end
+    end
+    -- Pass 2: scan flat root
+    for k, v in pairs(res) do
+     if type(v) == "number" and v > 0 then
+      rawId = rawId or v
+      if W_QUIRK_MAP[v] then gotId = gotId or v end
+      if targets[v] then return v, v end
+     elseif type(v) == "table" then
+      -- Pass 3: nested 1 level
+      for _, vv in pairs(v) do
+       if type(vv) == "number" and vv > 0 then
+        rawId = rawId or vv
+        if W_QUIRK_MAP[vv] then gotId = gotId or vv end
+        if targets[vv] then return vv, vv end
+       elseif type(vv) == "table" then
+        -- Pass 4: nested 2 level
+        for _, vvv in pairs(vv) do
+         if type(vvv) == "number" and vvv > 0 then
+          rawId = rawId or vvv
+          if W_QUIRK_MAP[vvv] then gotId = gotId or vvv end
+          if targets[vvv] then return vvv, vvv end
+         end
+        end
+       end
+      end
+     end
+    end
+    return gotId, rawId
+   end
+
+   while _WR_RPT.x100 do
+    -- Cek apakah semua slot sudah DONE
+    local allDone = true
+    for si = 1, 3 do
+     local list = W_QUIRK_LIST_PER_SLOT[si]
+     local targets = _WR_RPT.slotTarget[si]
+     local stopIds = {}
+     for _, q in ipairs(list) do
+      if targets[q.id] then table.insert(stopIds, q.id) end
+     end
+     if #stopIds > 0 and not slotDone[si] then allDone = false; break end
+    end
+    if allDone then StopWRX100(); break end
+
+    for si = 1, 3 do
+     if slotDone[si] then
+      -- Slot sudah selesai, skip
+     else
+      local list = W_QUIRK_LIST_PER_SLOT[si]
+      local targets = _WR_RPT.slotTarget[si]
+      local drawId = ({960001, 960002, 960003})[si]
+      -- Kumpulkan stopIds
+      local stopIds = {}
+      for _, q in ipairs(list) do
+       if targets[q.id] then table.insert(stopIds, q.id) end
+      end
+      if #stopIds == 0 then
+       _WR_RPT.SetSlot(si, "[!] SELECT TARGET!", Color3.fromRGB(255,100,60))
+      else
+       attempt = attempt + 1
+       _WR_RPT.SetSlot(si, "[x100] Slot"..si.." #"..attempt.."..", Color3.fromRGB(100,200,255))
+       _ourCall = true
+       local ok, res = pcall(function()
+        return RE.AutoWeaponQuirk:InvokeServer({
+         guid = _WR_RPT.guid,
+         drawId = drawId,
+         stopQuirkIds = stopIds,
+        })
+       end)
+       _ourCall = false
+       if not ok then
+        _WR_RPT.SetSlot(si, "[!] Error - retry", Color3.fromRGB(255,100,60))
+       else
+        local gotId, rawId = ScanWResForTarget(res, targets)
+        local hit = gotId ~= nil and targets[gotId] == true
+        if hit then
+         local gn = W_QUIRK_MAP[gotId] or "ID:"..tostring(gotId)
+         _WR_RPT.SetSlot(si, "[DONE] "..gn.." (#"..attempt..")", Color3.fromRGB(80,220,80))
+         slotDone[si] = true
+        else
+         local gn = (gotId and W_QUIRK_MAP[gotId]) or (rawId and "ID:"..tostring(rawId)) or "?"
+         _WR_RPT.SetSlot(si, "[x100] #"..attempt.." Last: "..gn, Color3.fromRGB(80,180,255))
+        end
+       end
+      end
+     end
+    end
+    task.wait(0.05)
+   end
+  end)
+ end
+
+ wx100Pill.MouseButton1Click:Connect(function()
+  _WR_RPT.x100 = not _WR_RPT.x100
+  SetWX100UI(_WR_RPT.x100)
+  if _WR_RPT.x100 then
+   -- Matikan Auto Roll Weapon kalau lagi jalan (2 mode tidak bisa bersamaan)
+   if _WR_RPT.running then
+    _WR_RPT.running = false
+    SetWeaponToggleUI(false)
+    DoAutoRollWeapon(false)
+   end
+   StartWRX100Loop()
+  else
+   StopWRX100()
+  end
+ end)
+ -- ── End x100 Reroll Weapon ────────────────────────────────────
+
  wrHeader.MouseButton1Click:Connect(function()
  wrOpen = not wrOpen
  wrBody.Visible = wrOpen
@@ -6277,7 +6509,7 @@ do
  local tArrow = Label(tDdBtn,"v",9,C.ACC,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
  tArrow.Size = UDim2.new(0,14,1,0); tArrow.Position = UDim2.new(1,-16,0,0)
 
- local tHint = Label(tRow,"(maks 3)",8.5,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
+ local tHint = Label(tRow,"(bebas pilih)",8.5,C.TXT3,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
  tHint.Size = UDim2.new(0,0,1,0); tHint.AutomaticSize = Enum.AutomaticSize.X
  tHint.Position = UDim2.new(1,-4,0,0); tHint.AnchorPoint = Vector2.new(1,0)
 
@@ -6304,7 +6536,7 @@ do
  MakeGenericDropdown({
  ddBtn = tDdBtn,
  list = PG_GRADES_PER_MACHINE[msi],
- maxSel = 3,
+ maxSel = math.huge, -- [v18] Tidak ada batasan jumlah target
  selTable = PGR.targets[msi],
  onRefresh = onTargetChange,
  })
@@ -8701,9 +8933,10 @@ function StartAscensionLoop()
  -- Satu-satunya perbedaan: pakai ASC.* dan ascList (mapNum) bukan RAID_ID_LIST (mapId)
  -- MapId masuk ke tower tetap 503xx — tidak diubah di sini
  -- ============================================================
+ -- Return: entry (match), nil+"no_tower" (tidak ada tower), nil+"no_match" (ada tower tapi filter tidak cocok)
  local function ResolveAscEntry()
   local ascList = GetAscensionList()
-  if #ascList == 0 then return nil end
+  if #ascList == 0 then return nil, "no_tower" end
 
   -- Prune expired entries (sama seperti RAID)
   local _now0 = os.time()
@@ -8715,7 +8948,7 @@ function StartAscensionLoop()
   end
   if _pruned0 then
    ascList = GetAscensionList()
-   if #ascList == 0 then return nil end
+   if #ascList == 0 then return nil, "no_tower" end
   end
 
   local pm = ASC.pickMode or "easy"
@@ -8794,7 +9027,7 @@ function StartAscensionLoop()
      table.insert(valid_asc, r)
     end
    end
-   if #valid_asc == 0 then return nil end
+   if #valid_asc == 0 then return nil, "no_match" end  -- ada tower tapi tidak ada yg cocok preferMaps
 
    -- Helper sort
    local function sortHighestRankLocal(list)
@@ -8823,9 +9056,9 @@ function StartAscensionLoop()
      ASC.manualMatchMode = "primary"
      return matched[1]
     end
-    -- Rank diset tapi tidak ada tower yang cocok -> return nil, tunggu event berikutnya
+    -- Rank diset tapi tidak ada tower yang cocok -> return nil+"no_match" agar RAID bisa fallback
     ASC.manualMatchMode = "none"
-    return nil
+    return nil, "no_match"
    end
 
    -- Tidak ada Preferred Rank diset -> fallback ke tower terkecil dari kandidat
@@ -8847,7 +9080,7 @@ function StartAscensionLoop()
     local chosen = pickByDiff(matched2)
     if chosen then return chosen end
    end
-   if pm == "byrank" then return nil end
+   if pm == "byrank" then return nil, "no_match" end  -- byrank: ada tower tapi rank tidak cocok
   end
 
   if pm == "bymap" and next(ASC.preferMaps or {}) ~= nil then
@@ -8856,7 +9089,7 @@ function StartAscensionLoop()
     if ASC.preferMaps[r.mapNum] then table.insert(mapMatched, r) end
    end
    if #mapMatched > 0 then return pickLowest(mapMatched) end
-   return nil
+   return nil, "no_match"  -- bymap: ada tower tapi map tidak cocok
   end
 
   return pickByDiff(ascList)
@@ -8903,15 +9136,46 @@ function StartAscensionLoop()
     end
 
     -- [v48] Resolve entry berdasarkan Pick Mode
-    local raidEntry = ResolveAscEntry()
+    local raidEntry, _ascReason = ResolveAscEntry()
 
-    -- Waiting loop jika tidak ada Ascension Tower tersedia
+    -- [FALLBACK FIX] Jika ada tower tapi filter tidak match + RAID.running -> fallback ke RAID siklus ini
+    if not raidEntry and _ascReason == "no_match" and RAID and RAID.running then
+     AscStatusUpdate("[Fallback] Filter tidak match - giliran Auto Raid siklus ini...", Color3.fromRGB(140,80,200))
+     if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+     _eventOwner = "raid"
+     -- Tunggu sampai RAID selesai satu siklus atau ada tower baru yang match
+     local _fbConn
+     local _fbDone = false
+     if _ascWakeup then
+      _fbConn = _ascWakeup.Event:Connect(function()
+       _fbDone = true  -- ada event baru, coba resolve lagi
+      end)
+     end
+     while ASC.running and not _fbDone do
+      task.wait(0.5)
+      -- Cek apakah sekarang ada match (event baru bisa datang)
+      local _recheck, _recheckReason = ResolveAscEntry()
+      if _recheck then _fbDone = true; raidEntry = _recheck end
+     end
+     if _fbConn then pcall(function() _fbConn:Disconnect() end) end
+     if not raidEntry then
+      break  -- kembali ke outer while loop, cek kondisi fresh
+     end
+    end
+
+    -- Waiting loop jika tidak ada Ascension Tower tersedia (no_tower atau ASC-only)
     while ASC.running and not raidEntry do
      local ascList = GetAscensionList()
      local _pm = ASC.pickMode or "easy"
-     -- [v61 CYCLEFIX] Jika RAID sedang fallback di siklus ini, ASC harus standby
-     -- Tidak boleh masuk Tower sampai siklus event baru datang (TriggerEntryWakeup reset flag)
-     if _raidFallbackActive and RAID.running then
+     local _, _curReason = ResolveAscEntry()
+     -- Jika ada tower tapi filter tidak match dan RAID running -> fallback
+     -- (ini handle kasus dimana tower muncul SAAT waiting loop berjalan)
+     if _curReason == "no_match" and RAID and RAID.running then
+      AscStatusUpdate("[Fallback] Filter tidak match - giliran Auto Raid...", Color3.fromRGB(140,80,200))
+      if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+      _eventOwner = "raid"
+      break
+     elseif _raidFallbackActive and RAID.running then
       AscStatusUpdate("[Standby] RAID fallback aktif siklus ini - tunggu siklus event baru...", Color3.fromRGB(140,80,200))
      elseif #ascList == 0 then
       if RAID.running then
@@ -8977,7 +9241,15 @@ function StartAscensionLoop()
      elseif _raidFallbackActive and RAID.running then
       raidEntry = nil  -- fallback lama (v61 compat)
      else
-      raidEntry = ResolveAscEntry()
+      local _re2, _reason2 = ResolveAscEntry()
+      raidEntry = _re2
+      -- Jika ada tower tapi filter tidak match dan RAID running -> fallback ke RAID
+      if not _re2 and _reason2 == "no_match" and RAID and RAID.running then
+       AscStatusUpdate("[Fallback] Filter tidak match - giliran Auto Raid...", Color3.fromRGB(140,80,200))
+       if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+       _eventOwner = "raid"
+       break  -- keluar waiting loop, biarkan RAID jalan
+      end
      end
     end
     if not ASC.running then break end
@@ -9993,8 +10265,8 @@ local function ForceRescanRaidEnter()
                         local spawnName = info.spawnName or "RE1001"
                         
                         -- Sinkronisasi Map ID
-                        if mapId >= 50101 and mapId <= 50118 then mapId = mapId - 100 end
-                        if mapId < 50001 or mapId > 50019 then break end
+                        if mapId >= 50101 and mapId <= 50120 then mapId = mapId - 100 end  -- [FIX v17] 50118->50120: cover Map 19 & 20
+                        if mapId < 50001 or mapId > 50020 then break end                   -- [FIX v17] 50019->50020: jangan skip Map 20
                         
                         currentActiveIds[raidId] = true
                         
@@ -11275,7 +11547,7 @@ local function ResolveEntry()
  pcall(function()
  local wm = workspace:GetAttribute("MapId") or workspace:GetAttribute("mapId") or workspace:GetAttribute("CurrentMapId")
  if wm then
- ok = (wm >= 50101 and wm <= 50118)
+ ok = (wm >= 50101 and wm <= 50120) -- [FIX v17] cover Map 19 & 20
  end
  end)
  return ok
@@ -13140,6 +13412,10 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
     -- [FIX v8] Gunakan _deadG_Siege lokal agar tidak ganggu _deadG global (Mass Attack)
     local _deadG_Siege = {}
 
+    -- [v15] Counter kill lokal per-sesi Siege. Siege dianggap SUCCES setelah 30 kill.
+    local SIEGE_KILL_TARGET = 30
+    local _siegeKillCount   = 0
+
     -- Helper: cek apakah player sudah kembali ke baseMapId (server TP keluar)
     -- [FIX] _confirmedInSiege: hanya anggap "balik ke lobby" jika player PERNAH masuk 50201-50205 dulu
     -- Tanpa ini, cek range 50001-50020 bisa false-positive saat player masih di baseMapId sebelum masuk siege
@@ -13174,7 +13450,12 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
         _deathConn = RE.Death.OnClientEvent:Connect(function(d)
             if not d then return end
             local g = d.enemyGuid or d.guid
-            if g then _deadG_Siege[g] = true end
+            if g then
+                if not _deadG_Siege[g] then
+                    _deadG_Siege[g] = true
+                    _siegeKillCount = _siegeKillCount + 1   -- [v15] track kill per-sesi
+                end
+            end
         end)
     end
 
@@ -13275,6 +13556,15 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
             cleanup(); return "exited_clean"
         end
 
+        -- -- [v15] Kondisi KILL TARGET: sudah bunuh 30 musuh -> Siege SUCCES --
+        if _siegeKillCount >= SIEGE_KILL_TARGET then
+            if onStatus then onStatus("[OK] Kill target "..SIEGE_KILL_TARGET.." tercapai (".. _siegeKillCount .." kill) - Siege SUCCES!") end
+            if RE.GainRaidsRewards then
+                pcall(function() RE.GainRaidsRewards:InvokeServer(1) end)
+            end
+            cleanup(); return "exited_clean"
+        end
+
         -- -- Kondisi A: musuh habis tapi belum di-TP server (fallback) --
         if alive == 0 and _everSawEnemy then
             if onStatus then onStatus("[..] Musuh habis, tunggu server TP keluar...") end
@@ -13309,7 +13599,7 @@ local function SiegeAttackV2_Independent(onStatus, baseMapId)
             end
         end
 
-        if onStatus then onStatus("[S] "..alive.." musuh ("..math.floor(totalTime).."s) stuck:"..string.format("%.1f",stuckT).."s") end
+        if onStatus then onStatus("[S] "..alive.." musuh ("..math.floor(totalTime).."s) kill:".. _siegeKillCount .."/"..SIEGE_KILL_TARGET.." stuck:"..string.format("%.1f",stuckT).."s") end
 
         -- Serang semua target
         for _, e in ipairs(targets) do
@@ -14047,6 +14337,25 @@ local function DungeonAttackLoop(onStatus)
 
     cleanup()
     return "loop_ended"
+end
+
+-- Sembunyikan popup reward setelah dungeon selesai (RewardsFrame, ResultFrame, dll)
+-- [FIX] Fungsi ini sebelumnya dipanggil tapi tidak pernah didefinisikan -> nil call error
+local function DungeonHideRewardPopup()
+    pcall(function()
+        local DUNGEON_HIDE = {"RewardsFrame", "ResultFrame", "RewardPanel", "ChallengeGarrisonBossSuccess"}
+        for _, name in ipairs(DUNGEON_HIDE) do
+            local ui = LP.PlayerGui:FindFirstChild(name)
+            if ui then
+                if ui:IsA("ScreenGui") then
+                    ui.Enabled = false
+                elseif ui:IsA("GuiObject") then
+                    ui.Visible = false
+                    ui.Position = UDim2.new(2, 0, 2, 0)
+                end
+            end
+        end
+    end)
 end
 
 -- TP keluar dungeon ke Map 5
@@ -16945,6 +17254,12 @@ ScreenGui.AncestryChanged:Connect(function()
   _HR_RPT.running = false
   if _HR_RPT.x100 then _HR_RPT.x100 = false end
   if _HR_RPT.x100Thread then pcall(function() task.cancel(_HR_RPT.x100Thread) end); _HR_RPT.x100Thread = nil end
+ end end)
+ -- Weapon Fastroll
+ pcall(function() if _WR_RPT then
+  _WR_RPT.running = false
+  if _WR_RPT.x100 then _WR_RPT.x100 = false end
+  if _WR_RPT.x100Thread then pcall(function() task.cancel(_WR_RPT.x100Thread) end); _WR_RPT.x100Thread = nil end
  end end)
  -- Ornament loops
  pcall(function() if ORN then
