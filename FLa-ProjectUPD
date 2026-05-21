@@ -531,32 +531,6 @@ function BuildTopBar()
  local SubLbl = Label(TopBar, "by FLa Project", 11, C.TXT3, Enum.Font.Gotham)
  SubLbl.Size = UDim2.new(0,180,0,13); SubLbl.Position = UDim2.new(0,50,0,26)
 
- -- [FREE VERSION] Badge di titlebar
- local freeBadgeBg = Frame(TopBar, Color3.fromRGB(30, 30, 30), UDim2.new(0, 94, 0, 20))
- freeBadgeBg.Position = UDim2.new(0, 230, 0, 11)
- freeBadgeBg.BackgroundTransparency = 0.15
- Corner(freeBadgeBg, 6)
- New("UIStroke", {Parent=freeBadgeBg, Color=Color3.fromRGB(255,200,80), Thickness=1.2, Transparency=0.2})
- -- Gradient kuning-oranye pada badge
- New("UIGradient", {
-     Parent = freeBadgeBg,
-     Color = ColorSequence.new({
-         ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 200, 40)),
-         ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 120, 0)),
-     }),
-     Rotation = 90,
- })
- local freeBadgeLbl = New("TextLabel", {
-     Parent = freeBadgeBg,
-     Size = UDim2.new(1,0,1,0),
-     BackgroundTransparency = 1,
-     Text = "✦ FREE VERSION",
-     TextSize = 9,
-     TextColor3 = Color3.fromRGB(15, 10, 0),
-     Font = Enum.Font.GothamBold,
-     TextXAlignment = Enum.TextXAlignment.Center,
- })
-
  -- Buat tombol dengan posisi absolut (bukan anchor kanan)
  local function MkWinBtn(xPos, color, sym)
  local b = Btn(TopBar, color, UDim2.new(0,22,0,22))
@@ -887,8 +861,6 @@ end
 
 function SwitchTab(tag)
  if ActiveTab == tag then return end
- -- [FREE] Tab Config dikunci di versi FREE
- if tag == "config" then return end
  ActiveTab = tag
  for t, p in pairs(Panels) do p.Visible = (t == tag) end
  for _, ref in ipairs(NavRefs) do
@@ -937,17 +909,6 @@ for i, item in ipairs(NAV_ITEMS) do
  icoL.BackgroundTransparency = 1
 NavRefs[i] = {tag=item.tag, bg=bg, bar=bar, ico=icoL, lbl=lblL}
  bg.MouseButton1Click:Connect(function() SwitchTab(item.tag) end)
- -- [FREE] Tambah badge lock pada tab yang dikunci
- if item.tag == "config" then
-  -- Overlay badge di pojok kanan atas tombol tab
-  local _lockBadge = Frame(bg, Color3.fromRGB(120,60,0), UDim2.new(0,14,0,14))
-  _lockBadge.AnchorPoint = Vector2.new(1,0); _lockBadge.Position = UDim2.new(1,-2,0,2)
-  _lockBadge.BackgroundTransparency = 0.2; Corner(_lockBadge, 4)
-  local _lockIco = Label(_lockBadge, "🔒", 7, Color3.fromRGB(255,200,80), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-  _lockIco.Size = UDim2.new(1,0,1,0)
-  -- Redup teks tab agar terlihat disabled
-  lblL.TextColor3 = Color3.fromRGB(100,90,70)
- end
 end
 
 -- ============================================================
@@ -1113,49 +1074,6 @@ function ToggleRow(panel, title, desc, order, onToggle)
   if onToggle then onToggle(v) end
  end
  pill.MouseButton1Click:Connect(function() SetState(not state) end)
- return row, SetState, SetVisual
-end
-
--- ============================================================
--- [FREE VERSION] LockedToggleRow
--- Sama seperti ToggleRow, tapi toggle di-disable + badge 🔒 PREMIUM
--- Digunakan untuk fitur yang hanya tersedia di versi PREMIUM
--- Cara pakai: ganti ToggleRow(...) dengan LockedToggleRow(...)
--- pada fitur yang ingin dikunci di versi FREE.
--- ============================================================
-function LockedToggleRow(panel, title, desc, order)
- local row = Frame(panel, C.SURFACE, UDim2.new(1,0,0,44))
- row.LayoutOrder = order or 1; Corner(row, 10); Stroke(row, C.BORD, 1.5, 0.88)
-
- -- Label judul (sedikit lebih sempit karena ada badge PREMIUM)
- local lbl = Label(row, title, 13, C.TXT3, Enum.Font.GothamBold)
- lbl.Size = UDim2.new(1,-130,0,20); lbl.Position = UDim2.new(0,14,0.5,-10)
-
- -- Badge 🔒 PREMIUM
- local badgeBg = Frame(row, Color3.fromRGB(120, 60, 0), UDim2.new(0,86,0,22))
- badgeBg.AnchorPoint = Vector2.new(1,0.5)
- badgeBg.Position = UDim2.new(1,-68,0.5,0)
- badgeBg.BackgroundTransparency = 0.25
- Corner(badgeBg, 6)
- New("UIStroke", {Parent=badgeBg, Color=Color3.fromRGB(255,160,40), Thickness=1, Transparency=0.4})
- local badgeLbl = Label(badgeBg, "🔒 PREMIUM", 9, Color3.fromRGB(255,200,80), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
- badgeLbl.Size = UDim2.new(1,0,1,0)
-
- -- Toggle pill (disabled, selalu OFF, tidak bisa diklik)
- local pill = Frame(row, C.PILL_OFF, UDim2.new(0,52,0,30))
- pill.AnchorPoint = Vector2.new(1,0.5)
- pill.Position = UDim2.new(1,-12,0.5,0)
- Corner(pill, 15)
- pill.BackgroundTransparency = 0.6 -- lebih transparan = kesan disabled
- local knob = Frame(pill, C.KNOB_OFF, UDim2.new(0,24,0,24))
- knob.AnchorPoint = Vector2.new(0,0.5)
- knob.Position = UDim2.new(0,3,0.5,0); Corner(knob, 12)
- knob.BackgroundTransparency = 0.5
-
- -- Dummy SetState & SetVisual (no-op, tidak melakukan apapun)
- local function SetState(_v) end
- local function SetVisual(_v) end
-
  return row, SetState, SetVisual
 end
 
@@ -3540,7 +3458,11 @@ end
  end)
 
  --  Toggle Auto Sell (DI BAWAH counter) 
- local _sellToggleRow, _sellToggleSet, _sellVis = LockedToggleRow(p,"AUTO SELL HERO EQUIP","Auto sell all items (except Locked)",4)
+ local _sellToggleRow, _sellToggleSet, _sellVis = ToggleRow(p,"AUTO SELL HERO EQUIP","Auto sell all items (except Locked)",4,function(on)
+ _autoSellOn = on
+ _autoSellOnState = on
+ if _sellToggleCb then _sellToggleCb(on) end
+ end)
  _setSellHeroToggle = _sellToggleSet
  _visSellHero = _sellVis
 
@@ -3922,20 +3844,11 @@ end
  -- -- Toggle row ----------------------------------------------
  local swRow = Frame(p, C.SURFACE, UDim2.new(1,0,0,44))
  swRow.LayoutOrder = 6; Corner(swRow,10); Stroke(swRow, C.BORD, 1.5, 0.3)
- local swLbl = Label(swRow, "AUTO SELL WEAPON", 13, C.TXT3, Enum.Font.GothamBold) -- [FREE] greyed out
- swLbl.Size = UDim2.new(1,-130,0,20); swLbl.Position = UDim2.new(0,14,0.5,-10)
- -- [FREE] Badge PREMIUM
- local _swBadgeBg = Frame(swRow, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
- _swBadgeBg.AnchorPoint = Vector2.new(1,0.5); _swBadgeBg.Position = UDim2.new(1,-68,0.5,0)
- _swBadgeBg.BackgroundTransparency = 0.25; Corner(_swBadgeBg,6)
- New("UIStroke",{Parent=_swBadgeBg,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
- local _swBadgeLbl = Label(_swBadgeBg,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- _swBadgeLbl.Size = UDim2.new(1,0,1,0)
- local swPill = Btn(swRow, C.PILL_OFF, UDim2.new(0,52,0,30)) -- tetap Btn agar event valid
+ local swLbl = Label(swRow, "AUTO SELL WEAPON", 13, C.TXT, Enum.Font.GothamBold)
+ swLbl.Size = UDim2.new(1,-68,0,20); swLbl.Position = UDim2.new(0,14,0.5,-10)
+ local swPill = Btn(swRow, C.PILL_OFF, UDim2.new(0,52,0,30))
  swPill.AnchorPoint = Vector2.new(1,0.5); swPill.Position = UDim2.new(1,-12,0.5,0); Corner(swPill,13)
- swPill.BackgroundTransparency = 0.6
  local swKnob = Frame(swPill, C.KNOB_OFF, UDim2.new(0,24,0,24))
- swKnob.BackgroundTransparency = 0.5
  swKnob.AnchorPoint = Vector2.new(0,0.5); swKnob.Position = UDim2.new(0,3,0.5,0); Corner(swKnob,10)
 
  -- -- Dropdown filter card (LayoutOrder 6) --------------------
@@ -4262,8 +4175,6 @@ end
  end
 
  swPill.MouseButton1Click:Connect(function()
-  return -- [FREE] Fitur dikunci di versi FREE
-  --[[ DEAD CODE - wrapped agar executor tidak parse error
   _autoSellWeaponOn = not _autoSellWeaponOn
   _autoSellWeaponState = _autoSellWeaponOn
   local on = _autoSellWeaponOn
@@ -4277,7 +4188,6 @@ end
    if _swConn then pcall(function() task.cancel(_swConn) end); _swConn=nil end
    SetSWStatus("Idle - ".._swSoldCount.." SOLD", C.TXT3)
   end
-  --]]
  end)
  -- Expose setter weapon sell ke global
  _autoSellWeaponSet = function(v)
@@ -4408,20 +4318,11 @@ end
  -- UI 
  local dgRow = Frame(p, C.SURFACE, UDim2.new(1,0,0,44))
  dgRow.LayoutOrder = 9; Corner(dgRow,10); Stroke(dgRow, C.BORD, 1.5, 0.3)
- local dgLbl = Label(dgRow, "AUTO DECOMPOSE GEMS", 13, C.TXT3, Enum.Font.GothamBold) -- [FREE] greyed out
- dgLbl.Size = UDim2.new(1,-130,0,20); dgLbl.Position = UDim2.new(0,14,0.5,-10)
- -- [FREE] Badge PREMIUM
- local _dgBadgeBg = Frame(dgRow, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
- _dgBadgeBg.AnchorPoint = Vector2.new(1,0.5); _dgBadgeBg.Position = UDim2.new(1,-68,0.5,0)
- _dgBadgeBg.BackgroundTransparency = 0.25; Corner(_dgBadgeBg,6)
- New("UIStroke",{Parent=_dgBadgeBg,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
- local _dgBadgeLbl = Label(_dgBadgeBg,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
- _dgBadgeLbl.Size = UDim2.new(1,0,1,0)
- local dgPill = Btn(dgRow, C.PILL_OFF, UDim2.new(0,52,0,30)) -- tetap Btn agar event valid
+ local dgLbl = Label(dgRow, "AUTO DECOMPOSE GEMS", 13, C.TXT, Enum.Font.GothamBold)
+ dgLbl.Size = UDim2.new(1,-68,0,20); dgLbl.Position = UDim2.new(0,14,0.5,-10)
+ local dgPill = Btn(dgRow, C.PILL_OFF, UDim2.new(0,52,0,30))
  dgPill.AnchorPoint = Vector2.new(1,0.5); dgPill.Position = UDim2.new(1,-12,0.5,0); Corner(dgPill,13)
- dgPill.BackgroundTransparency = 0.6
  local dgKnob = Frame(dgPill, C.KNOB_OFF, UDim2.new(0,24,0,24))
- dgKnob.BackgroundTransparency = 0.5
  dgKnob.AnchorPoint = Vector2.new(0,0.5); dgKnob.Position = UDim2.new(0,3,0.5,0); Corner(dgKnob,10)
 
  -- Input Text Boxes untuk Min & Max Level 
@@ -4694,8 +4595,6 @@ end
  end
 
  dgPill.MouseButton1Click:Connect(function()
- return -- [FREE] Fitur dikunci di versi FREE
- --[[ DEAD CODE - wrapped agar executor tidak parse error
  _autoDecompGemOn = not _autoDecompGemOn
  _autoDecompGemState = _autoDecompGemOn
  local on = _autoDecompGemOn
@@ -4710,7 +4609,6 @@ end
  if _autoDecompGemThread then pcall(function() task.cancel(_autoDecompGemThread) end) end
  SetDGStatus("Idle - STOPPED", C.TXT3)
  end
- --]]
  end)
  -- Expose setter gem decompose + level ke global
  _autoDecompGemSet = function(v)
@@ -4886,7 +4784,9 @@ do
      end
  end
 
- local _hrcrRow, _hrcrSet, _hrcrVis = LockedToggleRow(p,"HIDE REROLL CHAT","Sembunyikan baris chat 'just reroll a...' tanpa menghilangkan chat box",1)
+ local _hrcrRow, _hrcrSet, _hrcrVis = ToggleRow(p,"HIDE REROLL CHAT","Sembunyikan baris chat 'just reroll a...' tanpa menghilangkan chat box",1,function(on)
+     ApplyHideReroll(on)
+ end)
  -- Expose ke global Config
  _setHideRerollChat = ApplyHideReroll
  _visHideRerollChat = _hrcrVis
@@ -5161,7 +5061,9 @@ do
      end
  end
 
- local _hrewRow, _hrewSet, _hrewVis = LockedToggleRow(p, "AUTO HIDE REWARD", "Sembunyikan popup reward.", 4)
+ local _hrewRow, _hrewSet, _hrewVis = ToggleRow(p, "AUTO HIDE REWARD", "Sembunyikan popup reward.", 4, function(on)
+     ApplyHideReward(on)
+ end)
  -- Expose ke global Config
  _setHideReward = ApplyHideReward
  _visHideRewardPanel = _hrewVis
@@ -5391,27 +5293,12 @@ do
  end
 
  -- GUI
- -- [FREE UNLOCK] Random Attack dibuka untuk user FREE
- local _raRow, SetRA, SetRAVis = ToggleRow(p, "Random Attack", "Attack Enemy", 1, function(on)
-  if on then
-   StartRA()
-  else
-   StopRA()
-  end
-  _raRunningState = on
+ local _, SetRA, SetRAVis = ToggleRow(p, "Random Attack", "Attack Enemy", 1, function(on)
+ _raRunningState = on
+ if on then StartRA() else StopRA() end
  end)
  _setRAToggle = SetRA
  _visRandomAtk = SetRAVis
-
- -- Update kill counter setiap detik
- task.spawn(function()
-  while true do
-   task.wait(1)
-   if raKillLbl and RA then
-    raKillLbl.Text = "Kill: "..(RA.killed or 0)
-   end
-  end
- end)
 
  local raKillLbl = Label(p, "Kill: 0", 10, C.DIM, Enum.Font.GothamBold)
  raKillLbl.Size = UDim2.new(1,0,0,14); raKillLbl.LayoutOrder = 2
@@ -5554,36 +5441,6 @@ end
 -- ============================================================
 do
  local p = NewPanel("attack")
-
- -- [FREE VERSION] Tab Attack sepenuhnya dikunci
- -- Overlay PREMIUM menutupi seluruh isi panel
- do
-  local lockOverlay = Frame(p, Color3.fromRGB(10,8,20), UDim2.new(1,0,1,0))
-  lockOverlay.BackgroundTransparency = 0.08
-  lockOverlay.ZIndex = 50
-  lockOverlay.LayoutOrder = -99
-  Corner(lockOverlay, 10)
-  New("UIStroke",{Parent=lockOverlay,Color=Color3.fromRGB(255,160,40),Thickness=1.5,Transparency=0.2})
-  local lockIcon = New("TextLabel",{
-   Parent=lockOverlay, BackgroundTransparency=1,
-   Size=UDim2.new(1,0,0,40), Position=UDim2.new(0,0,0.28,0),
-   Text="🔒", TextSize=36, TextColor3=Color3.fromRGB(255,200,80),
-   Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Center, ZIndex=51
-  })
-  local lockTitleLbl = New("TextLabel",{
-   Parent=lockOverlay, BackgroundTransparency=1,
-   Size=UDim2.new(1,0,0,22), Position=UDim2.new(0,0,0.28,46),
-   Text="FITUR PREMIUM", TextSize=16, TextColor3=Color3.fromRGB(255,200,80),
-   Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Center, ZIndex=51
-  })
-  local lockSubLbl = New("TextLabel",{
-   Parent=lockOverlay, BackgroundTransparency=1,
-   Size=UDim2.new(0.85,0,0,32), Position=UDim2.new(0.075,0,0.28,72),
-   Text="Tab Attack hanya tersedia di versi PREMIUM.\nUpgrade untuk menggunakan fitur ini.", TextSize=11, TextColor3=Color3.fromRGB(180,160,120),
-   Font=Enum.Font.Gotham, TextXAlignment=Enum.TextXAlignment.Center,
-   TextWrapped=true, ZIndex=51
-  })
- end
 
  local ddBackdrop = Instance.new("TextButton",ScreenGui)
  ddBackdrop.Size=UDim2.new(1,0,1,0); ddBackdrop.Position=UDim2.new(0,0,0,0)
@@ -5810,7 +5667,9 @@ do
  end)
  end
 
- local _maToggleRow, _setMaToggle, _maToglVis = LockedToggleRow(p,"Mass Attack","Serang semua musuh di map sekaligus",6)
+ local _maToggleRow, _setMaToggle, _maToglVis = ToggleRow(p,"Mass Attack","Serang semua musuh di map sekaligus",6,function(on)
+    DoMassAttack(on)
+  end)
  _setMaToggleGlobal = _setMaToggle
  _visMassAtk = _maToglVis
 
@@ -6029,36 +5888,6 @@ end
 -- ============================================================
 do
  local p = NewPanel("autoroll")
-
- -- [FREE VERSION] Tab Reroll sepenuhnya dikunci
- do
-  local lockOverlay = Frame(p, Color3.fromRGB(10,8,20), UDim2.new(1,0,1,0))
-  lockOverlay.BackgroundTransparency = 0.08
-  lockOverlay.ZIndex = 50
-  lockOverlay.LayoutOrder = -99
-  Corner(lockOverlay, 10)
-  New("UIStroke",{Parent=lockOverlay,Color=Color3.fromRGB(255,160,40),Thickness=1.5,Transparency=0.2})
-  New("TextLabel",{
-   Parent=lockOverlay, BackgroundTransparency=1,
-   Size=UDim2.new(1,0,0,40), Position=UDim2.new(0,0,0.28,0),
-   Text="🔒", TextSize=36, TextColor3=Color3.fromRGB(255,200,80),
-   Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Center, ZIndex=51
-  })
-  New("TextLabel",{
-   Parent=lockOverlay, BackgroundTransparency=1,
-   Size=UDim2.new(1,0,0,22), Position=UDim2.new(0,0,0.28,46),
-   Text="FITUR PREMIUM", TextSize=16, TextColor3=Color3.fromRGB(255,200,80),
-   Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Center, ZIndex=51
-  })
-  New("TextLabel",{
-   Parent=lockOverlay, BackgroundTransparency=1,
-   Size=UDim2.new(0.85,0,0,32), Position=UDim2.new(0.075,0,0.28,72),
-   Text="Tab Reroll hanya tersedia di versi PREMIUM.\nUpgrade untuk menggunakan fitur ini.", TextSize=11, TextColor3=Color3.fromRGB(180,160,120),
-   Font=Enum.Font.Gotham, TextXAlignment=Enum.TextXAlignment.Center,
-   TextWrapped=true, ZIndex=51
-  })
- end
-
  local hrOpen = false
 
  -- State
@@ -7541,7 +7370,38 @@ do
  mSliderWrap.LayoutOrder = 1; mSliderWrap.Size = UDim2.new(1,0,0,32)
 
  -- Toggle ON/OFF
- local _, _mergeToggleSet, _mergeVis = LockedToggleRow(mergeInner,"Merge Potion","ON = START merge",3)
+ local _, _mergeToggleSet, _mergeVis = ToggleRow(mergeInner,"Merge Potion","ON = START merge",3,function(on)
+ if on then
+ if not _mergeSelectedId then
+ if _mergeStatusLbl then _mergeStatusLbl.Text = "[!] SELECT ITEM PLEASE!" end
+ -- matikan toggle lagi
+ if _mergeToggleSet then task.defer(function() _mergeToggleSet(false) end) end
+ return
+ end
+ _mergeRunning = true
+ _mergeRunningState = true
+ if _mergeThread then pcall(function() task.cancel(_mergeThread) end) end
+ _mergeThread = task.spawn(function()
+ while _mergeRunning do
+ local id = _mergeSelectedId
+ local cnt = _mergeCount
+ if _mergeStatusLbl then _mergeStatusLbl.Text = "[M] Merging id=" .. id .. " x" .. cnt end
+ pcall(function()
+ local re = Remotes:FindFirstChild("PotionMerge")
+ if re then re:InvokeServer({id=id, count=cnt}) end
+ end)
+ if _mergeStatusLbl then _mergeStatusLbl.Text = "[OK] Merge DONE x" .. cnt end
+ task.wait(0.5)
+ end
+ if _mergeStatusLbl then _mergeStatusLbl.Text = "Idle - toggle OFF" end
+ end)
+ else
+ _mergeRunning = false
+ _mergeRunningState = false
+ if _mergeThread then pcall(function() task.cancel(_mergeThread) end); _mergeThread = nil end
+ if _mergeStatusLbl then _mergeStatusLbl.Text = "Idle - SELECT ITEM & ENABLE" end
+ end
+ end)
  _setMergeToggle = _mergeToggleSet
  _visMerge = _mergeVis
 
@@ -7635,7 +7495,37 @@ do
  uSliderWrap.LayoutOrder = 1; uSliderWrap.Size = UDim2.new(1,0,0,32)
 
  -- Toggle ON/OFF
- local _, _useToggleSet, _useVis = LockedToggleRow(useInner,"Use Potion","ON = start use potion",3)
+ local _, _useToggleSet, _useVis = ToggleRow(useInner,"Use Potion","ON = start use potion",3,function(on)
+ if on then
+ if not _useSelectedId then
+ if _useStatusLbl then _useStatusLbl.Text = "[!] SELECT ITEM PLEASE!" end
+ if _useToggleSet then task.defer(function() _useToggleSet(false) end) end
+ return
+ end
+ _useRunning = true
+ _useRunningState = true
+ if _useThread then pcall(function() task.cancel(_useThread) end) end
+ _useThread = task.spawn(function()
+ while _useRunning do
+ local id = _useSelectedId
+ local cnt = _useCount
+ if _useStatusLbl then _useStatusLbl.Text = "[U] Using id=" .. id .. " x" .. cnt end
+ pcall(function()
+ local re = Remotes:FindFirstChild("UseItem")
+ if re then re:InvokeServer({useCount=cnt, itemId=id}) end
+ end)
+ if _useStatusLbl then _useStatusLbl.Text = "[OK] Use DONE x" .. cnt end
+ task.wait(0.5)
+ end
+ if _useStatusLbl then _useStatusLbl.Text = "Idle - toggle OFF" end
+ end)
+ else
+ _useRunning = false
+ _useRunningState = false
+ if _useThread then pcall(function() task.cancel(_useThread) end); _useThread = nil end
+ if _useStatusLbl then _useStatusLbl.Text = "Idle - SELECT ITEM & ENABLE" end
+ end
+ end)
  _setUseToggle = _useToggleSet
  _visUse = _useVis
 
@@ -12331,8 +12221,6 @@ do
  -- Default/By Rank/By Map/Hard/Easy/Manual
  local PM_OPTS = {"Default","By Rank","By Map","Hard","Easy","Manual"}
  local PM_KEYS = {"default","byrank","bymap","hard","easy","manual"}
- -- [FREE VERSION] Mode yang dikunci (hanya Hard, Easy yang bebas)
- local PM_LOCKED = {[1]=true,[2]=true,[3]=true,[4]=false,[5]=false,[6]=true}
  local PM_COLORS = {
  Color3.fromRGB(148,195,255), -- Default: biru es
  Color3.fromRGB(200,120,255), -- By Rank: ungu
@@ -12365,7 +12253,7 @@ do
  easy = {map=false, rank=false, rune=false},
  manual = {map=true, rank=true, rune=true},
  }
- local curPM = 5 -- [FREE] Default ke Easy (Default/ByRank/ByMap/Manual dikunci)
+ local curPM = 1
  RAID.pickMode = PM_KEYS[curPM]
 
  local pmHdr = Label(raidInner,"PICK MODE",10,C.TXT3,Enum.Font.GothamBold)
@@ -12410,21 +12298,7 @@ do
  iL.Font=Enum.Font.Gotham; iL.TextColor3=PM_COLORS[i]
  iL.TextXAlignment=Enum.TextXAlignment.Left; iL.ZIndex=9999
  local ii=i
- -- [FREE] Tampilkan badge lock jika mode ini dikunci
- if PM_LOCKED and PM_LOCKED[ii] then
-  iL.TextColor3 = Color3.fromRGB(120,100,80)
-  local _pmLB = New("TextLabel",{
-   Parent=item, Size=UDim2.new(0,70,0,16),
-   AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,-4,0.5,0),
-   BackgroundColor3=Color3.fromRGB(90,40,0), BackgroundTransparency=0.2,
-   Text="🔒 PREMIUM", TextSize=8, TextColor3=Color3.fromRGB(255,200,80),
-   Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Center,
-   ZIndex=9999, BorderSizePixel=0
-  })
-  New("UICorner",{Parent=_pmLB,CornerRadius=UDim.new(0,4)})
- end
  item.MouseButton1Click:Connect(function()
- if PM_LOCKED and PM_LOCKED[ii] then return end -- [FREE] Blokir mode dikunci
  CloseActiveDD()
  curPM=ii; RAID.pickMode=PM_KEYS[ii]
  RAID.difficulty=PM_TO_DIFF[PM_KEYS[ii]]; RAID.snapshotMapId=nil
@@ -13146,20 +13020,24 @@ do
   local listTogLbl = Label(listCtrlRow, "List Entry", 12, C.TXT, Enum.Font.GothamBold)
   listTogLbl.Size = UDim2.new(0,70,1,0)
 
-  -- [FREE] Pill toggle dikunci - Frame bukan Btn
-  local listPill = Frame(listCtrlRow, C.PILL_OFF, UDim2.new(0,48,0,26))
+  -- Pill toggle ON/OFF
+  local listPill = Btn(listCtrlRow, RAID.listEnabled and C.PILL_ON or C.PILL_OFF, UDim2.new(0,48,0,26))
   listPill.Position = UDim2.new(0,76,0.5,-13); Corner(listPill, 12)
-  listPill.BackgroundTransparency = 0.6
-  local listKnob = Frame(listPill, C.KNOB_OFF, UDim2.new(0,20,0,20))
+  local listKnob = Frame(listPill, RAID.listEnabled and C.KNOB_ON or C.KNOB_OFF, UDim2.new(0,20,0,20))
   listKnob.AnchorPoint = Vector2.new(0,0.5)
-  listKnob.Position = UDim2.new(0,3,0.5,0)
-  Corner(listKnob, 9); listKnob.BackgroundTransparency = 0.5
-  -- [FREE] Badge PREMIUM di sebelah pill
-  local _rlBadge = Frame(listCtrlRow, Color3.fromRGB(120,60,0), UDim2.new(0,82,0,20))
-  _rlBadge.Position = UDim2.new(0,130,0.5,-10); _rlBadge.BackgroundTransparency = 0.25; Corner(_rlBadge,6)
-  New("UIStroke",{Parent=_rlBadge,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
-  local _rlBL = Label(_rlBadge,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
-  _rlBL.Size = UDim2.new(1,0,1,0)
+  listKnob.Position = RAID.listEnabled and UDim2.new(1,-23,0.5,0) or UDim2.new(0,3,0.5,0)
+  Corner(listKnob, 9)
+
+  listPill.MouseButton1Click:Connect(function()
+   RAID.listEnabled = not RAID.listEnabled
+   local on = RAID.listEnabled
+   TweenService:Create(listPill, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundColor3 = on and C.PILL_ON or C.PILL_OFF}):Play()
+   TweenService:Create(listKnob, TweenInfo.new(0.16), {
+    Position = on and UDim2.new(1,-23,0.5,0) or UDim2.new(0,3,0.5,0),
+    BackgroundColor3 = on and C.KNOB_ON or C.KNOB_OFF,
+   }):Play()
+   if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+  end)
   -- Expose list toggle visual setter ke global Config
   _setRaidListEnabledVis = function(on)
    RAID.listEnabled = on
@@ -13170,12 +13048,12 @@ do
    }):Play()
   end
 
-  -- [FREE] Tombol Save Entry - disabled
-  local saveBtn = Frame(listCtrlRow, C.SURFACE, UDim2.new(1,-220,1,-4))
-  saveBtn.Position = UDim2.new(0,216,0,2)
-  Corner(saveBtn, 7); saveBtn.BackgroundTransparency = 0.6
-  local saveLbl = Label(saveBtn, "+ Save Entry", 11, C.TXT3, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-  saveLbl.Size = UDim2.new(1,0,1,0); saveLbl.TextTransparency = 0.4
+  -- Tombol Save Entry
+  local saveBtn = Btn(listCtrlRow, C.ACC, UDim2.new(1,-136,1,-4))
+  saveBtn.Position = UDim2.new(0,132,0,2)
+  Corner(saveBtn, 7); Stroke(saveBtn, C.ACC2, 1, 0.3)
+  local saveLbl = Label(saveBtn, "+ Save Entry", 11, Color3.fromRGB(255,255,255), Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+  saveLbl.Size = UDim2.new(1,0,1,0)
 
   -- Container untuk list rows (ScrollingFrame)
   local listContainer = Instance.new("ScrollingFrame")
@@ -13290,27 +13168,24 @@ do
   RebuildAllRows()
 
   -- Tombol Save Entry: snapshot Maps + Rank saat ini -> tambah ke list
-  -- [FREE FIX] saveBtn adalah Frame di versi FREE - guard agar tidak crash
-  if saveBtn:IsA("TextButton") or saveBtn:IsA("ImageButton") then
-   saveBtn.MouseButton1Click:Connect(function()
-    -- Snapshot Maps (copy)
-    local snapMaps = {}
-    for mn, v in pairs(RAID.preferMaps) do
-     snapMaps[mn] = v
-    end
-    -- Snapshot Ranks (copy)
-    local snapRanks = {}
-    for g, v in pairs(RAID.runeGrades) do
-     snapRanks[g] = v
-    end
-    -- Tambah ke list
-    table.insert(RAID.listEntries, {maps=snapMaps, ranks=snapRanks})
-    -- Buat row baru
-    BuildEntryRow(#RAID.listEntries)
-    ResizeListContainer()
-    if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
-   end)
-  end
+  saveBtn.MouseButton1Click:Connect(function()
+   -- Snapshot Maps (copy)
+   local snapMaps = {}
+   for mn, v in pairs(RAID.preferMaps) do
+    snapMaps[mn] = v
+   end
+   -- Snapshot Ranks (copy)
+   local snapRanks = {}
+   for g, v in pairs(RAID.runeGrades) do
+    snapRanks[g] = v
+   end
+   -- Tambah ke list
+   table.insert(RAID.listEntries, {maps=snapMaps, ranks=snapRanks})
+   -- Buat row baru
+   BuildEntryRow(#RAID.listEntries)
+   ResizeListContainer()
+   if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
+  end)
 
   ResizeListContainer()
  end -- end RAID LIST ENTRY UI do block
@@ -13333,17 +13208,8 @@ do
  New("UIStroke",{Parent=ascHeader, Color=Color3.fromRGB(220,180,50), Thickness=1.5, Transparency=0.35})
  local ascArr = Label(ascHeader, ">", 13, Color3.fromRGB(220,180,50), Enum.Font.GothamBold)
  ascArr.Size = UDim2.new(0,22,1,0); ascArr.Position = UDim2.new(0,10,0,0)
- local ascHeaderLbl = Label(ascHeader, "Auto RAID Ascension", 14, C.TXT3, Enum.Font.GothamBold)
- ascHeaderLbl.Size = UDim2.new(1,-130,1,0); ascHeaderLbl.Position = UDim2.new(0,34,0,0)
- -- [FREE] Badge PREMIUM pada header Auto Raid Ascension
- do
-  local _fBadge = Frame(ascHeader, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
-  _fBadge.AnchorPoint = Vector2.new(1,0.5); _fBadge.Position = UDim2.new(1,-12,0.5,0)
-  _fBadge.BackgroundTransparency = 0.25; Corner(_fBadge,6)
-  New("UIStroke",{Parent=_fBadge,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
-  local _fBL = Label(_fBadge,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
-  _fBL.Size = UDim2.new(1,0,1,0)
- end
+ local ascHeaderLbl = Label(ascHeader, "Auto RAID Ascension", 14, C.TXT, Enum.Font.GothamBold)
+ ascHeaderLbl.Size = UDim2.new(1,-50,1,0); ascHeaderLbl.Position = UDim2.new(0,34,0,0)
 
  local ascBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
  ascBody.LayoutOrder = 4
@@ -13367,7 +13233,9 @@ do
  end
 
  ascHeader.MouseButton1Click:Connect(function()
-  return -- [FREE] Fitur dikunci di versi FREE
+  ascOpen = not ascOpen; ascBody.Visible = ascOpen
+  ascArr.Text = ascOpen and "v" or ">"
+  if ascOpen then task.defer(ResizeAscBody) end
  end)
 
  -- ROW 1: STATUS
@@ -14693,17 +14561,8 @@ do
  siegeHeader.LayoutOrder = 20; Corner(siegeHeader,10); Stroke(siegeHeader,C.BORD, 1.5,0.88)
  local siegeArrow = Label(siegeHeader,">",13,C.ACC,Enum.Font.GothamBold)
  siegeArrow.Size = UDim2.new(0,22,1,0); siegeArrow.Position = UDim2.new(0,10,0,0)
- local siegeHeaderLbl = Label(siegeHeader,"Auto Siege",14,C.TXT3,Enum.Font.GothamBold)
- siegeHeaderLbl.Size = UDim2.new(1,-130,1,0); siegeHeaderLbl.Position = UDim2.new(0,34,0,0)
- -- [FREE] Badge PREMIUM pada header Auto Siege
- do
-  local _fBadge = Frame(siegeHeader, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
-  _fBadge.AnchorPoint = Vector2.new(1,0.5); _fBadge.Position = UDim2.new(1,-12,0.5,0)
-  _fBadge.BackgroundTransparency = 0.25; Corner(_fBadge,6)
-  New("UIStroke",{Parent=_fBadge,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
-  local _fBL = Label(_fBadge,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
-  _fBL.Size = UDim2.new(1,0,1,0)
- end
+ local siegeHeaderLbl = Label(siegeHeader,"Auto Siege",14,C.TXT,Enum.Font.GothamBold)
+ siegeHeaderLbl.Size = UDim2.new(1,-50,1,0); siegeHeaderLbl.Position = UDim2.new(0,34,0,0)
 
  local siegeBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
  siegeBody.LayoutOrder = 21; siegeBody.ClipsDescendants = true
@@ -14721,7 +14580,9 @@ do
  end
 
  siegeHeader.MouseButton1Click:Connect(function()
- return -- [FREE] Fitur dikunci di versi FREE
+ siegeOpen = not siegeOpen; siegeBody.Visible = siegeOpen
+ siegeArrow.Text = siegeOpen and "v" or ">"
+ if siegeOpen then task.defer(ResizeSiegeBody) end
  end)
 
  -- Gunakan siegeInner sebagai parent untuk semua konten siege
@@ -15447,17 +15308,8 @@ do
  dungeonHeader.LayoutOrder = 22; Corner(dungeonHeader,10); Stroke(dungeonHeader,C.BORD, 1.5,0.88)
  local dungeonArrow = Label(dungeonHeader,">",13,C.ACC,Enum.Font.GothamBold)
  dungeonArrow.Size = UDim2.new(0,22,1,0); dungeonArrow.Position = UDim2.new(0,10,0,0)
- local dungeonHeaderLbl = Label(dungeonHeader,"Auto Dungeon",14,C.TXT3,Enum.Font.GothamBold)
- dungeonHeaderLbl.Size = UDim2.new(1,-130,1,0); dungeonHeaderLbl.Position = UDim2.new(0,34,0,0)
- -- [FREE] Badge PREMIUM pada header Auto Dungeon
- do
-  local _fBadge = Frame(dungeonHeader, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
-  _fBadge.AnchorPoint = Vector2.new(1,0.5); _fBadge.Position = UDim2.new(1,-12,0.5,0)
-  _fBadge.BackgroundTransparency = 0.25; Corner(_fBadge,6)
-  New("UIStroke",{Parent=_fBadge,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
-  local _fBL = Label(_fBadge,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
-  _fBL.Size = UDim2.new(1,0,1,0)
- end
+ local dungeonHeaderLbl = Label(dungeonHeader,"Auto Dungeon",14,C.TXT,Enum.Font.GothamBold)
+ dungeonHeaderLbl.Size = UDim2.new(1,-50,1,0); dungeonHeaderLbl.Position = UDim2.new(0,34,0,0)
  -- Badge "PRIORITY" kecil
  local prioBadge = Frame(dungeonHeader, Color3.fromRGB(252,211,77), UDim2.new(0,52,0,16))
  prioBadge.AnchorPoint = Vector2.new(1,0.5); prioBadge.Position = UDim2.new(1,-10,0.5,0)
@@ -15481,7 +15333,9 @@ do
  end
 
  dungeonHeader.MouseButton1Click:Connect(function()
- return -- [FREE] Fitur dikunci di versi FREE
+ dungeonOpen = not dungeonOpen; dungeonBody.Visible = dungeonOpen
+ dungeonArrow.Text = dungeonOpen and "v" or ">"
+ if dungeonOpen then task.defer(ResizeDungeonBody) end
  end)
 
  local p2 = dungeonInner -- alias
@@ -15986,17 +15840,8 @@ do
     st2Header.LayoutOrder = 24; Corner(st2Header,10); Stroke(st2Header,C.BORD, 1.5,0.88)
     local st2Arrow = Label(st2Header,">",13,C.ACC,Enum.Font.GothamBold)
     st2Arrow.Size = UDim2.new(0,22,1,0); st2Arrow.Position = UDim2.new(0,10,0,0)
-    local st2HeaderLbl = Label(st2Header,"Auto Single Tower Map 2",14,C.TXT3,Enum.Font.GothamBold)
-    st2HeaderLbl.Size = UDim2.new(1,-130,1,0); st2HeaderLbl.Position = UDim2.new(0,34,0,0)
- -- [FREE] Badge PREMIUM pada header Auto ST2
- do
-  local _fBadge = Frame(st2Header, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
-  _fBadge.AnchorPoint = Vector2.new(1,0.5); _fBadge.Position = UDim2.new(1,-12,0.5,0)
-  _fBadge.BackgroundTransparency = 0.25; Corner(_fBadge,6)
-  New("UIStroke",{Parent=_fBadge,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
-  local _fBL = Label(_fBadge,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
-  _fBL.Size = UDim2.new(1,0,1,0)
- end
+    local st2HeaderLbl = Label(st2Header,"Auto Single Tower Map 2",14,C.TXT,Enum.Font.GothamBold)
+    st2HeaderLbl.Size = UDim2.new(1,-50,1,0); st2HeaderLbl.Position = UDim2.new(0,34,0,0)
 
     local st2Body = Frame(p, C.BG2, UDim2.new(1,0,0,0))
     st2Body.LayoutOrder = 25; st2Body.ClipsDescendants = true
@@ -16014,7 +15859,9 @@ do
     end
 
     st2Header.MouseButton1Click:Connect(function()
-        return -- [FREE] Fitur dikunci di versi FREE
+        st2Open = not st2Open; st2Body.Visible = st2Open
+        st2Arrow.Text = st2Open and "v" or ">"
+        if st2Open then task.defer(ResizeST2Body) end
     end)
 
     local inner = st2Inner
@@ -16202,17 +16049,8 @@ do
     local jtpArrow = Label(jtpHeader,">",13,Color3.fromRGB(80,200,120),Enum.Font.GothamBold)
     jtpArrow.Size = UDim2.new(0,22,1,0); jtpArrow.Position = UDim2.new(0,10,0,0)
 
-    local jtpHeaderLbl = Label(jtpHeader,"JOIN TO TOWER MAP 2",14,C.TXT3,Enum.Font.GothamBold)
-    jtpHeaderLbl.Size = UDim2.new(1,-130,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
- -- [FREE] Badge PREMIUM pada header Join To Tower Map 2
- do
-  local _jtpBadge = Frame(jtpHeader, Color3.fromRGB(120,60,0), UDim2.new(0,86,0,22))
-  _jtpBadge.AnchorPoint = Vector2.new(1,0.5); _jtpBadge.Position = UDim2.new(1,-12,0.5,0)
-  _jtpBadge.BackgroundTransparency = 0.25; Corner(_jtpBadge,6)
-  New("UIStroke",{Parent=_jtpBadge,Color=Color3.fromRGB(255,160,40),Thickness=1,Transparency=0.4})
-  local _jtpBL = Label(_jtpBadge,"🔒 PREMIUM",9,Color3.fromRGB(255,200,80),Enum.Font.GothamBold,Enum.TextXAlignment.Center)
-  _jtpBL.Size = UDim2.new(1,0,1,0)
- end
+    local jtpHeaderLbl = Label(jtpHeader,"JOIN TO TOWER MAP 2",14,C.TXT2,Enum.Font.GothamBold)
+    jtpHeaderLbl.Size = UDim2.new(1,-50,1,0); jtpHeaderLbl.Position = UDim2.new(0,34,0,0)
 
     local jtpBody = Frame(p, C.BG2, UDim2.new(1,0,0,0))
     jtpBody.LayoutOrder = 27; jtpBody.ClipsDescendants = true
@@ -16236,7 +16074,10 @@ do
     end
 
     jtpHeader.MouseButton1Click:Connect(function()
-    return -- [FREE] Fitur dikunci di versi FREE
+        jtpOpen = not jtpOpen
+        jtpBody.Visible = jtpOpen
+        jtpArrow.Text = jtpOpen and "v" or ">"
+        if jtpOpen then task.defer(ResizeJTPBody) end
     end)
 
     -- -- Info card --------------------------------------------------------?
