@@ -1918,28 +1918,16 @@ local function EnsureSkillThread() EnsureHeroAtkThread() end
 local _heroFireTick = {}
 function FireAttack(g, pos)
  if not g then return end
- -- Hitung posisi 5 stud dari musuh ke arah player
- local _atkPos = pos or Vector3.new(0,0,0)
- local _char = LP and LP.Character
- local _pHRP = _char and _char:FindFirstChild("HumanoidRootPart")
- if _pHRP and pos then
-  local _dir = (_pHRP.Position - pos)
-  local _dir2 = Vector3.new(_dir.X, 0, _dir.Z)
-  if _dir2.Magnitude > 0.1 then
-   _atkPos = pos + _dir2.Unit * 5
-  else
-   _atkPos = pos + Vector3.new(1,0,0) * 5
-  end
- end
  if RE.Atk then pcall(function() RE.Atk:FireServer({attackEnemyGUID=g}) end) end
  if RE.HeroUseSkill and #HERO_GUIDS > 0 then
   local now = tick()
-  local last = _heroFireTick[g] or 0
+  local last = _heroFireTick[g] or 0 -- [PERBAIKAN 4 UTAMA] Menyembuhkan error baris 1383
   if now - last >= 0.04 then
    _heroFireTick[g] = now
    for _, hGuid in ipairs(HERO_GUIDS) do
-    -- [EDIT] Hanya attackType=1, posisi 5stud dari musuh ke arah player
-    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g,targetPos=_atkPos}) end)
+    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g}) end)
+    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=2,userId=MY_USER_ID,enemyGuid=g}) end)
+    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=3,userId=MY_USER_ID,enemyGuid=g}) end)
    end
   end
  end
@@ -5254,20 +5242,23 @@ do
  return true
  end
 
- -- [EDIT] Hanya scan Workspace.Enemys
  local function GetEnemiesF()
   local list = {}
   local seen = {}
-  local f = workspace:FindFirstChild("Enemys")
-  if f then
-   for _,e in ipairs(f:GetChildren()) do
-    if e:IsA("Model") then
-     local g = e:GetAttribute("EnemyGuid")
-     local h = e:FindFirstChild("HumanoidRootPart")
-     local hum = e:FindFirstChildOfClass("Humanoid")
-     if g and h and hum and hum.Health>0 and not seen[g] and IsPosValidF(h) then
-      seen[g] = true
-      table.insert(list, {model=e, guid=g, hrp=h, name=e.Name})
+  -- Primary + fallback folders
+  local FOLDERS = {"Enemys","EnemyCityRaid","CityRaidEnemys","Enemies","Enemy"}
+  for _, fname in ipairs(FOLDERS) do
+   local f = workspace:FindFirstChild(fname)
+   if f then
+    for _,e in ipairs(f:GetChildren()) do
+     if e:IsA("Model") then
+      local g = e:GetAttribute("EnemyGuid")
+      local h = e:FindFirstChild("HumanoidRootPart")
+      local hum = e:FindFirstChildOfClass("Humanoid")
+      if g and h and hum and hum.Health>0 and not seen[g] and IsPosValidF(h) then
+       seen[g] = true
+       table.insert(list, {model=e, guid=g, hrp=h})
+      end
      end
     end
    end
@@ -5276,114 +5267,84 @@ do
  end
 
  local function IsDeadF(e)
-  if not e then return true end
-  if _deadG_F[e.guid] then return true end
-  if not e.model or not e.model.Parent then return true end
-  local hum = e.model:FindFirstChildOfClass("Humanoid")
-  if not hum or hum.Health <= 0 then return true end
-  return false
+ if not e then return true end
+ if _deadG_F[e.guid] then return true end
+ if not e.model or not e.model.Parent then return true end
+ local h = e.model:FindFirstChildOfClass("Humanoid")
+ return false
  end
 
- -- [EDIT] Cari musuh by GUID spesifik (untuk By ID mode)
- local function FindByGuidF(guid)
-  for _,e in ipairs(GetEnemiesF()) do
-   if e.guid == guid and not IsDeadF(e) then return e end
-  end
-  return nil
+ local function FindByNameF(nm)
+ for _,e in ipairs(GetEnemiesF()) do
+ if e.model.Name==nm and not IsDeadF(e) then return e end
+ end
+ return nil
  end
 
- -- [EDIT] Cari musuh by Name (untuk By Name mode, round-robin)
- local function FindAllByNameF(nm)
-  local result = {}
-  for _,e in ipairs(GetEnemiesF()) do
-   if e.name == nm and not IsDeadF(e) then
-    table.insert(result, e)
-   end
-  end
-  return result
- end
-
- -- [EDIT] TpToF — teleport ke HumanoidRootPart musuh, jarak 5 stud dari musuh
  local function TpToF(tgt)
-  if not tgt or not tgt.hrp then return end
-  local char = LP.Character; if not char then return end
-  local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-  local tgtPos = tgt.hrp.Position
-  if tgtPos.Y < -10 then return end
-  -- Arah dari musuh ke player (di-flatten sumbu Y)
-  local dir = (hrp.Position - tgtPos)
-  local dir2 = Vector3.new(dir.X, 0, dir.Z)
-  if dir2.Magnitude < 0.5 then dir2 = Vector3.new(1,0,0) end
-  dir2 = dir2.Unit
-  -- Posisi target = HRP musuh + 5 stud ke arah player
-  local nearPos = tgtPos + dir2 * 5
-  -- Raycast untuk cari lantai aman
-  local params = RaycastParams.new()
-  params.FilterType = Enum.RaycastFilterType.Exclude
-  local ex = {}
-  if LP.Character then table.insert(ex, LP.Character) end
-  local ef = workspace:FindFirstChild("Enemys"); if ef then table.insert(ex, ef) end
-  params.FilterDescendantsInstances = ex
-  local safePos
-  for _,orig in ipairs({nearPos+Vector3.new(0,20,0), nearPos+Vector3.new(0,10,0), tgtPos+Vector3.new(5,20,0)}) do
-   local r = workspace:Raycast(orig, Vector3.new(0,-80,0), params)
-   if r and r.Position.Y >= (tgtPos.Y-30) then safePos = r.Position+Vector3.new(0,3,0); break end
-  end
-  hrp.CFrame = CFrame.new(safePos or nearPos+Vector3.new(0,3,0))
+ if not tgt or not tgt.hrp then return end
+ local char = LP.Character; if not char then return end
+ local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+ local tgtPos = tgt.hrp.Position
+ if tgtPos.Y < -10 then return end
+ local dir = (hrp.Position - tgtPos)
+ if dir.Magnitude < 0.5 then dir = Vector3.new(1,0,0) end
+ dir = Vector3.new(dir.X, 0, dir.Z).Unit
+ local nearPos = tgtPos + dir*8
+ local params = RaycastParams.new()
+ params.FilterType = Enum.RaycastFilterType.Exclude
+ local ex = {}
+ if LP.Character then table.insert(ex, LP.Character) end
+ local ef = workspace:FindFirstChild("Enemys"); if ef then table.insert(ex, ef) end
+ params.FilterDescendantsInstances = ex
+ local safePos
+ for _,orig in ipairs({nearPos+Vector3.new(0,20,0), nearPos+Vector3.new(0,10,0), tgtPos+Vector3.new(4,20,0)}) do
+ local r = workspace:Raycast(orig, Vector3.new(0,-80,0), params)
+ if r and r.Position.Y >= (tgtPos.Y-30) then safePos = r.Position+Vector3.new(0,3,0); break end
+ end
+ hrp.CFrame = CFrame.new(safePos or nearPos+Vector3.new(0,3,0))
  end
 
- -- [EDIT] Hitung posisi 5 stud dari musuh ke arah player (untuk serangan)
- local function GetAtkPosF(enemyHRP)
-  local char = LP and LP.Character
-  local pHRP = char and char:FindFirstChild("HumanoidRootPart")
-  if not pHRP or not enemyHRP then return enemyHRP and enemyHRP.Position or Vector3.new(0,0,0) end
-  local ePos = enemyHRP.Position
-  local dir = pHRP.Position - ePos
-  local dir2 = Vector3.new(dir.X, 0, dir.Z)
-  if dir2.Magnitude < 0.1 then return ePos + Vector3.new(5,0,0) end
-  return ePos + dir2.Unit * 5
- end
-
- -- [EDIT] FCharF pakai GetAtkPosF, bukan raw pos musuh
- local function FCharF(g, enemyHRP)
+ local function FCharF(g, pos)
   if not g then return end
-  local atkPos = GetAtkPosF(enemyHRP)
-  FireAttack(g, atkPos)
-  FireAllDamage(g, atkPos)
-  FireHeroRemotes(g, atkPos)
-  FireAttack(g, atkPos)
-  FireAllDamage(g, atkPos)
-  FireHeroRemotes(g, atkPos)
+  -- [vDewaS] Logika ST2: Serang Player + Hero Skill All-in-One
+  FireAttack(g, pos)
+  FireAllDamage(g, pos)
+  FireHeroRemotes(g, pos)
+  FireAttack(g, pos)
+  FireAllDamage(g, pos)
+  FireHeroRemotes(g, pos)
  end
 
  local function FHeroF(g)
-  -- kosong, logic ada di FCharF
+  -- Logic dipindah ke FCharF untuk efisiensi "Tingkat Dewa" (seperti ST2)
  end
 
  local function StartCollectF(checkFn)
-  task.spawn(function()
-   local col = {}
-   while checkFn() do
-    for _,fn in ipairs({"Golds","Items","Drops","Rewards"}) do
-     local f = workspace:FindFirstChild(fn)
-     if f then for _,o in ipairs(f:GetChildren()) do
-      if not checkFn() then break end
-      local g = o:GetAttribute("GUID") or o:GetAttribute("Guid")
-      if g and not col[g] then
-       col[g] = true
-       PingGuard()
-       pcall(function() RE.CollectItem:InvokeServer(g) end)
-       PingWait(0.05)
-      end
-     end end
-    end
-    PingWait(0.25)
-   end
-  end)
+ task.spawn(function()
+ local col = {}
+ while checkFn() do
+ for _,fn in ipairs({"Golds","Items","Drops","Rewards"}) do
+ local f = workspace:FindFirstChild(fn)
+ if f then for _,o in ipairs(f:GetChildren()) do
+ if not checkFn() then break end
+ local g = o:GetAttribute("GUID") or o:GetAttribute("Guid")
+ if g and not col[g] then
+ col[g] = true
+ PingGuard()
+ pcall(function() RE.CollectItem:InvokeServer(g) end)
+ PingWait(0.05)
+ end
+ end end
+ end
+ PingWait(0.25)
+ end
+ end)
  end
 
  -- Random Attack
  local function StartRA()
+  -- Pastikan HERO_GUIDS terisi sebelum attack
   if #HERO_GUIDS == 0 then
    pcall(function()
     for _, obj in ipairs(LP.PlayerGui:GetChildren()) do
@@ -5397,137 +5358,78 @@ do
    end)
   end
   RA.running=true; RA.killed=0; RA.cur=nil; RA.threads={}
-  local tChar = task.spawn(function()
-   while RA.running do
-    -- Ganti musuh RA jika kosong/mati
-    if not RA.cur or IsDeadF(RA.cur) or not RA.cur.model.Parent then
-     _deadG_F={}; RA.cur=nil
-     for _,e in ipairs(GetEnemiesF()) do
-      -- [GETER] Pilih musuh RA yang BERBEDA dari target TA
-      local isTATarget = TA.running and TA.cur and (e.guid == TA.cur.guid)
-      if not IsDeadF(e) and not isTATarget then RA.cur=e; break end
-     end
-     -- Fallback: kalau semua musuh adalah target TA, ambil musuh manapun
-     if not RA.cur then
-      for _,e in ipairs(GetEnemiesF()) do
-       if not IsDeadF(e) then RA.cur=e; break end
-      end
-     end
-     if RA.cur and not TA.running then TpToF(RA.cur) end
+ local tChar = task.spawn(function()
+  local tpT = 1
+  while RA.running do
+   if not RA.cur or IsDeadF(RA.cur) or not RA.cur.model.Parent then
+    _deadG_F={}; RA.cur=nil
+    for _,e in ipairs(GetEnemiesF()) do
+     if not IsDeadF(e) then RA.cur=e; break end
     end
-    -- [GETER] Serang musuh RA sendiri
-    if RA.cur and not IsDeadF(RA.cur) and RA.cur.model.Parent then
-     FCharF(RA.cur.guid, RA.cur.hrp)
-    end
-    -- [GETER] Sekaligus serang target TA jika aktif (tanpa rebut teleport)
-    if TA.running and TA.cur and not IsDeadF(TA.cur) and TA.cur.model.Parent then
-     FCharF(TA.cur.guid, TA.cur.hrp)
-    end
-    if RA.cur or (TA.running and TA.cur) then
-     PingWait(0.1)  -- 10x/detik, tidak freeze
-    else
-     PingWait(0.2)  -- tunggu musuh muncul
-    end
+    if RA.cur and not TA.running then TpToF(RA.cur); tpT=1 end
    end
-  end)
-  RA.threads = {tChar}
-  StartCollectF(function() return RA.running end)
+   if RA.cur and not IsDeadF(RA.cur) and RA.cur.model.Parent then
+    FCharF(RA.cur.guid, RA.cur.hrp.Position)
+    tpT = tpT + PingWait(0)
+    if tpT>=1 and not TA.running then tpT=1; TpToF(RA.cur) end
+   else
+    PingWait(0.5)
+   end
+  end
+ end)
+ RA.threads = {tChar}
+ StartCollectF(function() return RA.running end)
  end
 
  local function StopRA()
-  RA.running = false
-  for _,t in ipairs(RA.threads) do pcall(function() task.cancel(t) end) end
-  RA.threads={}; RA.cur=nil
+ RA.running = false
+ for _,t in ipairs(RA.threads) do pcall(function() task.cancel(t) end) end
+ RA.threads={}; RA.cur=nil
  end
 
- -- StartTA By ID — target spesifik GUID, stop jika mati
- local function StartTA_ByID(targetGuid, targetName, onStatus, onStop)
-  TA.running=true; TA.killed=0; TA.targetName=targetName; TA.cur=nil; TA.threads={}
-  local tChar = task.spawn(function()
-   -- 1x teleport nempel saat mulai
-   local tgt = FindByGuidF(targetGuid)
-   if tgt then TpToF(tgt) end
-   while TA.running do
-    tgt = FindByGuidF(targetGuid)
-    if not tgt then
-     -- Mati / hilang → stop langsung
-     TA.cur = nil
-     if onStatus then onStatus("✕ ["..targetName.."] mati") end
-     TA.running = false
-     if onStop then onStop() end
-     break
-    end
-    if not IsDeadF(tgt) and tgt.model.Parent then
-     TA.cur = tgt
-     FCharF(tgt.guid, tgt.hrp)
-     if onStatus then onStatus(">> ["..targetName.."] •"..(tgt.guid:sub(-5)).." Kill: "..TA.killed) end
-     PingWait(0.1)  -- 10x/detik, tidak freeze
-    else
-     PingWait(0.2)
-    end
-   end
-  end)
-  TA.threads = {tChar}
-  StartCollectF(function() return TA.running end)
+ -- Target Attack
+ local function StartTA(targetName, onStatus)
+ TA.running=true; TA.killed=0; TA.targetName=targetName; TA.cur=nil; TA.threads={}
+ local tChar = task.spawn(function()
+ local lastGuid=nil; local tpT=0
+ while TA.running do
+ local tgt = FindByNameF(targetName)
+ if not tgt then
+ TA.cur = nil
+ if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
+ while TA.running do
+ PingWait(); tgt=FindByNameF(targetName)
+ if tgt then break end
  end
-
- -- StartTA By Name — round-robin semua musuh senama, pindah saat kill
- local function StartTA_ByName(targetName, onStatus, onStop)
-  TA.running=true; TA.killed=0; TA.targetName=targetName; TA.cur=nil; TA.threads={}
-  local tChar = task.spawn(function()
-   local rrIdx = 1
-   while TA.running do
-    local pool = FindAllByNameF(targetName)
-    if #pool == 0 then
-     -- Semua mati → tunggu respawn
-     if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
-     while TA.running do
-      PingWait(0.5)
-      pool = FindAllByNameF(targetName)
-      if #pool > 0 then break end
-     end
-     if not TA.running then break end
-     _deadG_F={}; rrIdx=1
-    end
-    -- Clamp index
-    if rrIdx > #pool then rrIdx = 1 end
-    local tgt = pool[rrIdx]
-    if not tgt or IsDeadF(tgt) then
-     -- Musuh di index ini sudah mati, skip ke berikutnya
-     rrIdx = rrIdx + 1
-     PingWait(0.1)  -- jeda minimal, tidak freeze
-    else
-     TA.cur = tgt
-     -- 1x teleport nempel saat ganti target
-     TpToF(tgt)
-     -- Serang musuh ini sampai mati
-     while TA.running and not IsDeadF(tgt) and tgt.model.Parent do
-      FCharF(tgt.guid, tgt.hrp)
-      if onStatus then onStatus(">> ["..targetName.."] ["..rrIdx.."/"..#pool.."] Kill: "..TA.killed) end
-      PingWait(0.1)  -- 10x/detik, tidak freeze
-     end
-     -- Mati → pindah ke berikutnya
-     if TA.running then
-      rrIdx = rrIdx + 1
-      _deadG_F={}
-     end
-    end
-   end
-  end)
-  TA.threads = {tChar}
-  StartCollectF(function() return TA.running end)
+ if not TA.running then break end
+ _deadG_F={}; lastGuid=nil
+ end
+ if tgt and not IsDeadF(tgt) and tgt.model.Parent then
+ TA.cur = tgt
+ if tgt.guid~=lastGuid then lastGuid=tgt.guid; TpToF(tgt); tpT=1 end
+ FCharF(tgt.guid, tgt.hrp.Position)
+ tpT = tpT + PingWait()
+ if tpT>=0 then tpT=0; TpToF(tgt) end
+ if onStatus then onStatus(">> ["..targetName.."] Kill: "..TA.killed) end
+ else
+ PingWait()
+ end
+ end
+ end)
+ TA.threads = {tChar}
+ StartCollectF(function() return TA.running end)
  end
 
  local function StopTA()
-  TA.running = false
-  for _,t in ipairs(TA.threads) do pcall(function() task.cancel(t) end) end
-  TA.threads={}; TA.cur=nil; TA.targetName=nil
+ TA.running = false
+ for _,t in ipairs(TA.threads) do pcall(function() task.cancel(t) end) end
+ TA.threads={}; TA.cur=nil; TA.targetName=nil
  end
 
- -- ── GUI ──────────────────────────────────────────────────────
+ -- GUI
  local _, SetRA, SetRAVis = ToggleRow(p, "Random Attack", "Attack Enemy", 1, function(on)
-  _raRunningState = on
-  if on then StartRA() else StopRA() end
+ _raRunningState = on
+ if on then StartRA() else StopRA() end
  end)
  _setRAToggle = SetRA
  _visRandomAtk = SetRAVis
@@ -5537,49 +5439,7 @@ do
 
  SectionHeader(p, "SELECT ENEMY", 3)
 
- -- [EDIT] Dropdown Mode: By ID / By Name
- local listMode = "id" -- "id" atau "name"
- local ddOpen = false
-
- local ddCard = Frame(p, C.SURFACE, UDim2.new(1,0,0,36))
- ddCard.LayoutOrder = 3; Corner(ddCard, 10); Stroke(ddCard, C.BORD, 1.5, 0.5)
-
- local ddBtn = Btn(ddCard, C.BG2, UDim2.new(1,-12,0,26))
- ddBtn.Position = UDim2.new(0,6,0.5,-13)
- ddBtn.Text = "▾  Mode: By ID"; ddBtn.TextSize = 10
- ddBtn.Font = Enum.Font.GothamBold; ddBtn.TextColor3 = C.ACC
- ddBtn.TextXAlignment = Enum.TextXAlignment.Left
- Corner(ddBtn, 6); Stroke(ddBtn, C.BORD, 1.5, 0.3)
-
- -- Dropdown list (ZIndex tinggi, overlay di atas scroll)
- local ddList = Frame(p, C.SURFACE, UDim2.new(1,0,0,64))
- ddList.LayoutOrder = 3; ddList.Visible = false; ddList.ZIndex = 10
- Corner(ddList, 8); Stroke(ddList, C.ACC, 1.5, 0.3)
- ListLayout(ddList, nil, nil, 2)
- Padding(ddList, 4, 4, 4, 4)
-
- local function MakeDDOpt(label, modeKey)
-  local opt = Btn(ddList, C.BG2, UDim2.new(1,0,0,24))
-  opt.Text = label; opt.TextSize = 10
-  opt.Font = Enum.Font.GothamBold; opt.TextColor3 = C.DIM
-  opt.TextXAlignment = Enum.TextXAlignment.Left
-  Corner(opt, 5)
-  opt.MouseButton1Click:Connect(function()
-   listMode = modeKey
-   ddBtn.Text = "▾  Mode: "..label
-   ddList.Visible = false; ddOpen = false
-  end)
-  return opt
- end
- MakeDDOpt("By ID", "id")
- MakeDDOpt("By Name", "name")
-
- ddBtn.MouseButton1Click:Connect(function()
-  ddOpen = not ddOpen
-  ddList.Visible = ddOpen
- end)
-
- -- Refresh card
+ -- Refresh button
  local refCard = Frame(p, C.SURFACE, UDim2.new(1,0,0,36))
  refCard.LayoutOrder = 4; Corner(refCard, 10); Stroke(refCard, C.BORD, 1.5, 0.5)
 
@@ -5589,7 +5449,7 @@ do
  refBtn.Font = Enum.Font.GothamBold; refBtn.TextColor3 = C.ACC
  Corner(refBtn, 6); Stroke(refBtn, C.BORD, 1.5, 0.3)
 
- local statLbl = Label(refCard, "Click Refresh to load enemies", 10, C.DIM, Enum.Font.GothamBold)
+ local statLbl = Label(refCard, "Click Refresh to reload the enemies", 10, C.DIM, Enum.Font.GothamBold)
  statLbl.Size = UDim2.new(1,-100,1,0); statLbl.Position = UDim2.new(0,10,0,0)
 
  -- Scroll list
@@ -5603,197 +5463,110 @@ do
  Padding(eScroll, 5, 5, 6, 6)
  ListLayout(eScroll, nil, nil, 4)
 
- local ePH = Label(eScroll, "Click Refresh to load enemies", 10, C.DIM, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+ local ePH = Label(eScroll, "Click Refresh to reload the enemies", 10, C.DIM, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
  ePH.Size = UDim2.new(1,0,0,44); ePH.TextWrapped = true
 
- -- eRows: By ID → key=guid, By Name → key=nm
- local eRows = {}       -- {f, s, n, pill, knob, guid?, nm?}
+ local eRows = {}
  local activeRow = nil
  local taOn = false
 
  local function StopCurrentTA()
-  taOn = false; StopTA()
-  if activeRow then
-   activeRow.f.BackgroundColor3 = C.BG2
-   activeRow.s.Color = C.BORD
-   activeRow.n.TextColor3 = C.DIM
-   activeRow.pill.BackgroundColor3 = C.PILL_OFF
-   activeRow.knob.Position = UDim2.new(0,3,0.5,0)
-   activeRow = nil
-  end
-  statLbl.TextColor3 = C.DIM
-  statLbl.Text = "Stop Kill: "..TA.killed
+ taOn = false; StopTA()
+ if activeRow then
+ activeRow.f.BackgroundColor3 = C.BG2
+ activeRow.s.Color = C.BORD
+ activeRow.n.TextColor3 = C.DIM
+ activeRow.pill.BackgroundColor3 = C.PILL_OFF
+ activeRow.knob.Position = UDim2.new(0,3,0.5,0)
+ activeRow = nil
+ end
+ statLbl.TextColor3 = C.DIM
+ statLbl.Text = "Stop Kill: "..TA.killed
  end
 
- -- [EDIT] Helper: aktifkan visual row
- local function ActivateRow(rd, pill, knob, row, rs, nL)
-  taOn = true; activeRow = rd
-  row.BackgroundColor3 = C.SURFACE2
-  rs.Color = C.ACC; nL.TextColor3 = C.TXT
-  TweenService:Create(pill, TweenInfo.new(0.18), {BackgroundColor3=C.PILL_ON}):Play()
-  TweenService:Create(knob, TweenInfo.new(0.18), {Position=UDim2.new(1,-27,0.5,0), BackgroundColor3=C.KNOB_ON}):Play()
-  statLbl.TextColor3 = C.ACC
- end
-
- -- [EDIT] RefreshEnemies — dual mode By ID / By Name
  local function RefreshEnemies()
-  if taOn then StopCurrentTA() end
-  for _,r in pairs(eRows) do if r.f and r.f.Parent then r.f:Destroy() end end
-  eRows = {}; ePH.Visible = false
+ if taOn then StopCurrentTA() end
+ for _,r in pairs(eRows) do if r.f and r.f.Parent then r.f:Destroy() end end
+ eRows = {}; ePH.Visible = false
 
-  local enemies = GetEnemiesF()
-  if #enemies == 0 then
-   ePH.Text = "Tidak ada musuh di Workspace.Enemys"; ePH.Visible = true
-   statLbl.Text = "Map kosong"; return
-  end
+ local enemies = GetEnemiesF()
+ if #enemies == 0 then
+ ePH.Text = "Tidak ada musuh di map ini"; ePH.Visible = true
+ statLbl.Text = "Map kosong"; return
+ end
 
-  if listMode == "id" then
-   -- ── BY ID: 1 row per individu musuh, tampilkan nama + 5 huruf GUID ──
-   table.sort(enemies, function(a,b) return a.name < b.name end)
-   for idx, e in ipairs(enemies) do
-    local shortGuid = e.guid:sub(-5)
-    local row = Frame(eScroll, C.BG2, UDim2.new(1,0,0,36))
-    row.LayoutOrder = idx; Corner(row, 7)
-    local rs = Instance.new("UIStroke", row); rs.Color = C.BORD; rs.Thickness = 1.5; rs.Transparency = 0.3
+ local nc = {}
+ for _,e in ipairs(enemies) do nc[e.model.Name]=(nc[e.model.Name] or 0)+1 end
+ local names = {}
+ for nm in pairs(nc) do table.insert(names, nm) end
+ table.sort(names)
 
-    -- Nama musuh
-    local nL = Label(row, e.name, 11, C.DIM, Enum.Font.GothamBold)
-    nL.Size = UDim2.new(0.55,0,0.5,0); nL.Position = UDim2.new(0,10,0,2)
-    nL.TextTruncate = Enum.TextTruncate.AtEnd
+ for idx, nm in ipairs(names) do
+ local row = Frame(eScroll, C.BG2, UDim2.new(1,0,0,36))
+ row.LayoutOrder = idx; Corner(row, 7)
+ local rs = Instance.new("UIStroke", row); rs.Color = C.BORD; rs.Thickness = 1.5; rs.Transparency = 0.3
 
-    -- GUID 5 huruf belakang
-    local gL = Label(row, "•"..shortGuid, 9, C.ACC, Enum.Font.Gotham)
-    gL.Size = UDim2.new(0.4,0,0.5,0); gL.Position = UDim2.new(0,10,0.5,0)
+ local nL = Label(row, nm, 12, C.DIM, Enum.Font.GothamBold)
+ nL.Size = UDim2.new(1,-80,1,0); nL.Position = UDim2.new(0,10,0,0)
+ nL.TextTruncate = Enum.TextTruncate.AtEnd
 
-    local pill = Btn(row, C.PILL_OFF, UDim2.new(0,44,0,26))
-    pill.AnchorPoint = Vector2.new(1,0.5)
-    pill.Position = UDim2.new(1,-6,0.5,0); Corner(pill, 13)
-    local knob = Frame(pill, C.KNOB_OFF, UDim2.new(0,20,0,20))
-    knob.AnchorPoint = Vector2.new(0,0.5)
-    knob.Position = UDim2.new(0,3,0.5,0); Corner(knob, 10)
+ local cL = Label(row, "x"..nc[nm], 10, C.DIM, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+ cL.Size = UDim2.new(0,28,1,0); cL.Position = UDim2.new(1,-72,0,0)
 
-    local rd = {f=row, s=rs, n=nL, pill=pill, knob=knob, guid=e.guid, nm=e.name}
-    eRows[e.guid] = rd
+ local pill = Btn(row, C.PILL_OFF, UDim2.new(0,52,0,30))
+ pill.AnchorPoint = Vector2.new(1,0.5)
+ pill.Position = UDim2.new(1,-6,0.5,0); Corner(pill, 15)
+ local knob = Frame(pill, C.KNOB_OFF, UDim2.new(0,24,0,24))
+ knob.AnchorPoint = Vector2.new(0,0.5)
+ knob.Position = UDim2.new(0,3,0.5,0); Corner(knob, 12)
 
-    pill.MouseButton1Click:Connect(function()
-     if taOn and activeRow == rd then
-      StopCurrentTA()
-     else
-      if taOn then StopCurrentTA() end
-      ActivateRow(rd, pill, knob, row, rs, nL)
-      statLbl.Text = ">> ["..e.name.."] •"..shortGuid
-      StartTA_ByID(e.guid, e.name,
-       function(msg) statLbl.Text = msg end,
-       function()
-        -- Auto stop & reset row saat musuh mati
-        if activeRow == rd then StopCurrentTA() end
-       end
-      )
-     end
-    end)
-   end
-   statLbl.Text = #enemies.." musuh ditemukan (By ID)"
-  else
-   -- ── BY NAME: group per nama, tampilkan nama + count, round-robin ──
-   local nc = {}
-   for _,e in ipairs(enemies) do nc[e.name]=(nc[e.name] or 0)+1 end
-   local names = {}
-   for nm in pairs(nc) do table.insert(names, nm) end
-   table.sort(names)
+ local rd = {f=row, s=rs, n=nL, c=cL, pill=pill, knob=knob}
+ eRows[nm] = rd
 
-   for idx, nm in ipairs(names) do
-    local row = Frame(eScroll, C.BG2, UDim2.new(1,0,0,36))
-    row.LayoutOrder = idx; Corner(row, 7)
-    local rs = Instance.new("UIStroke", row); rs.Color = C.BORD; rs.Thickness = 1.5; rs.Transparency = 0.3
+ pill.MouseButton1Click:Connect(function()
+ if taOn and activeRow == rd then
+ StopCurrentTA()
+ else
+ if taOn then StopCurrentTA() end
+ taOn = true; activeRow = rd
+ row.BackgroundColor3 = C.SURFACE2
+ rs.Color = C.ACC; nL.TextColor3 = C.TXT
+ TweenService:Create(pill, TweenInfo.new(0.18), {BackgroundColor3=C.PILL_ON}):Play()
+ TweenService:Create(knob, TweenInfo.new(0.18), {Position=UDim2.new(1,-27,0.5,0), BackgroundColor3=C.KNOB_ON}):Play()
+ statLbl.TextColor3 = C.ACC
+ statLbl.Text = ">> ["..nm.."]"
+ StartTA(nm, function(msg) statLbl.Text = msg end)
+ end
+ end)
+ end
 
-    local nL = Label(row, nm, 12, C.DIM, Enum.Font.GothamBold)
-    nL.Size = UDim2.new(1,-80,1,0); nL.Position = UDim2.new(0,10,0,0)
-    nL.TextTruncate = Enum.TextTruncate.AtEnd
+ statLbl.Text = #names.." jenis "..#enemies.." total"
+ statLbl.TextColor3 = C.DIM
 
-    -- Count hidup
-    local cL = Label(row, "x"..nc[nm], 10, C.DIM, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
-    cL.Size = UDim2.new(0,28,1,0); cL.Position = UDim2.new(1,-72,0,0)
-
-    local pill = Btn(row, C.PILL_OFF, UDim2.new(0,44,0,26))
-    pill.AnchorPoint = Vector2.new(1,0.5)
-    pill.Position = UDim2.new(1,-6,0.5,0); Corner(pill, 13)
-    local knob = Frame(pill, C.KNOB_OFF, UDim2.new(0,20,0,20))
-    knob.AnchorPoint = Vector2.new(0,0.5)
-    knob.Position = UDim2.new(0,3,0.5,0); Corner(knob, 10)
-
-    local rd = {f=row, s=rs, n=nL, c=cL, pill=pill, knob=knob, nm=nm}
-    eRows[nm] = rd
-
-    pill.MouseButton1Click:Connect(function()
-     if taOn and activeRow == rd then
-      StopCurrentTA()
-     else
-      if taOn then StopCurrentTA() end
-      ActivateRow(rd, pill, knob, row, rs, nL)
-      statLbl.Text = ">> ["..nm.."] Round-Robin"
-      StartTA_ByName(nm,
-       function(msg) statLbl.Text = msg end,
-       nil
-      )
-     end
-    end)
-   end
-   statLbl.Text = #names.." jenis, "..#enemies.." total (By Name)"
-
-   -- Live update count By Name
-   task.spawn(function()
-    while p.Parent do
-     local live = {}
-     for _,e in ipairs(GetEnemiesF()) do
-      if not IsDeadF(e) then live[e.name]=(live[e.name] or 0)+1 end
-     end
-     for _, nm2 in ipairs(names) do
-      local r = eRows[nm2]
-      if r and r.f and r.f.Parent then
-       local a = live[nm2] or 0
-       if r.c then
-        r.c.Text = "x"..a
-        r.c.TextColor3 = a==0 and C.RED or C.DIM
-       end
-       -- Hilangkan row jika count = 0 (semua mati)
-       if a == 0 then
-        if taOn and activeRow == r then StopCurrentTA() end
-        r.f:Destroy(); eRows[nm2] = nil
-       end
-      end
-     end
-     if RA.running then raKillLbl.Text = "Kill: "..RA.killed end
-     if taOn then statLbl.Text = ">> ["..(TA.targetName or "?").."] Kill: "..TA.killed end
-     PingWait(0.5)
-    end
-   end)
-  end
-
-  -- [EDIT] Live update By ID — hapus row saat musuh mati
-  if listMode == "id" then
-   task.spawn(function()
-    while p.Parent do
-     local alive = {}
-     for _,e in ipairs(GetEnemiesF()) do alive[e.guid]=true end
-     for guid, r in pairs(eRows) do
-      if r.f and r.f.Parent then
-       if not alive[guid] then
-        -- Musuh mati → stop jika aktif, hapus row
-        if taOn and activeRow == r then StopCurrentTA() end
-        r.f:Destroy(); eRows[guid] = nil
-       end
-      end
-     end
-     if RA.running then raKillLbl.Text = "Kill: "..RA.killed end
-     PingWait(0.5)
-    end
-   end)
-  end
+ task.spawn(function()
+ while p.Parent and #names > 0 do
+ local live = {}
+ for _,e in ipairs(GetEnemiesF()) do
+ if not IsDeadF(e) then live[e.model.Name]=(live[e.model.Name] or 0)+1 end
+ end
+ for _,nm2 in ipairs(names) do
+ repeat
+ local r = eRows[nm2]; if not r then break end
+ local a = live[nm2] or 0
+ r.c.Text = "x"..a
+ r.c.TextColor3 = a==0 and C.RED or C.DIM
+ until true
+ end
+ if RA.running then raKillLbl.Text = "Kill: "..RA.killed end
+ if taOn then statLbl.Text = ">> ["..(TA.targetName or "?").."] Kill: "..TA.killed end
+ PingWait(0.5)
+ end
+ end)
  end
 
  refBtn.MouseButton1Click:Connect(function()
-  refBtn.Text = "Loading..."
-  task.spawn(function() RefreshEnemies(); PingWait(0.3); refBtn.Text = "Refresh" end)
+ refBtn.Text = "Loading..."
+ task.spawn(function() RefreshEnemies(); PingWait(0.3); refBtn.Text = "Refresh" end)
  end)
 end
 
@@ -14658,11 +14431,9 @@ local function SiegeMassAttack(onStatus, baseMapId)
 
         -- Kill target tercapai (30 kill)
         if killCount >= KILL_TARGET then
-            if onStatus then onStatus("[OK] "..killCount.." kill - Jeda 2s lalu TP ke BaseMap...") end
-            PingWait(2)
-            -- TP ke BaseMap sesuai map siege masing-masing (3→baseMapId, 7→baseMapId, dst)
-            pcall(function() if RE.LocalTp then RE.LocalTp:FireServer({mapId = baseMapId}) end end)
-            if onStatus then onStatus("[OK] TP BaseMap "..tostring(baseMapId).." - SIEGE SUCCESS!") end
+            if onStatus then onStatus("[OK] "..killCount.." kill - SIEGE SUCCESS!") end
+            PingGuard()
+            pcall(function() if RE.GainRaidsRewards then RE.GainRaidsRewards:InvokeServer(1) end end)
             cleanup(); return "success"
         end
 
