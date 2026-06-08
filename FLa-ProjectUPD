@@ -1944,8 +1944,12 @@ function FireAttack(g, pos)
   if now - last >= 0.04 then
    _heroFireTick[g] = now
    for _, hGuid in ipairs(HERO_GUIDS) do
-    -- [EDIT] Hanya attackType=1, posisi 5stud dari musuh ke arah player
+    -- [EDIT] Fire attackType 1, 2, 3 untuk RA/TA (sama seperti RaidFireDamage)
     pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g,targetPos=_atkPos}) end)
+    task.wait(0.1)
+    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=2,userId=MY_USER_ID,enemyGuid=g,targetPos=_atkPos}) end)
+    task.wait(0.1)
+    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=3,userId=MY_USER_ID,enemyGuid=g,targetPos=_atkPos}) end)
    end
   end
  end
@@ -5400,11 +5404,11 @@ do
        col[g] = true
        PingGuard()
        pcall(function() RE.CollectItem:InvokeServer(g) end)
-       PingWait(0.05)
+       task.wait(0.1)
       end
      end end
     end
-    PingWait(0.25)
+    task.wait(0.1)
    end
   end)
  end
@@ -5472,9 +5476,9 @@ do
      FCharF(TA.cur.guid, TA.cur.hrp)
     end
     if RA.cur or (TA.running and TA.cur) then
-     PingWait(0.1)  -- 10x/detik
+     task.wait(0.1)  -- 10x/detik
     else
-     PingWait(0.1)  -- [FIX] percepat: tidak lagi 0.2 agar cepat scan musuh baru
+     task.wait(0.1)  -- [FIX] percepat: tidak lagi 0.2 agar cepat scan musuh baru
     end
    end
   end)
@@ -5529,9 +5533,9 @@ do
      TA.cur = tgt
      FCharF(tgt.guid, tgt.hrp)
      if onStatus then onStatus(">> ["..targetName.."] •"..(tgt.guid:sub(-5)).." Kill: "..TA.killed) end
-     PingWait(0.1)
+     task.wait(0.1)
     else
-     PingWait(0.05)  -- [FIX] percepat polling mati
+     task.wait(0.1)  -- [FIX] percepat polling mati
     end
    end
   end)
@@ -5566,7 +5570,7 @@ do
      -- Semua mati → tunggu respawn
      if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
      while TA.running do
-      PingWait(0.2)  -- [FIX] lebih cepat scan respawn
+      task.wait(0.1)  -- [FIX] lebih cepat scan respawn
       pool = FindAllByNameF(targetName)
       if #pool > 0 then break end
      end
@@ -5579,7 +5583,7 @@ do
     if not tgt or IsDeadF(tgt) then
      -- Musuh di index ini sudah mati, skip ke berikutnya
      rrIdx = rrIdx + 1
-     PingWait(0.05)  -- [FIX] percepat skip mati
+     task.wait(0.1)  -- [FIX] percepat skip mati
     else
      TA.cur = tgt
      _curDied = false
@@ -5593,7 +5597,7 @@ do
      while TA.running and not _curDied and not IsDeadF(tgt) and tgt.model.Parent do
       FCharF(tgt.guid, tgt.hrp)
       if onStatus then onStatus(">> ["..targetName.."] ["..rrIdx.."/"..#pool.."] Kill: "..TA.killed) end
-      PingWait(0.1)
+      task.wait(0.1)
      end
      -- Mati → pindah ke berikutnya
      if TA.running then
@@ -5618,6 +5622,150 @@ do
  end
 
  -- ── GUI ──────────────────────────────────────────────────────
+
+ -- ═══════════════════════════════════════════════════════════
+ -- ENEMY HP MONITOR - HP, persentase, timer, rate 1%
+ -- Source: ShowEnemyTakeDamageInfo (hp, maxHp, enemyId)
+ -- Reset HANYA saat enemyId berubah (ganti musuh berbeda)
+ -- Timer terus jalan meski berhenti serang sebentar
+ -- ═══════════════════════════════════════════════════════════
+ do
+  local _ehpLastEnemyId = nil  -- pakai enemyId (stabil), bukan enemyGuid
+  local _ehpMaxHp       = 0
+  local _ehpConn        = nil
+  local _ehpStartTime   = nil  -- tick() saat hit pertama ke musuh ini
+  local _ehpStartPct    = nil  -- persen HP saat hit pertama (untuk rate)
+  local _ehpCurPct      = 0    -- persen HP terkini (dibaca oleh timer loop)
+  local _ehpTimerConn   = nil
+
+  -- Format angka ke scientific notation: 1.23E+25
+  local function FmtHp(n)
+   if not n or n <= 0 then return "0" end
+   if n < 1e4 then return tostring(math.floor(n)) end
+   local exp  = math.floor(math.log10(n))
+   local mant = n / (10 ^ exp)
+   return string.format("%.2fE+%02d", mant, exp)
+  end
+
+  -- Format detik ke mm:ss (support > 60 menit)
+  local function FmtTime(secs)
+   local s = math.floor(secs)
+   local m = math.floor(s / 60)
+   return string.format("%02d:%02d", m, s % 60)
+  end
+
+  -- Warna HP bar berdasarkan persentase
+  local function HpColor(pct)
+   if pct > 50 then return Color3.fromRGB(80, 220, 100)
+   elseif pct > 25 then return Color3.fromRGB(255, 180, 40)
+   else return Color3.fromRGB(255, 70, 70) end
+  end
+
+  -- ── UI Card ────────────────────────────────────────────────────
+  local ehpCard = Frame(p, C.SURFACE, UDim2.new(1,0,0,90))
+  ehpCard.LayoutOrder = 0
+  Corner(ehpCard, 10)
+  Stroke(ehpCard, C.ACC, 1.5, 0.5)
+
+  local ehpTitle = Label(ehpCard, "❤ ENEMY HP MONITOR", 10, C.ACC, Enum.Font.GothamBold)
+  ehpTitle.Size     = UDim2.new(1,-16,0,16)
+  ehpTitle.Position = UDim2.new(0,10,0,5)
+
+  local ehpValLbl = Label(ehpCard, "— / —", 15, C.TXT, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+  ehpValLbl.Size     = UDim2.new(1,-16,0,20)
+  ehpValLbl.Position = UDim2.new(0,8,0,20)
+
+  local ehpBarBg = Frame(ehpCard, C.BG2, UDim2.new(1,-16,0,7))
+  ehpBarBg.Position               = UDim2.new(0,8,0,44)
+  ehpBarBg.BackgroundTransparency = 0.3
+  Corner(ehpBarBg, 4)
+
+  local ehpBarFill = Frame(ehpBarBg, Color3.fromRGB(80,220,100), UDim2.new(1,0,1,0))
+  ehpBarFill.BackgroundTransparency = 0.2
+  Corner(ehpBarFill, 4)
+
+  local ehpPctLbl = Label(ehpCard, "", 9, C.TXT, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+  ehpPctLbl.Size     = UDim2.new(0,60,0,10)
+  ehpPctLbl.Position = UDim2.new(1,-68,0,54)
+
+  local ehpTimerLbl = Label(ehpCard, "⏱ --:--  |  1% setiap ~--:--", 9, C.DIM, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+  ehpTimerLbl.Size     = UDim2.new(1,-16,0,13)
+  ehpTimerLbl.Position = UDim2.new(0,8,0,74)
+
+  -- ── Timer loop — jalan terus, tidak reset saat berhenti serang ───────────
+  local function StartTimerLoop()
+   if _ehpTimerConn then
+    pcall(function() _ehpTimerConn:Disconnect() end)
+    _ehpTimerConn = nil
+   end
+   _ehpTimerConn = game:GetService("RunService").Heartbeat:Connect(function()
+    if not _ehpStartTime then return end
+    local elapsed    = tick() - _ehpStartTime
+    local elapsedStr = FmtTime(elapsed)
+    local rateStr    = "--:--"
+    if _ehpStartPct and elapsed > 2 then
+     local pctDone = _ehpStartPct - _ehpCurPct
+     if pctDone > 0.01 then
+      rateStr = FmtTime(elapsed / pctDone)
+     end
+    end
+    ehpTimerLbl.Text       = string.format("⏱ %s  |  1%% setiap ~%s", elapsedStr, rateStr)
+    ehpTimerLbl.TextColor3 = C.DIM
+   end)
+  end
+
+  -- ── Logic — reset HANYA saat enemyId berubah ──────────────────────────
+  local function EhpUpdate(data)
+   local eid  = tostring(data.enemyId or "")
+   local hp   = tonumber(data.hp)    or 0
+   local mhp  = tonumber(data.maxHp) or 0
+
+   -- Reset HANYA saat enemyId berbeda (benar-benar ganti musuh)
+   if eid ~= "" and eid ~= _ehpLastEnemyId then
+    _ehpLastEnemyId = eid
+    _ehpMaxHp       = mhp
+    _ehpStartTime   = tick()
+    _ehpStartPct    = nil
+    _ehpCurPct      = 0
+    ehpTimerLbl.Text = "⏱ --:--  |  1% setiap ~--:--"
+    StartTimerLoop()
+   end
+   if mhp > 0 and mhp > _ehpMaxHp then _ehpMaxHp = mhp end
+
+   local curMaxHp = (_ehpMaxHp > 0) and _ehpMaxHp or mhp
+   if curMaxHp <= 0 then return end
+
+   local pct = math.clamp(hp / curMaxHp * 100, 0, 100)
+   local col = HpColor(pct)
+
+   if _ehpStartPct == nil then _ehpStartPct = pct end
+   _ehpCurPct = pct
+
+   ehpValLbl.Text       = FmtHp(hp) .. " / " .. FmtHp(curMaxHp)
+   ehpValLbl.TextColor3 = col
+   ehpBarFill.Size             = UDim2.new(math.clamp(pct/100, 0, 1), 0, 1, 0)
+   ehpBarFill.BackgroundColor3 = col
+   ehpPctLbl.Text       = string.format("%.3f%%", pct)
+   ehpPctLbl.TextColor3 = col
+  end
+
+  -- Pasang listener
+  local _remEhp = game:GetService("ReplicatedStorage")
+  pcall(function()
+   local rem = _remEhp:FindFirstChild("Remotes")
+            and _remEhp.Remotes:FindFirstChild("ShowEnemyTakeDamageInfo")
+   if rem then
+    _ehpConn = rem.OnClientEvent:Connect(function(data)
+     if type(data) == "table" then
+      pcall(EhpUpdate, data)
+     end
+    end)
+   end
+  end)
+
+ end -- end Enemy HP Monitor block
+ -- ═══════════════════════════════════════════════════════════
+
  local _, SetRA, SetRAVis = ToggleRow(p, "Random Attack", "Attack Enemy", 1, function(on)
   _raRunningState = on
   if on then StartRA() else StopRA() end
@@ -5861,7 +6009,7 @@ do
      end
      if RA.running then raKillLbl.Text = "Kill: "..RA.killed end
      if taOn then statLbl.Text = ">> ["..(TA.targetName or "?").."] Kill: "..TA.killed end
-     PingWait(0.5)
+     task.wait(0.1)
     end
    end)
   end
@@ -5882,7 +6030,7 @@ do
       end
      end
      if RA.running then raKillLbl.Text = "Kill: "..RA.killed end
-     PingWait(0.5)
+     task.wait(0.1)
     end
    end)
   end
@@ -5890,7 +6038,7 @@ do
 
  refBtn.MouseButton1Click:Connect(function()
   refBtn.Text = "Loading..."
-  task.spawn(function() RefreshEnemies(); PingWait(0.3); refBtn.Text = "Refresh" end)
+  task.spawn(function() RefreshEnemies(); task.wait(0.1); refBtn.Text = "Refresh" end)
  end)
 end
 
