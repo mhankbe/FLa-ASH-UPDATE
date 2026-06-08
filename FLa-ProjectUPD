@@ -1944,10 +1944,8 @@ function FireAttack(g, pos)
   if now - last >= 0.04 then
    _heroFireTick[g] = now
    for _, hGuid in ipairs(HERO_GUIDS) do
-    -- [EDIT] attackType=1 dan 2
+    -- [EDIT] Hanya attackType=1, posisi 5stud dari musuh ke arah player
     pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g,targetPos=_atkPos}) end)
-    task.wait(0.1)
-    pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=2,userId=MY_USER_ID,enemyGuid=g,targetPos=_atkPos}) end)
    end
   end
  end
