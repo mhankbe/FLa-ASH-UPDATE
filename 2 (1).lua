@@ -575,7 +575,8 @@ do
     local _hideRerollOn = false
     local _hideUIOn     = false
     local _hideAnimOn   = false
-    local _hideRewardOn = false
+    local _hideRewardOn     = false
+    local _hideRewardThread = nil  -- [FIXED zombie] track thread untuk cancel
 
     local _rerollConn  = nil
     local _animLoop    = nil
@@ -903,8 +904,13 @@ do
 
             for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do checkAndHide(obj) end
 
-            -- Ghost polling loop
-            task.spawn(function()
+            -- [FIXED zombie] cancel thread lama sebelum spawn baru
+            if _hideRewardThread then
+                pcall(function() task.cancel(_hideRewardThread) end)
+                _hideRewardThread = nil
+            end
+            -- Ghost polling loop — state-bound: mati otomatis saat _hideRewardOn = false
+            _hideRewardThread = task.spawn(function()
                 while _hideRewardOn do
                     task.wait(0.5)
                     pcall(function()
@@ -917,6 +923,7 @@ do
                         end
                     end)
                 end
+                _hideRewardThread = nil  -- bersih saat loop selesai natural
             end)
         end
     end
@@ -3766,13 +3773,13 @@ do
     _setKillDDGlobal = function(idx)
         _killDDIdxState = idx
         if _killOptNames[idx] then
-            pcall(function() killDD:Select(nil, _killOptNames[idx]) end)
+            pcall(function() killDD:Select(_killOptNames[idx]) end)
             MA.killTarget = _killOptVals[idx]
         end
     end
     -- Set default dari state tersimpan
     if _killOptNames[_killDDIdxState] then
-        pcall(function() killDD:Select(nil, _killOptNames[_killDDIdxState]) end)
+        pcall(function() killDD:Select(_killOptNames[_killDDIdxState]) end)
         MA.killTarget = _killOptVals[_killDDIdxState]
     end
 
@@ -3814,16 +3821,16 @@ do
                 local allVal = {"ALL MAP"}
                 for i = 1, 20 do table.insert(allVal, "Map "..i) end
                 task.defer(function()
-                    pcall(function() mapDD:Select(nil, allVal) end)
+                    pcall(function() mapDD:Select(allVal) end)
                 end)
 
             elseif not hasAll and _prevHadAll then
                 -- ALL MAP baru di-UNCHECK: clear semua
                 _prevHadAll = false
                 for i = 1, 20 do mapSelSet[i] = nil; MR.selected[i] = nil end
-                -- Force visual: kosongkan semua via :Select(nil, nil)  ap.Value={}
+                -- Force visual: kosongkan semua via :Select(nil)  ap.Value={}
                 task.defer(function()
-                    pcall(function() mapDD:Select(nil, {}) end)
+                    pcall(function() mapDD:Select({}) end)
                 end)
 
             elseif hasAll and _prevHadAll then
@@ -3864,7 +3871,7 @@ do
             else
                 _prevHadAll = false
             end
-            mapDD:Select(nil, selVals)
+            mapDD:Select(selVals)
         end)
     end
 
@@ -3891,12 +3898,12 @@ do
     _setDelayDDGlobal = function(idx)
         _delayDDIdxState = idx
         if _delayOptNames[idx] then
-            pcall(function() delayDD:Select(nil, _delayOptNames[idx]) end)
+            pcall(function() delayDD:Select(_delayOptNames[idx]) end)
             MR.nextMapDelay = _delayOptVals[idx]
         end
     end
     if _delayOptNames[_delayDDIdxState] then
-        pcall(function() delayDD:Select(nil, _delayOptNames[_delayDDIdxState]) end)
+        pcall(function() delayDD:Select(_delayOptNames[_delayDDIdxState]) end)
         MR.nextMapDelay = _delayOptVals[_delayDDIdxState]
     end
 
@@ -4574,7 +4581,9 @@ _ENTRY_DEBOUNCE_SEC = _ENTRY_DEBOUNCE_SEC or 3
 
 -- Forward declare fungsi yang diperlukan UI
 _setRaidToggle   = nil
+_visRaidToggle   = nil
 _setAscToggle    = nil
+_visAscToggle    = nil
 _setRaidPMIdx    = nil
 _setAscPMIdx     = nil
 _raidBossToggleVis   = nil
@@ -4949,9 +4958,11 @@ task.spawn(function() ConnectRaidListeners() end)
 
 -- [FIX v1.lua PORT] Auto-reconnect kalau Remotes refresh (mis. setelah rejoin)
 -- File 1 baris 10423-10434 punya ini, file 2 hilang -> listener mati setelah rejoin
+-- [FIXED zombie] pakai flag _raidReconnectAlive agar loop mati kalau nil-kan flag
+_raidReconnectAlive = true
 task.spawn(function()
     local lastRef = Remotes:FindFirstChild("UpdateRaidInfo")
-    while true do
+    while _raidReconnectAlive do
         task.wait(3)
         local cur = Remotes:FindFirstChild("UpdateRaidInfo")
         if cur ~= lastRef then
@@ -7977,7 +7988,9 @@ local function UpdateActiveRaidLabel()
     end)
 end
 RAID.updateActiveLabel = UpdateActiveRaidLabel
-task.spawn(function() while true do task.wait(0.3); UpdateActiveRaidLabel() end end)
+-- [FIXED zombie] _raidReconnectAlive dijadikan flag bersama untuk loop-loop
+-- tingkat atas yang seharusnya hidup sepanjang lifecycle script
+task.spawn(function() while _raidReconnectAlive do task.wait(0.3); UpdateActiveRaidLabel() end end)
 
 -- Raid Completed paragraph
 local raidCompletedPara = raidSection:Paragraph({
@@ -8013,6 +8026,10 @@ _setRaidToggle = function(on)
     if on then StartRaidLoop()
     else StopRaid(); RaidStatusUpdate("Disabled", Color3.fromRGB(160,148,135)) end
 end
+-- Visual-only setter tanpa guard (untuk Config restore)
+_visRaidToggle = function(on)
+    pcall(function() raidEnableToggle:Set(on, false) end)
+end
 
 --  PICK MODE 
 local curPM = 1
@@ -8042,7 +8059,7 @@ _setRaidPMIdx = function(ii)
     if ii < 1 or ii > #PM_KEYS then return end
     curPM = ii; RAID.pickMode = PM_KEYS[ii]
     RAID.difficulty = PM_TO_DIFF[PM_KEYS[ii]]; RAID.snapshotMapId = nil
-    pcall(function() raidPickModeDD:Select(nil, PM_OPTS[ii]) end)
+    pcall(function() raidPickModeDD:Select(PM_OPTS[ii]) end)
     if _applyPickModeLock then _applyPickModeLock(PM_KEYS[ii]) end
 end
 
@@ -8072,7 +8089,7 @@ local raidPrefMapDD = raidSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() raidPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
+                pcall(function() raidPrefMapDD:Select({"-- NOT SELECTED --"}) end)
                 return
             end
             for _, v in ipairs(val) do
@@ -8087,9 +8104,9 @@ local function UpdatePrefLabel()
     for mn in pairs(RAID.preferMaps) do n=n+1; table.insert(ns,"Map "..mn) end
     table.sort(ns)
     if n == 0 then
-        pcall(function() raidPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
+        pcall(function() raidPrefMapDD:Select({"-- NOT SELECTED --"}) end)
     else
-        pcall(function() raidPrefMapDD:Select(nil, ns) end)
+        pcall(function() raidPrefMapDD:Select(ns) end)
     end
 end
 _raidUpdatePrefLabel = UpdatePrefLabel
@@ -8120,7 +8137,7 @@ local raidRankDD = raidSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() raidRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
+                pcall(function() raidRankDD:Select({"-- NOT SELECTED --"}) end)
                 if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
                 return
             end
@@ -8137,9 +8154,9 @@ local function RefreshRankDDLabel()
         if RAID.runeGrades[g] then table.insert(ns, g) end
     end
     if #ns == 0 then
-        pcall(function() raidRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
+        pcall(function() raidRankDD:Select({"-- NOT SELECTED --"}) end)
     else
-        pcall(function() raidRankDD:Select(nil, ns) end)
+        pcall(function() raidRankDD:Select(ns) end)
     end
 end
 _raidUpdateRankLabel = RefreshRankDDLabel
@@ -8182,9 +8199,9 @@ _setRaidRuneMapTarget = function(ml)
     RAID.runeMapTarget = ml or 0; SyncRuneState()
     if ml and ml >= 1 and ml <= 20 then
         local txt = "Map "..ml.." - "..(MAP_NAMES[ml] or "Map "..ml)
-        pcall(function() raidRuneDD:Select(nil, txt) end)
+        pcall(function() raidRuneDD:Select(txt) end)
     else
-        pcall(function() raidRuneDD:Select(nil, "-- NOT SELECTED --") end)
+        pcall(function() raidRuneDD:Select("-- NOT SELECTED --") end)
     end
 end
 
@@ -8225,7 +8242,7 @@ local raidUDDirDD = raidSection:Dropdown({
 _raidUpdownDirVis = function(dir)
     RAID.updownDir = dir or nil
     local disp = dir == "up" and "UP" or dir == "down" and "DOWN" or "-- NOT SELECTED --"
-    pcall(function() raidUDDirDD:Select(nil, disp) end)
+    pcall(function() raidUDDirDD:Select(disp) end)
 end
 
 local _targetGrades = {}
@@ -8246,7 +8263,7 @@ local raidUDGradeDD = raidSection:Dropdown({
 })
 _setRaidUpdownGrade = function(grade)
     RAID.updownTargetGrade = grade or nil
-    pcall(function() raidUDGradeDD:Select(nil, grade or "-- NOT SELECTED --") end)
+    pcall(function() raidUDGradeDD:Select(grade or "-- NOT SELECTED --") end)
 end
 
 --  AUTO KILL BOSS 
@@ -8369,7 +8386,7 @@ local function _doApplyLock(pm)
     _prefLocked = not u.map
     if _prefLocked then
         for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
-        pcall(function() raidPrefMapDD:Select(nil, {}) end)
+        pcall(function() raidPrefMapDD:Select({}) end)
         pcall(function() raidPrefMapDD:Lock(lockMsg) end)
     else
         pcall(function() raidPrefMapDD:Unlock() end)
@@ -8379,7 +8396,7 @@ local function _doApplyLock(pm)
     _rankLocked = not u.rank
     if _rankLocked then
         for _, g in ipairs(GRADE_LIST) do RAID.runeGrades[g] = nil end
-        pcall(function() raidRankDD:Select(nil, {}) end)
+        pcall(function() raidRankDD:Select({}) end)
         pcall(function() raidRankDD:Lock(lockMsg) end)
     else
         pcall(function() raidRankDD:Unlock() end)
@@ -8389,7 +8406,7 @@ local function _doApplyLock(pm)
     _runeLocked = not u.rune
     if _runeLocked then
         RAID.runeMapTarget = 0; RAID.runeEnabled = false
-        pcall(function() raidRuneDD:Select(nil, "-- NOT SELECTED --") end)
+        pcall(function() raidRuneDD:Select("-- NOT SELECTED --") end)
         pcall(function() raidRuneDD:Lock(lockMsg) end)
     else
         pcall(function() raidRuneDD:Unlock() end)
@@ -8400,8 +8417,8 @@ local function _doApplyLock(pm)
     if _updownLocked then
         RAID.updownEnabled = false; RAID.updownDir = nil; RAID.updownTargetGrade = nil
         pcall(function() raidUDToggle:Set(false, false) end)
-        pcall(function() raidUDDirDD:Select(nil, "-- NOT SELECTED --") end)
-        pcall(function() raidUDGradeDD:Select(nil, "-- NOT SELECTED --") end)
+        pcall(function() raidUDDirDD:Select("-- NOT SELECTED --") end)
+        pcall(function() raidUDGradeDD:Select("-- NOT SELECTED --") end)
         pcall(function() raidUDToggle:Lock(lockMsg) end)
         pcall(function() raidUDDirDD:Lock(lockMsg) end)
         pcall(function() raidUDGradeDD:Lock(lockMsg) end)
@@ -8502,6 +8519,10 @@ _setAscToggle = function(on)
     if on then StartAscensionLoop()
     else StopAscension(); AscStatusUpdate("Disabled", Color3.fromRGB(160,148,135)) end
 end
+-- Visual-only setter tanpa guard (untuk Config restore)
+_visAscToggle = function(on)
+    pcall(function() ascEnableToggle:Set(on, false) end)
+end
 
 --  PICK MODE 
 local APM_OPTS   = {"Default","By Rank","By Map","Hard","Easy","Manual"}
@@ -8548,7 +8569,7 @@ local ascPickModeDD = ascSection:Dropdown({
 _setAscPMIdx = function(ii)
     if ii < 1 or ii > #APM_KEYS then return end
     curAPM = ii; ASC.pickMode = APM_KEYS[ii]
-    pcall(function() ascPickModeDD:Select(nil, APM_OPTS[ii]) end)
+    pcall(function() ascPickModeDD:Select(APM_OPTS[ii]) end)
     if _applyAscPickModeLock then _applyAscPickModeLock(ASC.pickMode) end
 end
 
@@ -8591,7 +8612,7 @@ local ascPrefMapDD = ascSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() ascPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
+                pcall(function() ascPrefMapDD:Select({"-- NOT SELECTED --"}) end)
                 return
             end
             for _, v in ipairs(val) do
@@ -8607,9 +8628,9 @@ local function UpdateAscPrefMapLabel()
         if ASC.preferMaps[mn] then table.insert(ns, "Tower "..mn.." - "..(ASC_TOWER_NAMES[mn] or ("Tower "..mn))) end
     end
     if #ns == 0 then
-        pcall(function() ascPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
+        pcall(function() ascPrefMapDD:Select({"-- NOT SELECTED --"}) end)
     else
-        pcall(function() ascPrefMapDD:Select(nil, ns) end)
+        pcall(function() ascPrefMapDD:Select(ns) end)
     end
 end
 
@@ -8637,7 +8658,7 @@ local ascRankDD = ascSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() ascRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
+                pcall(function() ascRankDD:Select({"-- NOT SELECTED --"}) end)
                 if _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
                 return
             end
@@ -8652,9 +8673,9 @@ local function RefreshAscRankLabel()
     local ns = {}
     for _, g in ipairs(GRADE_LIST) do if ASC.runeGrades[g] then table.insert(ns, g) end end
     if #ns == 0 then
-        pcall(function() ascRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
+        pcall(function() ascRankDD:Select({"-- NOT SELECTED --"}) end)
     else
-        pcall(function() ascRankDD:Select(nil, ns) end)
+        pcall(function() ascRankDD:Select(ns) end)
     end
 end
 
@@ -8820,7 +8841,7 @@ local function _doApplyAscLock(pm)
     _ascPrefLocked = not u.map
     if _ascPrefLocked then
         for mn = 1, 26 do ASC.preferMaps[mn] = nil end
-        pcall(function() ascPrefMapDD:Select(nil, {}) end)
+        pcall(function() ascPrefMapDD:Select({}) end)
         pcall(function() ascPrefMapDD:Lock(lockMsg) end)
     else
         pcall(function() ascPrefMapDD:Unlock() end)
@@ -8830,7 +8851,7 @@ local function _doApplyAscLock(pm)
     _ascRankLocked = not u.rank
     if _ascRankLocked then
         for _, g in ipairs(GRADE_LIST) do ASC.runeGrades[g] = nil end
-        pcall(function() ascRankDD:Select(nil, {}) end)
+        pcall(function() ascRankDD:Select({}) end)
         pcall(function() ascRankDD:Lock(lockMsg) end)
     else
         pcall(function() ascRankDD:Unlock() end)
@@ -8840,7 +8861,7 @@ local function _doApplyAscLock(pm)
     _ascRuneLocked = not u.rune
     if _ascRuneLocked then
         ASC.runeMapTarget = 0; ASC.runeEnabled = false
-        pcall(function() ascRuneDD:Select(nil, "-- NOT SELECTED --") end)
+        pcall(function() ascRuneDD:Select("-- NOT SELECTED --") end)
         pcall(function() ascRuneDD:Lock(lockMsg) end)
     else
         pcall(function() ascRuneDD:Unlock() end)
@@ -11258,7 +11279,7 @@ do
 
             LOOPS_HR[si] = task.spawn(function()
                 local attempt = 0
-                while true do
+                while _HR_RPT.running do
                     repeat
                         if not (_HR_RPT.guid and _HR_RPT.guid ~= "") then
                             _HR_RPT.SetSlot(si,"[..] Klik 1x di Mesin Reroll dulu")
@@ -11594,7 +11615,7 @@ do
 
         LOOPS_WR[si] = task.spawn(function()
             local attempt = 0
-            while true do
+            while _WR_RPT.running do
                 repeat
                     if not (_WR_RPT.guid and _WR_RPT.guid ~= "") then
                         _WR_RPT.SetSlot(si, "[..] Click 1x on Reroll Machine")
@@ -13908,45 +13929,57 @@ do
     local function ApplyConfig(cfg)
         if type(cfg) ~= "table" then return false end
 
+        -- ── ATURAN PANGGILAN ──────────────────────────────────────────────
+        -- Setiap setter (_setXxx) sudah memanggil:
+        --   1. logika backend (start/stop loop, flag)
+        --   2. el:Set(v)  →  trigger Callback WindUI + sync visual
+        -- _visXxx TIDAK dipanggil lagi untuk toggle yang setter-nya sudah
+        -- lengkap — agar tidak double-fire callback + logika.
+        -- _visXxx hanya dipakai di tempat yang MEMANG butuh visual-only
+        -- (label refresh, sub-toggle updown/boss, dll).
+        -- -----------------------------------------------------------------
+
         -- ── MAIN TAB ──────────────────────────────────────────────────────
         pcall(function()
+            -- setter panggil el:Set(v) -> callback -> logika+visual ✓
             if _setSellHeroToggle    then _setSellHeroToggle(cfg.sellHeroOn == true) end
             if _setAutoCollectToggle then _setAutoCollectToggle(cfg.autoCollectOn == true) end
-            if _swRestoreFromConfig  then
+            if _swRestoreFromConfig then
                 local isAll = cfg.swSelectAll ~= false
                 _swRestoreFromConfig(isAll, cfg.swSelectedIds, cfg.swSelNames)
             end
             if _autoSellWeaponSet then _autoSellWeaponSet(cfg.sellWeaponOn == true) end
-            if _autoDecompGemSet  then _autoDecompGemSet(cfg.decompGemOn == true) end
+            -- internal guard (v==state), el:Set(v) ✓
+            if _autoDecompGemSet then _autoDecompGemSet(cfg.decompGemOn == true) end
             if _setGemLevelRange and cfg.gemMinLevel and cfg.gemMaxLevel then
                 _setGemLevelRange(cfg.gemMinLevel, cfg.gemMaxLevel)
             end
         end)
 
         -- ── HIDE TAB ──────────────────────────────────────────────────────
+        -- Delay 0.3s agar PlayerGui sudah stabil sebelum hook dipasang
         task.delay(0.3, function()
             pcall(function()
+                -- ApplyHideReroll(v) + _hrcrToggle:Set(v) — tidak perlu _vis* ✓
                 if _setHideRerollChat then _setHideRerollChat(cfg.hideRerollChat == true) end
-                if _visHideRerollChat then _visHideRerollChat(cfg.hideRerollChat == true) end
             end)
             pcall(function()
-                if _setHideAllUI then _setHideAllUI(cfg.hideAllUI == true) end
-                if _visHideAllUI then _visHideAllUI(cfg.hideAllUI == true) end
+                if _setHideAllUI   then _setHideAllUI(cfg.hideAllUI == true) end
             end)
             pcall(function()
                 if _setHideAllAnim then _setHideAllAnim(cfg.hideAllAnim == true) end
-                if _visHideAllAnim then _visHideAllAnim(cfg.hideAllAnim == true) end
             end)
         end)
 
         -- ── FARM TAB ──────────────────────────────────────────────────────
         pcall(function()
-            if _setRAToggle  then _setRAToggle(cfg.randomAttackOn == true) end
-            if _visRandomAtk then _visRandomAtk(cfg.randomAttackOn == true) end
+            -- flag + el:Set(v) ✓
+            if _setRAToggle then _setRAToggle(cfg.randomAttackOn == true) end
         end)
 
         -- ── ATTACK TAB ────────────────────────────────────────────────────
         pcall(function()
+            -- Restore data map selection (data + visual checkbox refs)
             if _maMapSelState and cfg.maMapSel then
                 for k in pairs(_maMapSelState) do _maMapSelState[k] = nil end
                 if MR and MR.selected then for k in pairs(MR.selected) do MR.selected[k] = nil end end
@@ -13972,42 +14005,43 @@ do
                 end
                 if _maUpdateMapDDLbl then pcall(_maUpdateMapDDLbl) end
             end
+            -- Kill/Delay dropdown ✓
             task.delay(0.1, function()
                 pcall(function() if _setKillDDGlobal  and cfg.killDDIdx  then _setKillDDGlobal(cfg.killDDIdx)   end end)
                 pcall(function() if _setDelayDDGlobal and cfg.delayDDIdx then _setDelayDDGlobal(cfg.delayDDIdx) end end)
             end)
+            -- Skill Z/X/C/V/F: logika via SkOn/Off, visual via _setSkillToggleVis
             for _, n in ipairs({"Z","X","C","V","F"}) do
-                local key = "skill" .. n
-                if cfg[key] == true and not SKL[n].on then
+                local key   = "skill" .. n
+                local wantOn = cfg[key] == true
+                if wantOn and not SKL[n].on then
                     SkOn(n)
-                else
-                    if cfg[key] == false and SKL[n].on then SkOff(n) end
+                elseif not wantOn and SKL[n].on then
+                    SkOff(n)
                 end
-                -- Sync visual toggle WindUI
                 if _setSkillToggleVis then
-                    pcall(function() _setSkillToggleVis(n, cfg[key] == true) end)
+                    pcall(function() _setSkillToggleVis(n, wantOn) end)
                 end
             end
+            -- Hide Reward + Mass Attack setelah map applied
             task.delay(0.5, function()
-                if _setHideReward      then _setHideReward(cfg.hideReward == true) end
-                if _visHideRewardPanel then _visHideRewardPanel(cfg.hideReward == true) end
-                if _setMaToggleGlobal  then _setMaToggleGlobal(cfg.massAttackOn == true) end
-                if _visMassAtk         then _visMassAtk(cfg.massAttackOn == true) end
+                -- ApplyHideReward + el:Set(v) — tidak perlu _vis* ✓
+                if _setHideReward     then _setHideReward(cfg.hideReward == true) end
+                if _setMaToggleGlobal then _setMaToggleGlobal(cfg.massAttackOn == true) end
             end)
         end)
 
         -- ── PLAYER TAB ────────────────────────────────────────────────────
         pcall(function()
+            -- flag + el:Set(v) — tidak perlu _vis* ✓
             if _setNoClipToggle  then _setNoClipToggle(cfg.noClipOn == true) end
-            if _visNoClip        then _visNoClip(cfg.noClipOn == true) end
             if _setAntiAfkToggle then _setAntiAfkToggle(cfg.antiAfkOn == true) end
-            if _visAntiAfk       then _visAntiAfk(cfg.antiAfkOn == true) end
             if _setSpeedSlider and cfg.walkSpeed then _setSpeedSlider(cfg.walkSpeed) end
         end)
 
-        -- ── AUTOMATION TAB ────────────────────────────────────────────────
+        -- ── AUTOMATION: RAID ──────────────────────────────────────────────
         pcall(function()
-            -- Restore RAID pick mode state langsung (tanpa trigger ApplyPickModeLock)
+            -- Tulis state data dulu SEBELUM visual/logika
             if cfg.raidPMIdx then
                 local PM_KEYS = {"default","byrank","bymap","hard","easy","manual"}
                 local ii = math.clamp(cfg.raidPMIdx, 1, #PM_KEYS)
@@ -14016,7 +14050,6 @@ do
                 RAID.difficulty = PM_TO_DIFF[PM_KEYS[ii]] or "easy"
                 RAID.snapshotMapId = nil
             end
-            -- Restore preferMaps & runeGrades DULU sebelum apply lock
             if RAID.preferMaps and cfg.raidPreferMaps then
                 for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
                 for k, v in pairs(cfg.raidPreferMaps) do
@@ -14037,7 +14070,7 @@ do
                     if _raidUpdatePrefLabel then _raidUpdatePrefLabel() end
                     if _raidUpdateRankLabel then _raidUpdateRankLabel() end
                     if _setRaidPMIdx and cfg.raidPMIdx then _setRaidPMIdx(cfg.raidPMIdx) end
-                    -- Restore ulang data yg mungkin ter-clear oleh ApplyPickModeLock
+                    -- Re-restore: ApplyPickModeLock bisa clear data di atas
                     if RAID.preferMaps and cfg.raidPreferMaps then
                         for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
                         for k, v in pairs(cfg.raidPreferMaps) do
@@ -14052,12 +14085,12 @@ do
                     if _raidUpdateRankLabel then _raidUpdateRankLabel() end
                 end)
                 pcall(function()
-                    if _setRaidUpdownGrade   then _setRaidUpdownGrade(cfg.raidUpdownTargetGrade or nil) end
-                    if _raidUpdownToggleVis  then _raidUpdownToggleVis(cfg.raidUpdownEnabled == true) end
-                    if _raidUpdownDirVis     then _raidUpdownDirVis(cfg.raidUpdownDir or "up") end
-                    if _setRaidRuneMapTarget then _setRaidRuneMapTarget(cfg.raidRuneMapTarget or 0) end
-                    if _raidBossToggleVis    then _raidBossToggleVis(cfg.raidAutoKillBoss == true) end
-                    if _raidBossDelaySet     then _raidBossDelaySet(cfg.raidBossDelay or 3) end
+                    if _setRaidUpdownGrade    then _setRaidUpdownGrade(cfg.raidUpdownTargetGrade or nil) end
+                    if _raidUpdownToggleVis   then _raidUpdownToggleVis(cfg.raidUpdownEnabled == true) end
+                    if _raidUpdownDirVis      then _raidUpdownDirVis(cfg.raidUpdownDir or "up") end
+                    if _setRaidRuneMapTarget  then _setRaidRuneMapTarget(cfg.raidRuneMapTarget or 0) end
+                    if _raidBossToggleVis     then _raidBossToggleVis(cfg.raidAutoKillBoss == true) end
+                    if _raidBossDelaySet      then _raidBossDelaySet(cfg.raidBossDelay or 3) end
                     if _setRaidListEnabledVis then
                         _setRaidListEnabledVis(cfg.raidListEnabled == true)
                     else
@@ -14078,12 +14111,15 @@ do
                         if _raidRebuildListRows then pcall(_raidRebuildListRows) end
                     end
                 end)
+                -- Main toggle RAID: _setRaidToggle handle visual (el:Set silently) + logika
+                -- _visRaidToggle tidak dipanggil agar tidak double-fire StartRaidLoop ✓
                 task.delay(0.5, function()
                     if _setRaidToggle then _setRaidToggle(cfg.raidOn == true) end
                 end)
             end)
         end)
 
+        -- ── AUTOMATION: ASC ───────────────────────────────────────────────
         pcall(function()
             if _setAscPMIdx and cfg.ascPMIdx then _setAscPMIdx(cfg.ascPMIdx) end
             if ASC.preferMaps and cfg.ascPreferMaps then
@@ -14124,37 +14160,39 @@ do
                 ASC.listEnabled = cfg.ascListEnabled == true
             end
             if _ascRebuildListRows then _ascRebuildListRows() end
+            -- _setAscToggle handle visual + logika — tidak perlu _vis* ✓
             task.delay(0.7, function()
                 if _setAscToggle then _setAscToggle(cfg.ascOn == true) end
             end)
         end)
 
+        -- ── AUTOMATION: SIEGE ─────────────────────────────────────────────
         pcall(function()
             if SIEGE.excludeMaps and cfg.siegeExclude then
                 for k, v in pairs(cfg.siegeExclude) do
                     local n = tonumber(k); if n then SIEGE.excludeMaps[n] = v end
                 end
             end
-            -- Sync visual dropdown exclude maps setelah data ter-restore
             if _visSiegeExcludeDD then pcall(_visSiegeExcludeDD) end
+            -- _setSiegeToggle: el:Set silently + StartSiegeLoop/StopSiege ✓
             task.delay(0.9, function()
                 if _setSiegeToggle then _setSiegeToggle(cfg.siegeOn == true) end
-                if _visSiege       then _visSiege(cfg.siegeOn == true) end
             end)
         end)
 
+        -- ── AUTOMATION: DUNGEON ───────────────────────────────────────────
         pcall(function()
+            -- Tidak ada visual toggle di JTR; setter hanya update flag
             task.delay(1.1, function()
                 if _setDungeonToggle then _setDungeonToggle(cfg.dungeonOn == true) end
-                if _visDungeon       then _visDungeon(cfg.dungeonOn == true) end
             end)
         end)
 
+        -- ── AUTOMATION: ST2 / ANNIVERSARY ────────────────────────────────
         pcall(function()
             ST2.waveCount = cfg.st2WaveCount or 0
             task.delay(1.3, function()
                 if _setST2Toggle then _setST2Toggle(cfg.st2On == true) end
-                if _visST2       then _visST2(cfg.st2On == true) end
                 if ST2.setAttackToggle and cfg.st2AttackOn ~= nil then
                     ST2.setAttackToggle(cfg.st2AttackOn == true)
                 end
@@ -14164,6 +14202,7 @@ do
         -- ── REROLL TAB ────────────────────────────────────────────────────
         task.delay(0.3, function()
             pcall(function()
+                -- Restore slotTarget dulu SEBELUM nyalakan toggle
                 if _HR_RPT and _HR_RPT.slotTarget and cfg.heroSlotTarget then
                     for si = 1, 3 do
                         for k in pairs(_HR_RPT.slotTarget[si]) do _HR_RPT.slotTarget[si][k] = nil end
@@ -14174,6 +14213,7 @@ do
                         end
                     end
                 end
+                -- x100 dulu, baru running (urutan penting)
                 if _setHeroX100Toggle then _setHeroX100Toggle(cfg.heroX100On == true) end
                 task.delay(0.2, function()
                     if not cfg.heroX100On then
@@ -14199,130 +14239,16 @@ do
                     end
                 end)
             end)
-            pcall(function()
-                if PGR and cfg.pgrTargets then
-                    for i = 1, 3 do
-                        for k in pairs(PGR.targets[i]) do PGR.targets[i][k] = nil end
-                        if type(cfg.pgrTargets[i]) == "table" then
-                            for gid, v in pairs(cfg.pgrTargets[i]) do
-                                if v then PGR.targets[i][tonumber(gid) or gid] = true end
-                            end
-                        end
-                        local enOn = cfg.pgrOn and cfg.pgrOn[i] == true or false
-                        PGR.enOnFlags[i] = enOn
-                        if PGR.toggleBtns[i] then
-                            PGR.toggleBtns[i].BackgroundColor3 = enOn and C.ACC or C.BG3
-                        end
-                        if PGR.toggleKnobs[i] then
-                            PGR.toggleKnobs[i].Position = enOn and UDim2.new(1,-20,0.5,-9) or UDim2.new(0,2,0.5,-9)
-                        end
-                        if enOn then DoAutoRollPetGear(i, true) end
-                        if PGR100 then
-                            local r100On = cfg.pgr100On and cfg.pgr100On[i] == true or false
-                            if r100On and not enOn then
-                                PGR100.enOnFlags[i] = true
-                                if PGR100.toggleBtns[i] then
-                                    PGR100.toggleBtns[i].BackgroundColor3 = Color3.fromRGB(0,180,200)
-                                end
-                                if PGR100.toggleKnobs[i] then
-                                    PGR100.toggleKnobs[i].Position = UDim2.new(1,-20,0.5,-9)
-                                end
-                                PGR100.Loop(i)
-                            end
-                        end
-                    end
-                end
-            end)
-            pcall(function()
-                if HALO and cfg.haloOn then
-                    for i = 1, 3 do
-                        local enOn = cfg.haloOn[i] == true
-                        HALO.enOnFlags[i] = enOn
-                        if HALO.toggleBtns[i] then
-                            HALO.toggleBtns[i].BackgroundColor3 = enOn and C.ACC or C.BG3
-                        end
-                        if HALO.toggleKnobs[i] then
-                            HALO.toggleKnobs[i].Position = enOn and UDim2.new(1,-20,0.5,-9) or UDim2.new(0,2,0.5,-9)
-                        end
-                        DoAutoRollHalo(i, enOn)
-                    end
-                end
-            end)
-            pcall(function()
-                if ORN and cfg.ornTargets then
-                    local nm = #_ASH_ORN.MACHINES
-                    for i = 1, nm do
-                        for k in pairs(ORN.targets[i]) do ORN.targets[i][k] = nil end
-                        if type(cfg.ornTargets[i]) == "table" then
-                            for qid, v in pairs(cfg.ornTargets[i]) do
-                                if v then ORN.targets[i][tonumber(qid) or qid] = true end
-                            end
-                        end
-                        local enOn = cfg.ornOn and cfg.ornOn[i] == true or false
-                        ORN.enOnFlags[i] = enOn
-                        if ORN.toggleBtns[i] then
-                            ORN.toggleBtns[i].BackgroundColor3 = enOn and C.ACC or C.BG3
-                        end
-                        if ORN.toggleKnobs[i] then
-                            ORN.toggleKnobs[i].Position = enOn and UDim2.new(1,-20,0.5,-9) or UDim2.new(0,2,0.5,-9)
-                        end
-                        if enOn then _ASH_ORN.DoRoll(i, true) end
-                    end
-                end
-            end)
-            pcall(function()
-                if _setMergeToggle then _setMergeToggle(cfg.mergeOn == true) end
-                if _visMerge       then _visMerge(cfg.mergeOn == true) end
-                if _setUseToggle   then _setUseToggle(cfg.useOn == true) end
-                if _visUse         then _visUse(cfg.useOn == true) end
-            end)
         end)
 
         -- ── WEBHOOK TAB ───────────────────────────────────────────────────
         pcall(function()
             _webhookEnabled = cfg.webhookEnabled == true
-            if _setWebhookUrlVis then
-                _setWebhookUrlVis(cfg.webhookUrl or "")
-            else
-                _webhookUrl = cfg.webhookUrl or ""
-            end
+            _webhookUrl     = cfg.webhookUrl or ""
+            -- _setWebhookToggle: el:Set(v) — tidak perlu _vis* ✓
             if _setWebhookToggle  then _setWebhookToggle(cfg.webhookEnabled == true) end
-            if _visWebhookToggle  then _visWebhookToggle(cfg.webhookEnabled == true) end
             if _webhookModeSetIdx and cfg.webhookModeIdx then
                 _webhookModeSetIdx(cfg.webhookModeIdx)
-            end
-        end)
-
-        -- ── REROLL slot label refresh (setelah data restore) ──────────────
-        task.delay(0.5, function()
-            pcall(function()
-                if _HR_RPT and _HR_RPT.slotRefreshFns then
-                    for i = 1, 3 do
-                        if _HR_RPT.slotRefreshFns[i] then _HR_RPT.slotRefreshFns[i]() end
-                    end
-                end
-            end)
-            pcall(function()
-                if _WR_RPT and _WR_RPT.slotRefreshFns then
-                    for i = 1, 3 do
-                        if _WR_RPT.slotRefreshFns[i] then _WR_RPT.slotRefreshFns[i]() end
-                    end
-                end
-            end)
-        end)
-
-        -- ── THEME ─────────────────────────────────────────────────────────
-        pcall(function()
-            if cfg.themeName and cfg.themeName ~= "" then
-                pcall(function() ApplyTheme(cfg.themeName) end)
-            end
-            if cfg.themeTransparency ~= nil then
-                _G.ThemeTransparency = cfg.themeTransparency
-                Window.BackgroundTransparency = _G.ThemeTransparency
-                if _setTransSlider then
-                    local v = math.floor(cfg.themeTransparency * 99 + 1)
-                    _setTransSlider(math.clamp(v, 1, 100))
-                end
             end
         end)
 
