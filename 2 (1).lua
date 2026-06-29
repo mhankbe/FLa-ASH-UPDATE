@@ -3796,8 +3796,11 @@ do
     local _prevHadAll = false
 
     local mapDD  -- forward ref untuk :Select() di dalam callback
-
-    local _, mapDD = MassAttackTab:Dropdown({
+    -- [FIX v5] Jangan pakai 'local _, mapDD = ...' — itu buat variable baru (mapDD_B = nil,
+    -- karena WindUI Dropdown hanya return 1 value). _maUpdateMapDDLbl tangkap mapDD_B yg nil
+    -- → if not mapDD then return end → visual tidak pernah update.
+    -- Pakai assignment biasa (tanpa 'local') agar upvalue mapDD di atas ter-assign.
+    mapDD = MassAttackTab:Dropdown({
         Flag     = "maMapDD",
         Title    = "Rotation Map",
         Desc     = "Pilih map untuk dirotasi (kosong = map sekarang)",
@@ -14242,12 +14245,14 @@ do
                 _webhookUrl = (cfg.webhookUrl or ""):match("^%s*(.-)%s*$") or ""
             end
 
-            -- [FIX] _setWebhookToggle punya guard (v == _webhookEnabled → return).
-            -- Reset flag dulu ke kebalikannya agar guard tidak memblok, lalu panggil setter.
-            -- Setter akan set flag + el:Set(v) → callback → aktifkan notif ✓
+            -- [FIX v5] Gunakan _visWebhookToggle (visual-only, tanpa callback URL check).
+            -- _setWebhookToggle memanggil :Set(v) WITH callback → callback validasi URL
+            -- → jika URL belum siap atau kosong, callback paksa :Set(false,false) → visual
+            -- balik OFF meski config punya webhookEnabled=true.
+            -- Set _webhookEnabled langsung + update visual saja, tanpa trigger callback.
             local wantEnabled = cfg.webhookEnabled == true
-            _webhookEnabled = not wantEnabled   -- paksa guard terlewat
-            if _setWebhookToggle then _setWebhookToggle(wantEnabled) end
+            _webhookEnabled = wantEnabled
+            if _visWebhookToggle then _visWebhookToggle(wantEnabled) end
 
             if _webhookModeSetIdx and cfg.webhookModeIdx then
                 _webhookModeSetIdx(cfg.webhookModeIdx)
