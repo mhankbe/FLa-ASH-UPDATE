@@ -1,3 +1,54 @@
+--[[
+    KERANGKA MENU TAB -> WindUI (VERSI FINAL)
+    Urutan sesuai permintaan terbaru - 11 tab, TIDAK di-flatten lagi.
+    Automation & Reroll masing-masing CUMA 1 tab (sub-fitur di dalamnya diatur
+    pakai Section/Group nanti waktu pengisian fungsi, bukan dipecah jadi tab sidebar).
+
+    Tambahan: profil user (avatar + username Roblox asli) di pojok kiri-bawah sidebar,
+    di bawah tab Theme - pakai config native `User` WindUI (pengganti CreateUserProfile()
+    di baris 1132-1172 source asli).
+
+    Pemetaan tab -> baris source asli (referensi buat pengisian fungsi nanti):
+      1. Main        -> PANEL: MAIN (3812)
+      2. Hide         -> PANEL: HIDE (5171)
+      3. Farm         -> PANEL: FARM (5571)
+      4. Mass Attack  -> PANEL: ATTACK (6785)
+      5. Automation   -> Auto Raid (13577), Auto Ascension (14700), Auto Siege (16029),
+                         Single Tower Map2 (17293), Join To Tower (17486), Join To Raid (17800)
+      6. Reroll       -> Hero Fastroll (7241), Weapon Fastroll (7633), Pet Gear (8002),
+                         Halo (8217), Ornament (8311)
+      7. Player       -> PANEL: PLAYER (7022)
+      8. Setting      -> PANEL: SETTINGS (19002)
+      9. Webhook      -> PANEL: WEBHOOK (19113)
+      10. Config      -> PANEL: CONFIG (20199)
+      11. Theme       -> PANEL: THEME (21364)
+
+      [belum dipetakan ke tab mana - tunggu instruksi]: Claim Reward (18167),
+        Anniversary Celebration (18475) -- kemungkinan masuk ke dalam tab Main atau
+        tab tersendiri, BELUM ditentukan di list barumu. Tanya saya nanti kalau sudah sampai sana.
+
+    [v3] PENAMBAHAN ke tab Main:
+      - COUNTER AUTO SELL HERO EQUIP  (Paragraph: R/Y/B/Supreme + Button RESET COUNTER)
+      - AUTO SELL HERO EQUIP          (Toggle + seluruh logika sell)
+        Logika: StartAutoSell, scanGuidNames, getType, getGrade, shouldSell, doSell,
+                _sellToggleCb, global expose _setSellHeroToggle/_visSellHero/_autoSellOnState
+      - Status info via Paragraph yang diupdate realtime
+
+    [v4] PENAMBAHAN ke tab Main:
+      - AUTO COLLECT GOLD & ITEM      (Toggle + seluruh logika collect)
+        Dependency chain:
+          _collectObj           (baris ~486)  - TP obj ke player + fire CollectItem/ExtraReward
+          _instantCollectConns  (baris ~483)  - tabel koneksi instant collector
+          _instantCollected     (baris ~484)  - dedup cache instant collector
+          StartInstantGoldCollector (baris ~511) - listen ChildAdded per folder
+          _goldMagnetRunning    (baris ~2420) - flag magnet loop
+          StartGoldMagnet       (baris ~2421) - loop TP semua item ke player tiap 0.05s
+          StopGoldMagnet        (baris ~2468) - stop magnet loop
+          DoAutoCollect         (baris ~2720) - polling loop collect via StartLoop
+          DoAutoCollectGoldItem (baris ~2472) - master toggle: panggil semua di atas
+        Global expose: _setAutoCollectToggle, _visAutoCollect, _autoCollectState
+        Dependency global: STATE, LOOPS, COLLECTED, RE, LP, PG_Wait, StartLoop, StopLoop
+--]]
 
 --  SERVICES 
 local Players           = game:GetService("Players")
