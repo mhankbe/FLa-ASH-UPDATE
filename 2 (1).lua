@@ -1,3 +1,4 @@
+
 --  SERVICES 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -525,7 +526,6 @@ do
     local _hideAnimOn   = false
     local _hideRewardOn     = false
     local _hideRewardThread = nil  -- [FIXED zombie] track thread untuk cancel
-    local _hideRewardConn   = nil  -- [v5] DescendantAdded connection
 
     local _rerollConn  = nil
     local _animLoop    = nil
@@ -814,16 +814,6 @@ do
         _hideRewardState = on
         _hideRewardOn    = on
 
-        -- [v5] Cleanup: cancel thread lama + disconnect DescendantAdded lama
-        if _hideRewardThread then
-            pcall(function() task.cancel(_hideRewardThread) end)
-            _hideRewardThread = nil
-        end
-        if _hideRewardConn then
-            pcall(function() _hideRewardConn:Disconnect() end)
-            _hideRewardConn = nil
-        end
-
         if on then
             local HIDE_PANELS = {"RewardsFrame","ResultFrame","RewardPanel","ChallengeGarrisonBossSuccess"}
 
@@ -839,57 +829,50 @@ do
                 end)
             end
 
-            -- Cek apakah obj adalah panel reward yang perlu di-hide
-            local function isTarget(obj)
-                if not (obj:IsA("GuiObject") or obj:IsA("ScreenGui")) then return false end
-                for _, name in ipairs(HIDE_PANELS) do
-                    if obj.Name == name or obj.Name:find("GarrisonBoss") then return true end
-                end
-                return false
-            end
-
-            -- Hide obj + pasang guard property-change agar tidak bisa di-re-show server
-            local function watchAndHide(obj)
-                if not isTarget(obj) then return end
-                forceHide(obj)
-                pcall(function()
-                    if obj:IsA("GuiObject") then
-                        obj:GetPropertyChangedSignal("Visible"):Connect(function()
-                            if _hideRewardOn and obj.Visible then forceHide(obj) end
-                        end)
-                    elseif obj:IsA("ScreenGui") then
-                        obj:GetPropertyChangedSignal("Enabled"):Connect(function()
-                            if _hideRewardOn and obj.Enabled then forceHide(obj) end
-                        end)
-                    end
-                end)
-            end
-
-            -- [v5] 1) Langsung hide panel yang sudah ada di PlayerGui saat toggle ON
-            for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
-                watchAndHide(obj)
-            end
-
-            -- [v5] 2) DescendantAdded: panel di-hide SAAT ditambahkan ke PlayerGui
-            -- (sebelum sempat render ke layar — tidak perlu tunggu muncul dulu)
-            _hideRewardConn = LP.PlayerGui.DescendantAdded:Connect(function(obj)
+            local function checkAndHide(obj)
                 if not _hideRewardOn then return end
-                watchAndHide(obj)
-            end)
+                if not (obj:IsA("GuiObject") or obj:IsA("ScreenGui")) then return end
+                for _, name in ipairs(HIDE_PANELS) do
+                    if obj.Name == name or obj.Name:find("GarrisonBoss") then
+                        if _hideRewardOn then forceHide(obj) end
+                        pcall(function()
+                            if obj:IsA("GuiObject") then
+                                obj:GetPropertyChangedSignal("Visible"):Connect(function()
+                                    if _hideRewardOn and obj.Visible then forceHide(obj) end
+                                end)
+                            elseif obj:IsA("ScreenGui") then
+                                obj:GetPropertyChangedSignal("Enabled"):Connect(function()
+                                    if _hideRewardOn and obj.Enabled then forceHide(obj) end
+                                end)
+                            end
+                        end)
+                        break
+                    end
+                end
+            end
 
-            -- [v5] 3) Safety polling tiap 2s sebagai fallback
-            -- (bukan andalah utama lagi — DescendantAdded yg handle immediate case)
+            for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do checkAndHide(obj) end
+
+            -- [FIXED zombie] cancel thread lama sebelum spawn baru
+            if _hideRewardThread then
+                pcall(function() task.cancel(_hideRewardThread) end)
+                _hideRewardThread = nil
+            end
+            -- Ghost polling loop — state-bound: mati otomatis saat _hideRewardOn = false
             _hideRewardThread = task.spawn(function()
                 while _hideRewardOn do
-                    task.wait(2)
-                    if not _hideRewardOn then break end
+                    task.wait(0.5)
                     pcall(function()
-                        for _, obj in ipairs(LP.PlayerGui:GetDescendants()) do
-                            if isTarget(obj) then forceHide(obj) end
+                        for _, obj in ipairs(LP.PlayerGui:GetChildren()) do
+                            for _, name in ipairs(HIDE_PANELS) do
+                                if obj.Name == name or obj.Name:find("GarrisonBoss") then
+                                    forceHide(obj)
+                                end
+                            end
                         end
                     end)
                 end
-                _hideRewardThread = nil
+                _hideRewardThread = nil  -- bersih saat loop selesai natural
             end)
         end
     end
