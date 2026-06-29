@@ -3766,13 +3766,13 @@ do
     _setKillDDGlobal = function(idx)
         _killDDIdxState = idx
         if _killOptNames[idx] then
-            pcall(function() killDD:SetValue(_killOptNames[idx]) end)
+            pcall(function() killDD:Select(nil, _killOptNames[idx]) end)
             MA.killTarget = _killOptVals[idx]
         end
     end
     -- Set default dari state tersimpan
     if _killOptNames[_killDDIdxState] then
-        pcall(function() killDD:SetValue(_killOptNames[_killDDIdxState]) end)
+        pcall(function() killDD:Select(nil, _killOptNames[_killDDIdxState]) end)
         MA.killTarget = _killOptVals[_killDDIdxState]
     end
 
@@ -3891,12 +3891,12 @@ do
     _setDelayDDGlobal = function(idx)
         _delayDDIdxState = idx
         if _delayOptNames[idx] then
-            pcall(function() delayDD:SetValue(_delayOptNames[idx]) end)
+            pcall(function() delayDD:Select(nil, _delayOptNames[idx]) end)
             MR.nextMapDelay = _delayOptVals[idx]
         end
     end
     if _delayOptNames[_delayDDIdxState] then
-        pcall(function() delayDD:SetValue(_delayOptNames[_delayDDIdxState]) end)
+        pcall(function() delayDD:Select(nil, _delayOptNames[_delayDDIdxState]) end)
         MR.nextMapDelay = _delayOptVals[_delayDDIdxState]
     end
 
@@ -3914,11 +3914,11 @@ do
     })
     -- Expose setter dan visual toggle (kompatibilitas Config panel)
     _setMaToggleGlobal = function(on)
-        pcall(function() maToggle:SetValue(on) end)
+        pcall(function() maToggle:Set(on, false) end)
         DoMassAttack(on)
     end
     _visMassAtk = function(on)
-        pcall(function() maToggle:SetValue(on) end)
+        pcall(function() maToggle:Set(on, false) end)
     end
 
     --  AUTO SKILL section (identik 1.lua baris ~6954 skillCard) 
@@ -8009,7 +8009,7 @@ local raidEnableToggle = raidSection:Toggle({
 _setRaidToggle = function(on)
     if on == _raidOn then return end
     _raidOn = on
-    pcall(function() raidEnableToggle:SetValue(on) end)
+    pcall(function() raidEnableToggle:Set(on, false) end)
     if on then StartRaidLoop()
     else StopRaid(); RaidStatusUpdate("Disabled", Color3.fromRGB(160,148,135)) end
 end
@@ -8042,7 +8042,7 @@ _setRaidPMIdx = function(ii)
     if ii < 1 or ii > #PM_KEYS then return end
     curPM = ii; RAID.pickMode = PM_KEYS[ii]
     RAID.difficulty = PM_TO_DIFF[PM_KEYS[ii]]; RAID.snapshotMapId = nil
-    pcall(function() raidPickModeDD:SetValue(PM_OPTS[ii]) end)
+    pcall(function() raidPickModeDD:Select(nil, PM_OPTS[ii]) end)
     if _applyPickModeLock then _applyPickModeLock(PM_KEYS[ii]) end
 end
 
@@ -8072,7 +8072,7 @@ local raidPrefMapDD = raidSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() raidPrefMapDD:SetValue({"-- NOT SELECTED --"}) end)
+                pcall(function() raidPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
                 return
             end
             for _, v in ipairs(val) do
@@ -8087,9 +8087,9 @@ local function UpdatePrefLabel()
     for mn in pairs(RAID.preferMaps) do n=n+1; table.insert(ns,"Map "..mn) end
     table.sort(ns)
     if n == 0 then
-        pcall(function() raidPrefMapDD:SetValue({"-- NOT SELECTED --"}) end)
+        pcall(function() raidPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
     else
-        pcall(function() raidPrefMapDD:SetValue(ns) end)
+        pcall(function() raidPrefMapDD:Select(nil, ns) end)
     end
 end
 _raidUpdatePrefLabel = UpdatePrefLabel
@@ -8120,7 +8120,7 @@ local raidRankDD = raidSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() raidRankDD:SetValue({"-- NOT SELECTED --"}) end)
+                pcall(function() raidRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
                 if _raidWakeup then pcall(function() _raidWakeup:Fire() end) end
                 return
             end
@@ -8137,9 +8137,9 @@ local function RefreshRankDDLabel()
         if RAID.runeGrades[g] then table.insert(ns, g) end
     end
     if #ns == 0 then
-        pcall(function() raidRankDD:SetValue({"-- NOT SELECTED --"}) end)
+        pcall(function() raidRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
     else
-        pcall(function() raidRankDD:SetValue(ns) end)
+        pcall(function() raidRankDD:Select(nil, ns) end)
     end
 end
 _raidUpdateRankLabel = RefreshRankDDLabel
@@ -8182,9 +8182,9 @@ _setRaidRuneMapTarget = function(ml)
     RAID.runeMapTarget = ml or 0; SyncRuneState()
     if ml and ml >= 1 and ml <= 20 then
         local txt = "Map "..ml.." - "..(MAP_NAMES[ml] or "Map "..ml)
-        pcall(function() raidRuneDD:SetValue(txt) end)
+        pcall(function() raidRuneDD:Select(nil, txt) end)
     else
-        pcall(function() raidRuneDD:SetValue("-- NOT SELECTED --") end)
+        pcall(function() raidRuneDD:Select(nil, "-- NOT SELECTED --") end)
     end
 end
 
@@ -8202,7 +8202,7 @@ local raidUDToggle = raidSection:Toggle({
 })
 _raidUpdownToggleVis = function(on)
     RAID.updownEnabled = on
-    pcall(function() raidUDToggle:SetValue(on) end)
+    pcall(function() raidUDToggle:Set(on, false) end)
 end
 
 local raidUDDirDD = raidSection:Dropdown({
@@ -8225,7 +8225,7 @@ local raidUDDirDD = raidSection:Dropdown({
 _raidUpdownDirVis = function(dir)
     RAID.updownDir = dir or nil
     local disp = dir == "up" and "UP" or dir == "down" and "DOWN" or "-- NOT SELECTED --"
-    pcall(function() raidUDDirDD:SetValue(disp) end)
+    pcall(function() raidUDDirDD:Select(nil, disp) end)
 end
 
 local _targetGrades = {}
@@ -8246,7 +8246,7 @@ local raidUDGradeDD = raidSection:Dropdown({
 })
 _setRaidUpdownGrade = function(grade)
     RAID.updownTargetGrade = grade or nil
-    pcall(function() raidUDGradeDD:SetValue(grade or "-- NOT SELECTED --") end)
+    pcall(function() raidUDGradeDD:Select(nil, grade or "-- NOT SELECTED --") end)
 end
 
 --  AUTO KILL BOSS 
@@ -8261,7 +8261,7 @@ local raidBossToggle = raidSection:Toggle({
 })
 _raidBossToggleVis = function(on)
     RAID.autoKillBoss = on
-    pcall(function() raidBossToggle:SetValue(on) end)
+    pcall(function() raidBossToggle:Set(on, false) end)
 end
 
 --  TELEPORT DELAY SLIDER 
@@ -8295,7 +8295,7 @@ local raidListToggle = raidListSection:Toggle({
 })
 _setRaidListEnabledVis = function(on)
     RAID.listEnabled = on
-    pcall(function() raidListToggle:SetValue(on) end)
+    pcall(function() raidListToggle:Set(on, false) end)
 end
 
 -- Save Entry button: snapshot maps + rank sekarang ke list
@@ -8369,7 +8369,7 @@ local function _doApplyLock(pm)
     _prefLocked = not u.map
     if _prefLocked then
         for k in pairs(RAID.preferMaps) do RAID.preferMaps[k] = nil end
-        pcall(function() raidPrefMapDD:SetValue({}) end)
+        pcall(function() raidPrefMapDD:Select(nil, {}) end)
         pcall(function() raidPrefMapDD:Lock(lockMsg) end)
     else
         pcall(function() raidPrefMapDD:Unlock() end)
@@ -8379,7 +8379,7 @@ local function _doApplyLock(pm)
     _rankLocked = not u.rank
     if _rankLocked then
         for _, g in ipairs(GRADE_LIST) do RAID.runeGrades[g] = nil end
-        pcall(function() raidRankDD:SetValue({}) end)
+        pcall(function() raidRankDD:Select(nil, {}) end)
         pcall(function() raidRankDD:Lock(lockMsg) end)
     else
         pcall(function() raidRankDD:Unlock() end)
@@ -8389,7 +8389,7 @@ local function _doApplyLock(pm)
     _runeLocked = not u.rune
     if _runeLocked then
         RAID.runeMapTarget = 0; RAID.runeEnabled = false
-        pcall(function() raidRuneDD:SetValue("-- NOT SELECTED --") end)
+        pcall(function() raidRuneDD:Select(nil, "-- NOT SELECTED --") end)
         pcall(function() raidRuneDD:Lock(lockMsg) end)
     else
         pcall(function() raidRuneDD:Unlock() end)
@@ -8399,9 +8399,9 @@ local function _doApplyLock(pm)
     _updownLocked = not u.updown
     if _updownLocked then
         RAID.updownEnabled = false; RAID.updownDir = nil; RAID.updownTargetGrade = nil
-        pcall(function() raidUDToggle:SetValue(false) end)
-        pcall(function() raidUDDirDD:SetValue("-- NOT SELECTED --") end)
-        pcall(function() raidUDGradeDD:SetValue("-- NOT SELECTED --") end)
+        pcall(function() raidUDToggle:Set(false, false) end)
+        pcall(function() raidUDDirDD:Select(nil, "-- NOT SELECTED --") end)
+        pcall(function() raidUDGradeDD:Select(nil, "-- NOT SELECTED --") end)
         pcall(function() raidUDToggle:Lock(lockMsg) end)
         pcall(function() raidUDDirDD:Lock(lockMsg) end)
         pcall(function() raidUDGradeDD:Lock(lockMsg) end)
@@ -8415,7 +8415,7 @@ local function _doApplyLock(pm)
     _listLocked = not u.list
     if _listLocked then
         RAID.listEnabled = false
-        pcall(function() raidListToggle:SetValue(false) end)
+        pcall(function() raidListToggle:Set(false, false) end)
         pcall(function() raidListToggle:Lock(lockMsg) end)
         pcall(function() raidListSaveBtn:Lock(lockMsg) end)
         pcall(function() raidListDeleteBtn:Lock(lockMsg) end)
@@ -8498,7 +8498,7 @@ local ascEnableToggle = ascSection:Toggle({
 _setAscToggle = function(on)
     if on == _ascOn then return end
     _ascOn = on
-    pcall(function() ascEnableToggle:SetValue(on) end)
+    pcall(function() ascEnableToggle:Set(on, false) end)
     if on then StartAscensionLoop()
     else StopAscension(); AscStatusUpdate("Disabled", Color3.fromRGB(160,148,135)) end
 end
@@ -8548,7 +8548,7 @@ local ascPickModeDD = ascSection:Dropdown({
 _setAscPMIdx = function(ii)
     if ii < 1 or ii > #APM_KEYS then return end
     curAPM = ii; ASC.pickMode = APM_KEYS[ii]
-    pcall(function() ascPickModeDD:SetValue(APM_OPTS[ii]) end)
+    pcall(function() ascPickModeDD:Select(nil, APM_OPTS[ii]) end)
     if _applyAscPickModeLock then _applyAscPickModeLock(ASC.pickMode) end
 end
 
@@ -8591,7 +8591,7 @@ local ascPrefMapDD = ascSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() ascPrefMapDD:SetValue({"-- NOT SELECTED --"}) end)
+                pcall(function() ascPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
                 return
             end
             for _, v in ipairs(val) do
@@ -8607,9 +8607,9 @@ local function UpdateAscPrefMapLabel()
         if ASC.preferMaps[mn] then table.insert(ns, "Tower "..mn.." - "..(ASC_TOWER_NAMES[mn] or ("Tower "..mn))) end
     end
     if #ns == 0 then
-        pcall(function() ascPrefMapDD:SetValue({"-- NOT SELECTED --"}) end)
+        pcall(function() ascPrefMapDD:Select(nil, {"-- NOT SELECTED --"}) end)
     else
-        pcall(function() ascPrefMapDD:SetValue(ns) end)
+        pcall(function() ascPrefMapDD:Select(nil, ns) end)
     end
 end
 
@@ -8637,7 +8637,7 @@ local ascRankDD = ascSection:Dropdown({
                 if v == "-- NOT SELECTED --" then hasNotSel = true; break end
             end
             if hasNotSel then
-                pcall(function() ascRankDD:SetValue({"-- NOT SELECTED --"}) end)
+                pcall(function() ascRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
                 if _ascWakeup then pcall(function() _ascWakeup:Fire() end) end
                 return
             end
@@ -8652,9 +8652,9 @@ local function RefreshAscRankLabel()
     local ns = {}
     for _, g in ipairs(GRADE_LIST) do if ASC.runeGrades[g] then table.insert(ns, g) end end
     if #ns == 0 then
-        pcall(function() ascRankDD:SetValue({"-- NOT SELECTED --"}) end)
+        pcall(function() ascRankDD:Select(nil, {"-- NOT SELECTED --"}) end)
     else
-        pcall(function() ascRankDD:SetValue(ns) end)
+        pcall(function() ascRankDD:Select(nil, ns) end)
     end
 end
 
@@ -8704,7 +8704,7 @@ local ascBossToggle = ascSection:Toggle({
 })
 _ascBossToggleVis = function(on)
     ASC.autoKillBoss = on
-    pcall(function() ascBossToggle:SetValue(on) end)
+    pcall(function() ascBossToggle:Set(on, false) end)
 end
 
 --  TELEPORT DELAY SLIDER 
@@ -8738,7 +8738,7 @@ local ascListToggle = ascListSection:Toggle({
 })
 _setAscListEnabledVis = function(on)
     ASC.listEnabled = on
-    pcall(function() ascListToggle:SetValue(on) end)
+    pcall(function() ascListToggle:Set(on, false) end)
 end
 
 local ascListSaveBtn = ascListSection:Button({
@@ -8820,7 +8820,7 @@ local function _doApplyAscLock(pm)
     _ascPrefLocked = not u.map
     if _ascPrefLocked then
         for mn = 1, 26 do ASC.preferMaps[mn] = nil end
-        pcall(function() ascPrefMapDD:SetValue({}) end)
+        pcall(function() ascPrefMapDD:Select(nil, {}) end)
         pcall(function() ascPrefMapDD:Lock(lockMsg) end)
     else
         pcall(function() ascPrefMapDD:Unlock() end)
@@ -8830,7 +8830,7 @@ local function _doApplyAscLock(pm)
     _ascRankLocked = not u.rank
     if _ascRankLocked then
         for _, g in ipairs(GRADE_LIST) do ASC.runeGrades[g] = nil end
-        pcall(function() ascRankDD:SetValue({}) end)
+        pcall(function() ascRankDD:Select(nil, {}) end)
         pcall(function() ascRankDD:Lock(lockMsg) end)
     else
         pcall(function() ascRankDD:Unlock() end)
@@ -8840,7 +8840,7 @@ local function _doApplyAscLock(pm)
     _ascRuneLocked = not u.rune
     if _ascRuneLocked then
         ASC.runeMapTarget = 0; ASC.runeEnabled = false
-        pcall(function() ascRuneDD:SetValue("-- NOT SELECTED --") end)
+        pcall(function() ascRuneDD:Select(nil, "-- NOT SELECTED --") end)
         pcall(function() ascRuneDD:Lock(lockMsg) end)
     else
         pcall(function() ascRuneDD:Unlock() end)
@@ -9503,12 +9503,12 @@ local siegeEnableToggle = siegeSection:Toggle({
 _setSiegeToggle = function(on)
     if on == _siegeToggleState then return end
     _siegeToggleState = on
-    pcall(function() siegeEnableToggle:SetValue(on) end)
+    pcall(function() siegeEnableToggle:Set(on, false) end)
     if on then StartSiegeLoop() else StopSiege() end
 end
 -- Visual-only setter (tidak trigger logika, hanya sync UI)
 _visSiege = function(on)
-    pcall(function() siegeEnableToggle:SetValue(on, false) end)
+    pcall(function() siegeEnableToggle:Set(on, false) end)
 end
 
 -- Exclude Map Dropdown (multi-select style via Dropdown)
@@ -13739,7 +13739,7 @@ do
 
         -- ── PLAYER TAB ────────────────────────────────────────────────────
         cfg.noClipOn      = _noClipState or false
-        cfg.antiAfkOn     = _antiAfkState or false
+        cfg.antiAfkOn     = _antiIdleState or false
         cfg.walkSpeed     = _walkSpeedState or 16
 
         -- ── AUTOMATION TAB ────────────────────────────────────────────────
