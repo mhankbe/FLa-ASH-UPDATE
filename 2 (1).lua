@@ -13979,31 +13979,22 @@ do
 
         -- ── ATTACK TAB ────────────────────────────────────────────────────
         pcall(function()
-            -- Restore data map selection (data + visual checkbox refs)
+            -- Restore data map selection ke mapSelSet dan MR.selected
             if _maMapSelState and cfg.maMapSel then
                 for k in pairs(_maMapSelState) do _maMapSelState[k] = nil end
                 if MR and MR.selected then for k in pairs(MR.selected) do MR.selected[k] = nil end end
                 for k, v in pairs(cfg.maMapSel) do
                     local n = tonumber(k)
-                    if n then _maMapSelState[n] = true; if MR then MR.selected[n] = true end end
-                end
-                if _maMapItemRefs then
-                    local allOn = true
-                    for j = 1, 20 do if not _maMapSelState[j] then allOn = false; break end end
-                    if _maMapItemRefs[1] then
-                        _maMapItemRefs[1].chk.Text = allOn and "v" or ""
-                        _maMapItemRefs[1].lbl.TextColor3 = allOn and C.ACC2 or C.TXT
-                    end
-                    for j = 1, 20 do
-                        local ref = _maMapItemRefs[j + 1]
-                        if ref then
-                            local sel = _maMapSelState[j] == true
-                            ref.chk.Text = sel and "v" or ""
-                            ref.lbl.TextColor3 = sel and C.ACC2 or C.TXT
-                        end
+                    if n then
+                        _maMapSelState[n] = true
+                        if MR then MR.selected[n] = true end
                     end
                 end
-                if _maUpdateMapDDLbl then pcall(_maUpdateMapDDLbl) end
+                -- [FIX] _maMapItemRefs kosong di 2.lua (legacy 1.lua) — skip blok itu.
+                -- _maUpdateMapDDLbl pakai mapDD:Select() yang butuh frame baru → task.defer
+                task.defer(function()
+                    if _maUpdateMapDDLbl then pcall(_maUpdateMapDDLbl) end
+                end)
             end
             -- Kill/Delay dropdown ✓
             task.delay(0.1, function()
@@ -14243,10 +14234,21 @@ do
 
         -- ── WEBHOOK TAB ───────────────────────────────────────────────────
         pcall(function()
-            _webhookEnabled = cfg.webhookEnabled == true
-            _webhookUrl     = cfg.webhookUrl or ""
-            -- _setWebhookToggle: el:Set(v) — tidak perlu _vis* ✓
-            if _setWebhookToggle  then _setWebhookToggle(cfg.webhookEnabled == true) end
+            -- [FIX] URL harus di-restore ke textbox dulu via _setWebhookUrlVis,
+            -- bukan cuma tulis ke variabel global — agar input WindUI ikut update
+            if _setWebhookUrlVis then
+                _setWebhookUrlVis(cfg.webhookUrl or "")
+            else
+                _webhookUrl = (cfg.webhookUrl or ""):match("^%s*(.-)%s*$") or ""
+            end
+
+            -- [FIX] _setWebhookToggle punya guard (v == _webhookEnabled → return).
+            -- Reset flag dulu ke kebalikannya agar guard tidak memblok, lalu panggil setter.
+            -- Setter akan set flag + el:Set(v) → callback → aktifkan notif ✓
+            local wantEnabled = cfg.webhookEnabled == true
+            _webhookEnabled = not wantEnabled   -- paksa guard terlewat
+            if _setWebhookToggle then _setWebhookToggle(wantEnabled) end
+
             if _webhookModeSetIdx and cfg.webhookModeIdx then
                 _webhookModeSetIdx(cfg.webhookModeIdx)
             end
