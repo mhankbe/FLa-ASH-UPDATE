@@ -403,40 +403,13 @@ end
 -- jadi raid yang sudah berjalan dari awal tetap kebaca dengan raidId VALID.
 -- ============================================================================
 local _lastRescanTime = 0
-local _raidsManagerModule = nil
-local _raidsManagerLogged = false
-
--- WaitForChild berantai (bukan dot-index langsung) supaya kalau folder belum
--- ke-replicate saat Auto Execute, kita NUNGGU bukannya error-diam-diam lewat pcall.
--- Hasilnya di-cache, jadi cuma nunggu sekali di awal - scan berikutnya instan.
-local function ResolveRaidsManagerModule()
-    if _raidsManagerModule then return _raidsManagerModule end
-    local ok, modOrErr = pcall(function()
-        local scripts = ReplicatedStorage:WaitForChild("Scripts", 20)
-        local client  = scripts:WaitForChild("Client", 10)
-        local manager = client:WaitForChild("Manager", 10)
-        return manager:WaitForChild("RaidsManager", 10)
-    end)
-    if ok and modOrErr then
-        _raidsManagerModule = modOrErr
-        Log("[OK] RaidsManager module ditemukan, radar aktif.")
-        return modOrErr
-    end
-    if not _raidsManagerLogged then
-        _raidsManagerLogged = true
-        Log("[!] RaidsManager module TIDAK ditemukan (path Scripts.Client.Manager.RaidsManager tidak ada/berubah). Deteksi fallback ke workspace watcher + UpdateRaidInfo event saja.")
-    end
-    return nil
-end
 
 function ForceRescanRaidEnter()
     local now = tick()
     if now - _lastRescanTime < 1.5 then return end
     _lastRescanTime = now
     pcall(function()
-        local moduleRef = ResolveRaidsManagerModule()
-        if not moduleRef then return end
-        local RM = require(moduleRef)
+        local RM = require(ReplicatedStorage.Scripts.Client.Manager.RaidsManager)
         if type(RM) ~= "table" then return end
         local newFound = false
         local currentActiveIds = {}
@@ -1171,66 +1144,7 @@ function StartRaidLoop()
 end
 
 -- ============================================================================
--- GUI MINIMAL: TOGGLE ON/OFF
--- Tujuan: isolasi apakah masalahnya ada di "auto-start instan saat Execute"
--- (race condition timing) ATAU di logika Auto Raid itu sendiri. Dengan toggle
--- manual, kamu kontrol kapan StartRaidLoop() dipanggil - misal tunggu
--- beberapa detik setelah masuk game dulu, baru ON-kan.
--- Native Instance.new (tanpa load library luar) supaya tidak nambah variabel
--- gagal baru dari HttpGet/loadstring.
+-- AUTO START (Auto Execute - langsung ON begitu script jalan)
 -- ============================================================================
-local function CreateToggleGUI()
-    local guiParent
-    local okHide, hidden = pcall(function() return gethui() end)
-    if okHide and hidden then
-        guiParent = hidden
-    else
-        guiParent = LP:WaitForChild("PlayerGui")
-    end
-
-    local existing = guiParent:FindFirstChild("FLa_AutoRaid_Toggle")
-    if existing then existing:Destroy() end
-
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "FLa_AutoRaid_Toggle"
-    screenGui.ResetOnSpawn = false
-    screenGui.IgnoreGuiInset = true
-    screenGui.Parent = guiParent
-
-    local btn = Instance.new("TextButton")
-    btn.Name = "ToggleBtn"
-    btn.Size = UDim2.new(0, 170, 0, 46)
-    btn.Position = UDim2.new(0, 20, 0.5, -23)
-    btn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 16
-    btn.Text = "AUTO RAID: OFF"
-    btn.Active = true
-    btn.Draggable = true
-    btn.Parent = screenGui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
-
-    btn.MouseButton1Click:Connect(function()
-        if RAID.running then
-            StopRaid()
-            btn.Text = "AUTO RAID: OFF"
-            btn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
-            Log("Di-OFF-kan via toggle.")
-        else
-            btn.Text = "AUTO RAID: ON"
-            btn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-            Log("Di-ON-kan via toggle - StartRaidLoop() dipanggil sekarang.")
-            StartRaidLoop()
-        end
-    end)
-
-    return btn
-end
-
-Log("Script loaded (GUI mode). Pick Mode = EASY, Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
-Log("Tekan tombol di layar untuk ON-kan Auto Raid secara manual.")
-CreateToggleGUI()
+Log("Script loaded. Pick Mode = EASY, Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
+StartRaidLoop()
