@@ -1147,4 +1147,6 @@ end
 -- AUTO START (Auto Execute - langsung ON begitu script jalan)
 -- ============================================================================
 Log("Script loaded. Pick Mode = EASY, Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
+Log("[FLa] Delay start 5 detik...")
+task.wait(5)
 StartRaidLoop()
