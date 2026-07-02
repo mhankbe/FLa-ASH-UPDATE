@@ -3625,6 +3625,8 @@ do
     end
 
     --  FireHeroRemotes (identik 1.lua baris ~2313) 
+    -- [Hero Static test] Tidak dipanggil lagi dari AttackLoop_Mass (hero diem di tempat).
+    -- Fungsi dibiarkan utuh (bukan dihapus) biar gampang direvert kalau hasil test kurang menarik.
     local function FireHeroRemotes(enemyGuid, enemyPos)
         local pos = enemyPos or Vector3.new(0,0,0)
         if #HERO_GUIDS == 0 then return end
@@ -3737,15 +3739,15 @@ do
                 end
             end
 
-            -- Serang semua musuh hidup
+            -- Serang semua musuh hidup (hero diem di tempat - FireHeroRemotes/RE.HeroMove tidak dipanggil,
+            -- damage tetap jalan independen lewat FireAllDamage -> EnsureHeroAtkThreadFor_MA/RE.HeroUseSkill)
             for _, e in ipairs(GetEnemies()) do
                 if not IsDead(e) then
                     local hrp = e.model and e.model:FindFirstChild("HumanoidRootPart")
                     if hrp then
-                        local g, p = e.guid, hrp.Position
+                        local g = e.guid
                         task.spawn(function()
                             FireAllDamage(g)
-                            FireHeroRemotes(g, p)
                         end)
                     end
                 end
