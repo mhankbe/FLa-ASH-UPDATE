@@ -11080,10 +11080,9 @@ StartPG100Loop       = StartPG100Loop       or nil
 StopPG100            = StopPG100            or nil
 
 -- PG_GRADES_PER_MACHINE (persis 1.lua baris 3176-3210)
--- R-Pet (980001): 990001-990010 + 990031 + 990032 + 990033 + 990034
--- Y-Pet (980002): 990011-990020 + 990041 + 990042 + 990043 + 990044
--- B-Pet (980003): 990021-990030 + 990051 + 990052 + 990053 + 990054
--- Grade baru (confirmed DEX): GM=Ascendant, MM=Eminent, M++=Abyssal
+-- R-Pet (980001): 990001-990010 + 990031
+-- Y-Pet (980002): 990011-990020 + 990041
+-- B-Pet (980003): 990021-990030 + 990051
 PG_DRAW_IDS = PG_DRAW_IDS or {980001, 980002, 980003}
 PG_MACHINE_NAMES = PG_MACHINE_NAMES or {"R-Pet Gear", "Y-Pet Gear", "B-Pet Gear"}
 PG_GRADES_PER_MACHINE = PG_GRADES_PER_MACHINE or {
@@ -11093,7 +11092,6 @@ PG_GRADES_PER_MACHINE = PG_GRADES_PER_MACHINE or {
         {id=990004, name="B"}, {id=990005, name="A"}, {id=990006, name="S"},
         {id=990007, name="SS"}, {id=990008, name="G"}, {id=990009, name="N"},
         {id=990010, name="M"}, {id=990031, name="M+"},
-        {id=990032, name="GM"}, {id=990033, name="MM"}, {id=990034, name="M++"},
     },
     -- [2] Y-Pet Gear (drawId 980002)
     {
@@ -11101,7 +11099,6 @@ PG_GRADES_PER_MACHINE = PG_GRADES_PER_MACHINE or {
         {id=990014, name="B"}, {id=990015, name="A"}, {id=990016, name="S"},
         {id=990017, name="SS"}, {id=990018, name="G"}, {id=990019, name="N"},
         {id=990020, name="M"}, {id=990041, name="M+"},
-        {id=990042, name="GM"}, {id=990043, name="MM"}, {id=990044, name="M++"},
     },
     -- [3] B-Pet Gear (drawId 980003)
     {
@@ -11109,7 +11106,6 @@ PG_GRADES_PER_MACHINE = PG_GRADES_PER_MACHINE or {
         {id=990024, name="B"}, {id=990025, name="A"}, {id=990026, name="S"},
         {id=990027, name="SS"}, {id=990028, name="G"}, {id=990029, name="N"},
         {id=990030, name="M"}, {id=990051, name="M+"},
-        {id=990052, name="GM"}, {id=990053, name="MM"}, {id=990054, name="M++"},
     },
 }
 PG_GRADE_MAP = PG_GRADE_MAP or {}
@@ -12520,6 +12516,13 @@ do
         local _rPetG      = RE.RandomPetGearGrade
         local _rHeroSkill = RE.HeroUseSkill  -- untuk capture GUID saat combat biasa
 
+        -- [FIX GUID PET GEAR] Nama remote sebagai fallback jika object reference meleset
+        -- SimpleSpy confirmed: RandomHeroEquipGrade:InvokeServer({guid=..., drawId=980001})
+        local _PET_GEAR_REMOTE_NAMES = {
+            ["RandomHeroEquipGrade"]     = true,
+            ["AutoRandomHeroEquipGrade"] = true,
+        }
+
         -- Capture weaponGuid dari arg table ke _WR_RPT.guid
         local function _captureWeaponGuid(arg1)
             if type(arg1) ~= "table" then return end
@@ -12583,7 +12586,12 @@ do
                 end
 
                 -- ── Bukan remote target kita → pass through ──────────────────
-                if self~=_rHero and self~=_rAuto and self~=_rWeapon and self~=_rPetG then
+                -- [FIX] dual check: object reference ATAU nama remote
+                -- (object ref bisa meleset jika WaitForChild return instance berbeda)
+                local _selfName = ""
+                pcall(function() _selfName = self.Name end)
+                local _isPetGear = (self == _rPetG) or (_PET_GEAR_REMOTE_NAMES[_selfName] == true)
+                if self~=_rHero and self~=_rAuto and self~=_rWeapon and not _isPetGear then
                     return _old(self, ...)
                 end
 
@@ -12596,7 +12604,8 @@ do
                         pcall(_captureHeroGuid, arg1)
                     elseif self == _rWeapon then
                         pcall(_captureWeaponGuid, arg1)
-                    elseif self == _rPetG then
+                    elseif _isPetGear then
+                        -- [FIX] pakai _isPetGear (name-based) bukan self==_rPetG
                         pcall(_capturePetGearGuid, arg1)
                     end
                 end
