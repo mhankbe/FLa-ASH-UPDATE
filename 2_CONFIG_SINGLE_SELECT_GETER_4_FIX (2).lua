@@ -4,13 +4,14 @@
 
     PERILAKU:
     - Begitu di-execute (Auto Execute di executor), Auto Raid langsung ON.
-    - Pick Mode  : FIXED MAP 18-19 (hanya masuk raid kalau salah satu dari
-                   Map 18/19 tersedia, RANK tidak diperhitungkan -
+    - Pick Mode  : FIXED MAP 16-17-18-19 (hanya masuk raid kalau salah satu dari
+                   Map 16/17/18/19 tersedia, RANK tidak diperhitungkan -
                    List/Manual/Rune/UpDown sudah dihapus total dari logika
-                   ResolveEntry). Jika Map 18 dan 19 sama-sama tersedia
-                   secara bersamaan, Auto Raid akan masuk secara BERGANTIAN
-                   (selang-seling) mulai dari Map 18, lalu Map 19, lalu
-                   Map 18 lagi, dst.
+                   ResolveEntry). Jika lebih dari satu map (16/17/18/19) sama-sama
+                   tersedia secara bersamaan, Auto Raid akan masuk secara
+                   BERGANTIAN (round-robin) urut dari yang terkecil: 16, lalu 17,
+                   lalu 18, lalu 19, lalu kembali ke 16, dst. (map yang sedang
+                   tidak tersedia otomatis dilewati dalam urutan rotasi).
     - Auto Boss Kill : ON (default).
     - Boss TP Delay  : 1 detik (default).
     - Tanpa guard cross-feature (Siege/Dungeon/ASC/ST2) - script ini berdiri sendiri.
@@ -32,7 +33,7 @@ local Remotes           = ReplicatedStorage:WaitForChild("Remotes")
 -- CONFIG (default sesuai permintaan - bisa diedit manual di sini)
 -- ============================================================================
 local CONFIG = {
-    pickMode     = "map18to19",  -- fixed, hanya Map 18-19 (bergantian), tidak ada opsi lain
+    pickMode     = "map16to19",  -- fixed, hanya Map 16-17-18-19 (bergantian), tidak ada opsi lain
     autoKillBoss = true,    -- Auto Boss Kill default ON
     bossDelay    = 1,       -- delay TP ke boss (detik), default 1
 }
@@ -630,14 +631,15 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- ResolveEntry - HANYA MAP 18-19 (tanpa peduli RANK, asal salah satu tersedia)
--- Jika Map 18 dan 19 tersedia BERSAMAAN, masuk raid BERGANTIAN:
--- 18 -> 19 -> 18 -> 19 -> dst. (mulai dari Map 18)
+-- ResolveEntry - HANYA MAP 16-17-18-19 (tanpa peduli RANK, asal salah satu tersedia)
+-- Jika lebih dari satu map (16/17/18/19) tersedia BERSAMAAN, masuk raid
+-- BERGANTIAN secara round-robin urut dari yang terkecil:
+-- 16 -> 17 -> 18 -> 19 -> 16 -> 17 -> ... dst. (skip map yang sedang tidak ada)
 -- ============================================================================
-local ALLOWED_MAPS = {[18] = true, [19] = true}
+local ALLOWED_MAPS = {[16] = true, [17] = true, [18] = true, [19] = true}
 
--- Map terakhir yang di-pick saat kondisi 18 & 19 sama-sama tersedia.
--- nil di awal supaya pick pertama kali (kalau keduanya ada) jatuh ke Map 18.
+-- Map terakhir yang di-pick saat kondisi lebih dari satu map tersedia bersamaan.
+-- nil di awal supaya pick pertama kali jatuh ke map terkecil yang tersedia (16).
 local _lastAlternatedMap = nil
 
 local function ResolveEntry()
@@ -665,37 +667,44 @@ local function ResolveEntry()
 
     table.sort(pickList, function(a, b) return a.mapId < b.mapId end)
 
-    -- Cek apakah Map 18 DAN Map 19 sama-sama tersedia bersamaan
-    local has18, has19 = nil, nil
+    -- Index entry yang tersedia per nomor map (16/17/18/19)
+    local byMap = {}
     for _, r in ipairs(pickList) do
         local mn = r.mapId - 50000
-        if mn == 18 then has18 = r end
-        if mn == 19 then has19 = r end
+        byMap[mn] = r
     end
 
-    if has18 and has19 then
-        -- Keduanya tersedia -> pilih bergantian
-        local pick
-        if _lastAlternatedMap == 18 then
-            pick = has19
-            _lastAlternatedMap = 19
-        else
-            pick = has18
-            _lastAlternatedMap = 18
+    -- Kalau cuma 1 map yang tersedia, langsung ambil itu (tidak perlu rotasi)
+    if #pickList == 1 then
+        local onlyMn = pickList[1].mapId - 50000
+        _lastAlternatedMap = onlyMn
+        return pickList[1]
+    end
+
+    -- Lebih dari 1 map tersedia bersamaan -> rotasi round-robin urut 16,17,18,19,
+    -- mulai dari map berikutnya setelah _lastAlternatedMap yang TERSEDIA sekarang.
+    local ORDER = {16, 17, 18, 19}
+    local startIdx = 1
+    if _lastAlternatedMap then
+        for i, mn in ipairs(ORDER) do
+            if mn == _lastAlternatedMap then
+                startIdx = i + 1
+                break
+            end
         end
-        return pick
     end
 
-    -- Hanya salah satu yang tersedia -> ambil yang ada
-    if has18 then
-        _lastAlternatedMap = 18
-        return has18
-    end
-    if has19 then
-        _lastAlternatedMap = 19
-        return has19
+    for i = 0, #ORDER - 1 do
+        local idx = ((startIdx - 1 + i) % #ORDER) + 1
+        local mn = ORDER[idx]
+        if byMap[mn] then
+            _lastAlternatedMap = mn
+            return byMap[mn]
+        end
     end
 
+    -- Fallback (seharusnya tidak pernah sampai sini karena #pickList > 0)
+    _lastAlternatedMap = pickList[1].mapId - 50000
     return pickList[1]
 end
 
@@ -731,7 +740,7 @@ function StartRaidLoop()
 
     _raidWakeup = Instance.new("BindableEvent")
 
-    Log("Siap. Menunggu raid... (Pick Mode: MAP 18-19 Bergantian, Auto Boss Kill: ON, Delay: " .. CONFIG.bossDelay .. "s)")
+    Log("Siap. Menunggu raid... (Pick Mode: MAP 16-17-18-19 Bergantian, Auto Boss Kill: ON, Delay: " .. CONFIG.bossDelay .. "s)")
 
     RAID.thread = task.spawn(function()
         pcall(function()
@@ -1216,7 +1225,7 @@ end
 -- ============================================================================
 -- AUTO START (Auto Execute - langsung ON begitu script jalan)
 -- ============================================================================
-Log("Script loaded. Pick Mode = MAP 18-19 (Bergantian), Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
+Log("Script loaded. Pick Mode = MAP 16-17-18-19 (Bergantian), Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
 Log("[FLa] Delay start 10 detik...")
 task.wait(10)
 StartRaidLoop()
