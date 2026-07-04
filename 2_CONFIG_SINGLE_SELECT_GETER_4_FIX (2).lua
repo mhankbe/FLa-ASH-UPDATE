@@ -4,10 +4,13 @@
 
     PERILAKU:
     - Begitu di-execute (Auto Execute di executor), Auto Raid langsung ON.
-    - Pick Mode  : FIXED MAP 11-15 (hanya masuk raid kalau salah satu dari
-                   Map 11/12/13/14/15 tersedia, RANK tidak diperhitungkan -
+    - Pick Mode  : FIXED MAP 18-19 (hanya masuk raid kalau salah satu dari
+                   Map 18/19 tersedia, RANK tidak diperhitungkan -
                    List/Manual/Rune/UpDown sudah dihapus total dari logika
-                   ResolveEntry).
+                   ResolveEntry). Jika Map 18 dan 19 sama-sama tersedia
+                   secara bersamaan, Auto Raid akan masuk secara BERGANTIAN
+                   (selang-seling) mulai dari Map 18, lalu Map 19, lalu
+                   Map 18 lagi, dst.
     - Auto Boss Kill : ON (default).
     - Boss TP Delay  : 1 detik (default).
     - Tanpa guard cross-feature (Siege/Dungeon/ASC/ST2) - script ini berdiri sendiri.
@@ -29,7 +32,7 @@ local Remotes           = ReplicatedStorage:WaitForChild("Remotes")
 -- CONFIG (default sesuai permintaan - bisa diedit manual di sini)
 -- ============================================================================
 local CONFIG = {
-    pickMode     = "map11to15",  -- fixed, hanya Map 11-15, tidak ada opsi lain
+    pickMode     = "map18to19",  -- fixed, hanya Map 18-19 (bergantian), tidak ada opsi lain
     autoKillBoss = true,    -- Auto Boss Kill default ON
     bossDelay    = 1,       -- delay TP ke boss (detik), default 1
 }
@@ -619,8 +622,14 @@ end)
 
 -- ============================================================================
 -- ResolveEntry - HANYA MAP 18-19 (tanpa peduli RANK, asal salah satu tersedia)
+-- Jika Map 18 dan 19 tersedia BERSAMAAN, masuk raid BERGANTIAN:
+-- 18 -> 19 -> 18 -> 19 -> dst. (mulai dari Map 18)
 -- ============================================================================
 local ALLOWED_MAPS = {[18] = true, [19] = true}
+
+-- Map terakhir yang di-pick saat kondisi 18 & 19 sama-sama tersedia.
+-- nil di awal supaya pick pertama kali (kalau keduanya ada) jatuh ke Map 18.
+local _lastAlternatedMap = nil
 
 local function ResolveEntry()
     if #RAID_ID_LIST == 0 then return nil end
@@ -646,6 +655,38 @@ local function ResolveEntry()
     if #pickList == 0 then return nil end
 
     table.sort(pickList, function(a, b) return a.mapId < b.mapId end)
+
+    -- Cek apakah Map 18 DAN Map 19 sama-sama tersedia bersamaan
+    local has18, has19 = nil, nil
+    for _, r in ipairs(pickList) do
+        local mn = r.mapId - 50000
+        if mn == 18 then has18 = r end
+        if mn == 19 then has19 = r end
+    end
+
+    if has18 and has19 then
+        -- Keduanya tersedia -> pilih bergantian
+        local pick
+        if _lastAlternatedMap == 18 then
+            pick = has19
+            _lastAlternatedMap = 19
+        else
+            pick = has18
+            _lastAlternatedMap = 18
+        end
+        return pick
+    end
+
+    -- Hanya salah satu yang tersedia -> ambil yang ada
+    if has18 then
+        _lastAlternatedMap = 18
+        return has18
+    end
+    if has19 then
+        _lastAlternatedMap = 19
+        return has19
+    end
+
     return pickList[1]
 end
 
@@ -681,7 +722,7 @@ function StartRaidLoop()
 
     _raidWakeup = Instance.new("BindableEvent")
 
-    Log("Siap. Menunggu raid... (Pick Mode: MAP 11-15, Auto Boss Kill: ON, Delay: " .. CONFIG.bossDelay .. "s)")
+    Log("Siap. Menunggu raid... (Pick Mode: MAP 18-19 Bergantian, Auto Boss Kill: ON, Delay: " .. CONFIG.bossDelay .. "s)")
 
     RAID.thread = task.spawn(function()
         pcall(function()
@@ -1148,7 +1189,7 @@ end
 -- ============================================================================
 -- AUTO START (Auto Execute - langsung ON begitu script jalan)
 -- ============================================================================
-Log("Script loaded. Pick Mode = MAP 11-15, Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
-Log("[FLa] Delay start 5 detik...")
-task.wait(5)
+Log("Script loaded. Pick Mode = MAP 18-19 (Bergantian), Auto Boss Kill = ON, Boss TP Delay = " .. CONFIG.bossDelay .. "s")
+Log("[FLa] Delay start 10 detik...")
+task.wait(10)
 StartRaidLoop()
