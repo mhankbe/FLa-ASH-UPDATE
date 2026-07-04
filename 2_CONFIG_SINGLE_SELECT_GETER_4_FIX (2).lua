@@ -618,7 +618,7 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- ResolveEntry - HANYA MAP 11-15 (tanpa peduli RANK, asal salah satu tersedia)
+-- ResolveEntry - HANYA MAP 18-19 (tanpa peduli RANK, asal salah satu tersedia)
 -- ============================================================================
 local ALLOWED_MAPS = {[18] = true, [19] = true}
 
