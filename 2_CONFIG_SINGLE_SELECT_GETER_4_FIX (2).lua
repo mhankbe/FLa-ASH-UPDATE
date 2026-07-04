@@ -618,9 +618,9 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- ResolveEntry - HANYA MAP 18-19 (tanpa peduli RANK, asal salah satu tersedia)
+-- ResolveEntry - HANYA MAP 19 (tanpa peduli RANK, asal salah satu tersedia)
 -- ============================================================================
-local ALLOWED_MAPS = {[18] = true, [19] = true}
+local ALLOWED_MAPS = {[19] = true}
 
 local function ResolveEntry()
     if #RAID_ID_LIST == 0 then return nil end
