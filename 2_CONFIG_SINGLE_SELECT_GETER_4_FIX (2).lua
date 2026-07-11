@@ -2740,7 +2740,7 @@ do
         task.spawn(function()
             local _lastFire = {}
             while handle.running do
-                if #HERO_GUIDS > 0 and (tick() - handle.tick) >= 0.01 and IsEnemyGuidValid(g) then
+                if #HERO_GUIDS > 0 and (tick() - handle.tick) >= 0.001 and IsEnemyGuidValid(g) then
                     handle.tick = tick()
                     -- Ambil posisi player sekarang untuk dipasang ke semua hero
                     local _char = LP and LP.Character
@@ -2748,17 +2748,17 @@ do
                     local _pPos = _pHRP and _pHRP.Position or Vector3.new(0,0,0)
                     for _, hGuid in ipairs(HERO_GUIDS) do
                         local last = _lastFire[hGuid] or 0
-                        if (tick() - last) >= 0.01 then
+                        if (tick() - last) >= 0.001 then
                             _lastFire[hGuid] = tick()
                             if RE.HeroUseSkill then
                                 pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=1,userId=MY_USER_ID,enemyGuid=g}) end)
-                                task.wait(0.01)
+                                task.wait(0.001)
                                 pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=2,userId=MY_USER_ID,enemyGuid=g}) end)
-                                task.wait(0.01)
+                                task.wait(0.001)
                                 pcall(function() RE.HeroUseSkill:FireServer({heroGuid=hGuid,attackType=3,userId=MY_USER_ID,enemyGuid=g}) end)
                             end
                         end
-                        task.wait(0.01)
+                        task.wait(0.001)
                     end
                 end
                 task.wait(0.05)
@@ -2804,7 +2804,7 @@ do
                     end
                     EnsureHeroAtkThreadFor(g)
                 end
-                task.wait(0.005)
+                task.wait(0.002)
             end
         end)
     end
@@ -3275,7 +3275,7 @@ do
                     end
                     EnsureHeroAtkThreadFor(g)
                 end
-                task.wait(0.005)
+                task.wait(0.002)
             end
         end)
 
