@@ -5148,6 +5148,36 @@ do
         end
     end
 
+    -- =========================================================================
+    -- [v12 NEW] _MA_GetCurrentMapNum -- deteksi map Raid (1-20) tempat Player
+    -- SAAT INI berada, via scan LANGSUNG folder workspace.Maps.MapN (identik
+    -- pola IsInSiegeMapNow / GetRaidMapNum). Attribute workspace:GetAttribute
+    -- ("MapId") bisa stale/telat update setelah TP, jadi scan folder instance
+    -- di workspace.Maps dijadikan sumber PRIMARY, attribute cuma fallback.
+    -- Return: angka 1-20 kalau ketemu, nil kalau tidak di map manapun / gagal.
+    -- =========================================================================
+    if not _MA_GetCurrentMapNum then
+        function _MA_GetCurrentMapNum()
+            local ok, result = pcall(function()
+                local mf = workspace:FindFirstChild("Maps")
+                if mf then
+                    for i = 1, 20 do
+                        if mf:FindFirstChild("Map"..i) then return i end
+                    end
+                end
+                local wm = workspace:GetAttribute("MapId")
+                    or workspace:GetAttribute("mapId")
+                    or workspace:GetAttribute("CurrentMapId")
+                if type(wm) == "number" then
+                    if wm >= 50001 and wm <= 50020 then return wm - 50000 end
+                    if wm >= 1 and wm <= 20 then return wm end
+                end
+                return nil
+            end)
+            return (ok and type(result) == "number") and result or nil
+        end
+    end
+
     --  DoMassAttack (identik 1.lua baris ~2914) 
     function DoMassAttack(on)
         if on then
@@ -5217,13 +5247,17 @@ do
                                 if not MA.running then break end
                                 if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
 
-                                -- [v12 NEW] Cek dulu posisi Player saat ini sebelum TP.
-                                -- Kalau Player sudah berada di Map yang sama dengan target
-                                -- rotasi (m.id), SKIP teleport -- langsung lanjut ke
-                                -- serangan. Ini mencegah "teleport ganda" ke Map yang sama
-                                -- yang men-trigger deteksi BUG di game.
-                                local _maCurMapId = GetCurrentMapId and GetCurrentMapId() or nil
-                                if _maCurMapId == m.id then
+                                -- [v12 NEW] Cek dulu posisi Player SAAT INI sebelum TP,
+                                -- via scan folder workspace.Maps.MapN (real-time, sama
+                                -- pola dengan IsInSiegeMapNow/GetRaidMapNum) -- BUKAN cuma
+                                -- baca workspace:GetAttribute("MapId") yang bisa stale/
+                                -- telat update. Kalau Player sudah berada di Map yang sama
+                                -- dengan target rotasi, SKIP teleport -- langsung lanjut
+                                -- ke serangan. Ini mencegah "teleport ganda" ke Map yang
+                                -- sama yang men-trigger deteksi BUG di game.
+                                local _maCurMapNum = _MA_GetCurrentMapNum()
+                                local _maTargetIdx = tonumber(m.id) and (m.id - 50000) or nil
+                                if _maCurMapNum ~= nil and _maCurMapNum == _maTargetIdx then
                                     maStatus("[SKIP TP] Sudah di "..m.name.."...")
                                 else
                                     maStatus("-> TP ke "..m.name.."...")
