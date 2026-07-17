@@ -5217,11 +5217,21 @@ do
                                 if not MA.running then break end
                                 if _raidInterrupt then _mapIdx = _mapIdx + 1; break end
 
-                                maStatus("-> TP ke "..m.name.."...")
-                                TpMap(m)
-                                task.wait(MR.teleportDelay)
-                                if not MA.running then break end
-                                SafeReequipAfterTeleport("MassAttack")
+                                -- [v12 NEW] Cek dulu posisi Player saat ini sebelum TP.
+                                -- Kalau Player sudah berada di Map yang sama dengan target
+                                -- rotasi (m.id), SKIP teleport -- langsung lanjut ke
+                                -- serangan. Ini mencegah "teleport ganda" ke Map yang sama
+                                -- yang men-trigger deteksi BUG di game.
+                                local _maCurMapId = GetCurrentMapId and GetCurrentMapId() or nil
+                                if _maCurMapId == m.id then
+                                    maStatus("[SKIP TP] Sudah di "..m.name.."...")
+                                else
+                                    maStatus("-> TP ke "..m.name.."...")
+                                    TpMap(m)
+                                    task.wait(MR.teleportDelay)
+                                    if not MA.running then break end
+                                    SafeReequipAfterTeleport("MassAttack")
+                                end
 
                                 local cont = AttackLoop_Mass(function(msg)
                                     maStatus("["..m.name.."] "..msg)
