@@ -2632,6 +2632,24 @@ do
         return result
     end
 
+    -- [BY-NAME REALTIME] Hitung populasi musuh hidup per-nama saat ini.
+    -- Dipakai oleh: Refresh Enemies, loop auto-update dropdown (By Name),
+    -- dan auto-switch target di StartTA_ByName saat populasi target habis.
+    -- Return: table {name -> count}, dan array nama terurut oleh count desc (lalu nama asc).
+    local function CountEnemiesByName()
+        local nc = {}
+        for _,e in ipairs(GetEnemiesF()) do
+            nc[e.name] = (nc[e.name] or 0) + 1
+        end
+        local names = {}
+        for nm in pairs(nc) do table.insert(names, nm) end
+        table.sort(names, function(a,b)
+            if nc[a] ~= nc[b] then return nc[a] > nc[b] end
+            return a < b
+        end)
+        return nc, names
+    end
+
     --  Freeze / Unfreeze player 
     -- Source asli baris 5665-5710
     local _frozenWS     = nil
@@ -3327,12 +3345,29 @@ do
 
     --  StartTA By Name 
     -- Source asli baris 6200-6272
+    -- [BY-NAME REALTIME + AUTO-SWITCH]
+    --   - targetName sekarang BISA berubah sendiri di tengah jalan (variabel lokal
+    --     _curName), bukan konstanta parameter lagi, supaya bisa auto-switch.
+    --   - Saat pool nama aktif habis (0 tersisa), scan ulang seluruh musuh di map
+    --     (CountEnemiesByName) dan pindah ke nama dengan populasi terbesar saat ini
+    --     (bukan cuma nunggu respawn nama yang sama).
+    --   - [SINGLE-LOCK RA+TA] Kalau populasi nama target waktu TA di-ON-kan cuma 1
+    --     (x1) DAN RA sedang jalan bersamaan, maka begitu musuh tunggal itu mati,
+    --     TA+RA di-STOP TOTAL (bukan auto-switch), player dilepas dari lock.
+    --     Berlaku HANYA untuk kombinasi RA+TA aktif bersamaan.
     local function StartTA_ByName(targetName, onStatus, onStop)
         TA.running=true; TA.killed=0; TA.targetName=targetName; TA.cur=nil; TA.threads={}
         BlockEnemyHitAnim(true)
         BlockSkillEffects(true)
         BlockAffectedTargetEffect(true, "TA")
+
+        -- [SINGLE-LOCK RA+TA] Tandai di awal: populasi nama ini cuma 1 ekor
+        -- SAAT TA dinyalakan, dan RA sedang aktif bersamaan.
+        local _ncInit = CountEnemiesByName()
+        local _singleLock = (RA.running == true) and ((_ncInit[targetName] or 0) == 1)
+
         local tChar = task.spawn(function()
+            local _curName = targetName   -- nama target aktif saat ini (bisa berubah via auto-switch)
             local rrIdx    = 1
             local _curDied = false
             -- [HP-BASED DEATH DETECT] WatchTarget dipertahankan sebagai no-op guard
@@ -3343,15 +3378,37 @@ do
                 -- sengaja kosong: tidak ada lagi listener Humanoid.Died
             end
             while TA.running do
-                local pool = FindAllByNameF(targetName)
+                local pool = FindAllByNameF(_curName)
                 if #pool == 0 then
-                    if onStatus then onStatus("WAITING ["..targetName.."] respawn...") end
+                    -- [SINGLE-LOCK RA+TA] Populasi awal cuma 1 & RA masih jalan bareng
+                    -- -> jangan auto-switch, STOP TOTAL RA+TA dan lepas lock player.
+                    if _singleLock and RA.running then
+                        if onStatus then onStatus(" ["..targetName.."] mati (target tunggal)  RA+TA STOP total") end
+                        StopTA()
+                        StopRA()
+                        if onStop then onStop() end
+                        break
+                    end
+
+                    -- [AUTO-SWITCH] Nama sekarang habis -> cari nama lain dengan
+                    -- populasi terbesar saat ini di map, pindah otomatis ke situ.
+                    if onStatus then onStatus("["..(_curName).."] habis  mencari target lain...") end
+                    local _switched = false
                     while TA.running do
-                        task.wait(0.1)
-                        pool = FindAllByNameF(targetName)
-                        if #pool > 0 then break end
+                        local nc, namesSorted = CountEnemiesByName()
+                        if #namesSorted > 0 and (nc[namesSorted[1]] or 0) > 0 then
+                            _curName = namesSorted[1]
+                            _switched = true
+                            break
+                        end
+                        task.wait(0.2)
                     end
                     if not TA.running then break end
+                    if _switched then
+                        TA.targetName = _curName
+                        if onStatus then onStatus("Auto-switch -> ["..._curName.."]") end
+                    end
+                    pool = FindAllByNameF(_curName)
                     rrIdx=1; _curDied=false
                 end
                 if rrIdx > #pool then rrIdx = 1 end
@@ -3369,7 +3426,7 @@ do
                         ReassertFreeze()
                         FCharF(tgt.guid, tgt.hrp)
                         if onStatus then
-                            onStatus(">> ["..targetName.."] ["..rrIdx.."/"..#pool.."] Kill: "..TA.killed)
+                            onStatus(">> ["..._curName.."] ["..rrIdx.."/"..#pool.."] Kill: "..TA.killed)
                         end
                         task.wait()
                     end
@@ -3677,6 +3734,10 @@ do
     local _enemyDropElement  = nil
     local _enemyDataById     = {}
     local _enemyDataByName   = {}
+    -- [BY-NAME REALTIME] true setelah user pertama kali klik REFRESH ENEMIES.
+    -- Loop auto-update dropdown (By Name) hanya jalan setelah ini true, supaya
+    -- tidak scan workspace terus-menerus sebelum user benar-benar pakai fitur TA.
+    local _taRefreshedOnce   = false
 
     _enemyDropElement = FarmTab:Dropdown({
         -- Flag tidak dipasang: list ini di-rebuild dinamis tiap REFRESH ENEMIES,
@@ -3728,11 +3789,36 @@ do
         end,
     })
 
+    -- [BY-NAME REALTIME] Rebuild dropdown mode "By Name" dari hasil scan terkini
+    -- (CountEnemiesByName), tanpa Stop TA dan tanpa reset _enemyDropSelected -
+    -- dipakai oleh loop background supaya list selalu update tapi tidak mengganggu
+    -- target yang sedang dipilih/berjalan. Return jumlah jenis & total musuh.
+    local function _RebuildByNameDropdown()
+        local nc, names = CountEnemiesByName()
+        local newValues = {}
+        local newDataByName = {}
+        local totalEnemies = 0
+        for _, nm in ipairs(names) do
+            local label = nm .. " x" .. nc[nm]
+            table.insert(newValues, label)
+            newDataByName[label] = {nm=nm}
+            totalEnemies = totalEnemies + nc[nm]
+        end
+        _enemyDropValues = newValues
+        _enemyDataByName = newDataByName
+        if _enemyDropElement then
+            pcall(function() _enemyDropElement:Refresh(_enemyDropValues, nil) end)
+            pcall(function() _enemyDropElement.Values = _enemyDropValues end)
+        end
+        return #names, totalEnemies
+    end
+
     -- Refresh Enemies  scan workspace + rebuild dropdown sekaligus (soal 7 & 8)
     FarmTab:Button({
         Title    = " REFRESH ENEMIES",
         Desc     = "Scan & isi dropdown dengan musuh hidup beserta ID-nya",
         Callback = function()
+            _taRefreshedOnce = true
             -- Stop TA dulu jika sedang running
             if TA.running then
                 StopTA()
@@ -3760,32 +3846,38 @@ do
                 if _taStatusPara then
                     pcall(function() _taStatusPara:SetDesc(#enemies .. " musuh (By ID)  pilih dari dropdown") end)
                 end
+                -- Rebuild dropdown dengan data baru
+                if _enemyDropElement then
+                    pcall(function() _enemyDropElement:Refresh(_enemyDropValues, nil) end)
+                    pcall(function() _enemyDropElement.Values = _enemyDropValues end)
+                end
             else
-                local nc = {}
-                for _, e in ipairs(enemies) do nc[e.name]=(nc[e.name] or 0)+1 end
-                local names = {}
-                for nm in pairs(nc) do table.insert(names, nm) end
-                table.sort(names)
-                for _, nm in ipairs(names) do
-                    local label = nm .. " x" .. nc[nm]
-                    table.insert(_enemyDropValues, label)
-                    _enemyDataByName[label] = {nm=nm}
-                end
+                local jenis, total = _RebuildByNameDropdown()
                 if _taStatusPara then
-                    pcall(function() _taStatusPara:SetDesc(#names .. " jenis, " .. #enemies .. " total (By Name)") end)
+                    pcall(function() _taStatusPara:SetDesc(jenis .. " jenis, " .. total .. " total (By Name)") end)
                 end
-            end
-
-            -- Rebuild dropdown dengan data baru
-            if _enemyDropElement then
-                pcall(function() _enemyDropElement:Refresh(_enemyDropValues, nil) end)
-                -- Fallback jika Refresh tidak tersedia di versi WindUI ini
-                pcall(function()
-                    _enemyDropElement.Values = _enemyDropValues
-                end)
             end
         end,
     })
+
+    -- [BY-NAME REALTIME] Loop background: selama mode = "By Name" dan user sudah
+    -- pernah klik REFRESH ENEMIES minimal sekali, dropdown otomatis di-rebuild tiap
+    -- 1 detik dari hasil scan workspace terkini (musuh spawn/mati langsung kelihatan
+    -- di label "Nama xN") tanpa perlu klik Refresh lagi.
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            if _listMode == "name" and _taRefreshedOnce then
+                local jenis, total = _RebuildByNameDropdown()
+                -- Jangan timpa status kalau TA sedang aktif (status dipakai utk progress kill),
+                -- hanya update status kalau TA idle supaya info populasi tetap kelihatan.
+                if not TA.running and _taStatusPara then
+                    pcall(function() _taStatusPara:SetDesc(jenis .. " jenis, " .. total .. " total (By Name)  live") end)
+                end
+            end
+        end
+    end)
+
 
     -- =========================================================================
     --  RANDOM ATTACK (RA) 
