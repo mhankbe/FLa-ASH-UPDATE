@@ -3392,7 +3392,7 @@ do
 
                     -- [AUTO-SWITCH] Nama sekarang habis -> cari nama lain dengan
                     -- populasi terbesar saat ini di map, pindah otomatis ke situ.
-                    if onStatus then onStatus("["..(_curName).."] habis  mencari target lain...") end
+                    if onStatus then onStatus("[" .. _curName .. "] habis  mencari target lain...") end
                     local _switched = false
                     while TA.running do
                         local nc, namesSorted = CountEnemiesByName()
@@ -3406,7 +3406,7 @@ do
                     if not TA.running then break end
                     if _switched then
                         TA.targetName = _curName
-                        if onStatus then onStatus("Auto-switch -> ["..._curName.."]") end
+                        if onStatus then onStatus("Auto-switch -> [" .. _curName .. "]") end
                     end
                     pool = FindAllByNameF(_curName)
                     rrIdx=1; _curDied=false
@@ -3426,7 +3426,7 @@ do
                         ReassertFreeze()
                         FCharF(tgt.guid, tgt.hrp)
                         if onStatus then
-                            onStatus(">> ["..._curName.."] ["..rrIdx.."/"..#pool.."] Kill: "..TA.killed)
+                            onStatus(">> [" .. _curName .. "] [" .. rrIdx .. "/" .. #pool .. "] Kill: " .. TA.killed)
                         end
                         task.wait()
                     end
